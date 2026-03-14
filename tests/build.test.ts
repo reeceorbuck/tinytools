@@ -10,7 +10,7 @@
  * Run with: deno test --allow-all tests/build.test.ts
  */
 
-import { assertEquals, assertExists } from "@std/assert";
+import { assertEquals, assertExists, assertNotEquals } from "@std/assert";
 import { buildScriptFiles } from "../build.ts";
 import {
   changedHandlerKeys,
@@ -1457,6 +1457,130 @@ Deno.test({
     // Check that non-css files are preserved
     const readmeExists = await fileExists(`${TEST_STYLES_DIR}/readme.md`);
     assertEquals(readmeExists, true, "readme.md should be preserved");
+
+    await cleanupTestDirs();
+  },
+  sanitizeOps: false,
+  sanitizeResources: false,
+});
+
+// ============================================================================
+// Test Suite: Multiple ClientTools instances with same names in same file
+// ============================================================================
+
+Deno.test({
+  name:
+    "buildScriptFiles - multiple ClientTools with same handler name in same file get distinct filenames",
+  async fn() {
+    await cleanupTestDirs();
+    resetRegistries();
+
+    const fakeUrl = "file:///test/duplicate-names/handlers.ts";
+
+    // Two instances in the same "file", same handler name, different content
+    const tools1 = new ClientTools(fakeUrl, {
+      functions: {
+        clickHandler(this: HTMLElement) {
+          console.log("first handler");
+        },
+      },
+    });
+
+    const tools2 = new ClientTools(fakeUrl, {
+      functions: {
+        clickHandler(this: HTMLElement) {
+          console.log("second handler - different");
+        },
+      },
+    });
+
+    // Both should have distinct filenames
+    const filename1 = [...tools1._handlerFilenames.values()][0];
+    const filename2 = [...tools2._handlerFilenames.values()][0];
+    assertNotEquals(
+      filename1,
+      filename2,
+      "Two handlers with the same name but different content should get different filenames",
+    );
+
+    // Build should produce two handler files
+    await buildForTest({
+      clientDir: TEST_CLIENT_DIR,
+      publicDir: TEST_PUBLIC_DIR,
+      handlerDir: TEST_HANDLER_DIR,
+      stylesDir: TEST_STYLES_DIR,
+    });
+
+    const handlerFiles = await listFiles(TEST_HANDLER_DIR);
+    assertEquals(
+      handlerFiles.length,
+      2,
+      "Should produce two distinct handler files",
+    );
+
+    // Both should start with the handler name
+    assertEquals(handlerFiles[0].startsWith("clickHandler_"), true);
+    assertEquals(handlerFiles[1].startsWith("clickHandler_"), true);
+    assertNotEquals(
+      handlerFiles[0],
+      handlerFiles[1],
+      "Handler files should have different hashes",
+    );
+
+    await cleanupTestDirs();
+  },
+  sanitizeOps: false,
+  sanitizeResources: false,
+});
+
+Deno.test({
+  name:
+    "buildScriptFiles - multiple ClientTools with same style name in same file get distinct filenames",
+  async fn() {
+    await cleanupTestDirs();
+    resetRegistries();
+
+    const fakeUrl = "file:///test/duplicate-names/styles.ts";
+
+    const style1 = css`
+      background: green;
+    `;
+    const style2 = css`
+      background: orange;
+    `;
+
+    // Two instances in the same "file", same style name, different content
+    const tools1 = new ClientTools(fakeUrl, {
+      styles: { buttonStyle: style1 },
+    });
+
+    const tools2 = new ClientTools(fakeUrl, {
+      styles: { buttonStyle: style2 },
+    });
+
+    // Both should have distinct individual style filenames
+    const styleImpl1 = [...tools1._styles.values()][0];
+    const styleImpl2 = [...tools2._styles.values()][0];
+    assertNotEquals(
+      styleImpl1.filename,
+      styleImpl2.filename,
+      "Two styles with the same name but different content should get different filenames",
+    );
+
+    // Build should produce two style bundle files
+    await buildForTest({
+      clientDir: TEST_CLIENT_DIR,
+      publicDir: TEST_PUBLIC_DIR,
+      handlerDir: TEST_HANDLER_DIR,
+      stylesDir: TEST_STYLES_DIR,
+    });
+
+    const styleFiles = await listFiles(TEST_STYLES_DIR);
+    assertEquals(
+      styleFiles.length,
+      2,
+      "Should produce two distinct style bundle files",
+    );
 
     await cleanupTestDirs();
   },

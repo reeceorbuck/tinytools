@@ -83,13 +83,22 @@ export class ClientFunctionImpl<
       throw new Error("ClientFunction requires a function");
     }
 
-    let cachedFilename: string | undefined;
     const mtimeChanged = sourceFileUrl
       ? cache.checkAndTrackMtimeChange(sourceFileUrl)
       : false;
 
+    // Get the occurrence index for this name in this file (0 for first, 1 for second, etc.)
+    const occurrenceIndex = sourceFileUrl
+      ? cache.getNextOccurrenceIndex(sourceFileUrl, fnName, "handler")
+      : 0;
+
+    let cachedFilename: string | undefined;
     if (sourceFileUrl && !mtimeChanged) {
-      cachedFilename = cache.files[sourceFileUrl]?.handlers[fnName];
+      cachedFilename = cache.getCachedHandler(
+        sourceFileUrl,
+        fnName,
+        occurrenceIndex,
+      );
     }
 
     let resolvedFilename: string;
@@ -112,7 +121,11 @@ export class ClientFunctionImpl<
             handlers: {},
             styles: {},
           };
-          const oldFilename = cache.files[sourceFileUrl].handlers[fnName];
+          const oldFilename = cache.getCachedHandler(
+            sourceFileUrl,
+            fnName,
+            occurrenceIndex,
+          );
 
           if (oldFilename && oldFilename !== resolvedFilename) {
             console.log(
@@ -122,8 +135,12 @@ export class ClientFunctionImpl<
             filesWithChangedHandlers.add(sourceFileUrl);
           }
 
-          cache.files[sourceFileUrl].handlers[fnName] = resolvedFilename;
-          cache.markDirty();
+          cache.setCachedHandler(
+            sourceFileUrl,
+            fnName,
+            occurrenceIndex,
+            resolvedFilename,
+          );
         }
       }
     }

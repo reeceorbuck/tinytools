@@ -266,13 +266,22 @@ export class ScopedStyleImpl {
         serializeScopeConfig(normalizedScope)
       }::layer:${resolvedLayer}`;
 
-    let cachedFilename: string | undefined;
     const mtimeChanged = sourceFileUrl
       ? cache.checkAndTrackMtimeChange(sourceFileUrl)
       : false;
 
+    // Get the occurrence index for this name in this file (0 for first, 1 for second, etc.)
+    const occurrenceIndex = sourceFileUrl
+      ? cache.getNextOccurrenceIndex(sourceFileUrl, styleName, "style")
+      : 0;
+
+    let cachedFilename: string | undefined;
     if (sourceFileUrl && !mtimeChanged) {
-      cachedFilename = cache.files[sourceFileUrl]?.styles[styleName];
+      cachedFilename = cache.getCachedStyle(
+        sourceFileUrl,
+        styleName,
+        occurrenceIndex,
+      );
     }
 
     let resolvedFilename: string;
@@ -294,7 +303,11 @@ export class ScopedStyleImpl {
             handlers: {},
             styles: {},
           };
-          const oldFilename = cache.files[sourceFileUrl].styles[styleName];
+          const oldFilename = cache.getCachedStyle(
+            sourceFileUrl,
+            styleName,
+            occurrenceIndex,
+          );
 
           if (oldFilename && oldFilename !== resolvedFilename) {
             console.log(
@@ -303,8 +316,12 @@ export class ScopedStyleImpl {
             changedStyleKeys.add(`${sourceFileUrl}::${styleName}`);
           }
 
-          cache.files[sourceFileUrl].styles[styleName] = resolvedFilename;
-          cache.markDirty();
+          cache.setCachedStyle(
+            sourceFileUrl,
+            styleName,
+            occurrenceIndex,
+            resolvedFilename,
+          );
         }
       }
     }

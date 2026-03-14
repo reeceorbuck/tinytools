@@ -1,69 +1,98 @@
 {
-  "version": 1,
+  "version": 2,
+  "hashConfig": {
+    "handlerHashLength": 5,
+    "styleHashLength": 5
+  },
   "files": {
-    "file:///C:/Users/Reece/Documents/Projects/hono-tester/package/tests/honoFactory.typecheck.test.tsx": {
-      "mtimeMs": 1768013739516,
-      "externalImports": [],
-      "handlers": {
-        "testHandler": "testHandler_4e641eb7",
-        "anotherHandler": "anotherHandler_4e21e70",
-        "childHandler": "childHandler_534d0497",
-        "handler1": "handler1_7462a1c7",
-        "handler2": "handler2_23bc315a",
-        "handler3": "handler3_4424fb85",
-        "myHandler": "myHandler_6d98bbce",
-        "routeHandler": "routeHandler_1b94dd93"
-      },
-      "styles": {
-        "testStyle": "testStyle_523469bb",
-        "anotherStyle": "anotherStyle_3694989e",
-        "childStyle": "childStyle_33a11b6",
-        "style1": "style1_b423713",
-        "style2": "style2_3183c0a1",
-        "style3": "style3_5c26a6f8",
-        "myStyle": "myStyle_5c26a6f8"
-      }
-    },
-    "file:///C:/Users/Reece/Documents/Projects/hono-tester/package/tests/runtime.test.tsx": {
-      "mtimeMs": 1768013980803,
+    "file:///C:/Users/Reece/Documents/Projects/tinyTools/package/tests/build.test.ts": {
+      "mtimeMs": 1773499272807,
       "externalImports": [
-        "file:///C:/Users/Reece/Documents/Projects/hono-tester/package/tests/runtime.test.tsx::externalHandler",
-        "file:///C:/Users/Reece/Documents/Projects/hono-tester/package/tests/runtime.test.tsx::handlerFromA",
-        "file:///C:/Users/Reece/Documents/Projects/hono-tester/package/tests/runtime.test.tsx::handlerFromB"
+        "file:///fake/external/source.ts::externalUtility"
       ],
       "handlers": {
-        "testHandler": "testHandler_7823bb13",
-        "handlerA": "handlerA_d8a9049",
-        "handlerB": "handlerB_5a569c96",
-        "handlerC": "handlerC_3dc8368b",
-        "parentHandler": "parentHandler_940616c",
-        "localHandler": "localHandler_2df2af83",
-        "localOnly": "localOnly_7e639ccd",
-        "rootHandler": "rootHandler_23dc2dcc",
-        "middleHandler": "middleHandler_21be8261",
-        "leafHandler": "leafHandler_9dab038",
-        "externalHandler": "externalHandler_2a403855",
-        "handlerFromA": "handlerFromA_d8a9049",
-        "handlerFromB": "handlerFromB_5a569c96",
-        "mainHandler": "mainHandler_51398283",
-        "duplicateName": "duplicateName_2a403855",
-        "componentHandler": "componentHandler_5cb0d985",
-        "handleClick": "handleClick_14839e51",
-        "parentClick": "parentClick_2146fcef",
-        "localClick": "localClick_7ff7fec6",
-        "consistentHandler": "consistentHandler_33df777c",
-        "handlerOne": "handlerOne_78fdbdb2",
-        "handlerTwo": "handlerTwo_7c5f64f4",
-        "sharedName": "sharedName_7b1c34f4",
-        "existingHandler": "existingHandler_55b7f646",
-        "routeHandler": "routeHandler_3a3742f"
+        "testHandler": [
+          "testHandler_61a3e"
+        ],
+        "unchangedHandler": [
+          "unchangedHandler_4e86b"
+        ],
+        "sharedHelper": [
+          "sharedHelper_3e0dc"
+        ],
+        "consumerHandler": [
+          "consumerHandler_1ead5"
+        ],
+        "activeHandler": [
+          "activeHandler_53320"
+        ],
+        "clickHandler": [
+          "clickHandler_2a05e"
+        ],
+        "submitHandler": [
+          "submitHandler_345af"
+        ],
+        "dirTestHandler": [
+          "dirTestHandler_5b3c7"
+        ],
+        "esModuleHandler": [
+          "esModuleHandler_34de3"
+        ],
+        "consistentHandler": [
+          "consistentHandler_4314f",
+          "consistentHandler_4314f"
+        ],
+        "noClientDirHandler": [
+          "noClientDirHandler_6429f"
+        ],
+        "consumerFunction": [
+          "consumerFunction_777d0"
+        ],
+        "dependentHandler": [
+          "dependentHandler_1ccd6",
+          "dependentHandler_1ccd6"
+        ],
+        "onlyHandler": [
+          "onlyHandler_61085"
+        ],
+        "preserveTestHandler": [
+          "preserveTestHandler_3535b"
+        ]
       },
       "styles": {
-        "parentStyle": "parentStyle_5c26a6f8",
-        "testStyle": "testStyle_5c26a6f8",
-        "localStyle": "localStyle_b423713",
-        "externalStyle": "externalStyle_3183c0a1",
-        "mainStyle": "mainStyle_1f18ddea"
+        "testStyle": [
+          "testStyle_5edfb"
+        ],
+        "unchangedStyle": [
+          "unchangedStyle_321c9"
+        ],
+        "activeStyle": [
+          "activeStyle_28a4a"
+        ],
+        "buttonStyle": [
+          "buttonStyle_0a83f"
+        ],
+        "formStyle": [
+          "formStyle_677a5"
+        ],
+        "scopedStyle": [
+          "scopedStyle_26d3b"
+        ],
+        "boundaryA": [
+          "boundaryA_56483"
+        ],
+        "boundaryB": [
+          "boundaryB_226d3"
+        ],
+        "selectorA": [
+          "selectorA_157f9"
+        ],
+        "onlyStyle": [
+          "onlyStyle_7ab14"
+        ],
+        "preserveTestStyle": [
+          "preserveTestStyle_59e05"
+        ]
       }
     }
   }

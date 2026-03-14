@@ -43,10 +43,10 @@ type ClientToolsCacheV1 = {
       mtimeMs: number;
       /** External imports from other files (via .import()) - stored as "sourceFileUrl::fnName" */
       externalImports: string[];
-      /** Handler filenames in this file */
-      handlers: Record<string, string>; // fnName -> filename
-      /** Style definitions in this file */
-      styles: Record<string, string>; // styleName -> filename
+      /** Handler filenames in this file - ordered by instantiation */
+      handlers: Record<string, string[]>; // fnName -> [filename, ...] (ordered by instantiation)
+      /** Style definitions in this file - ordered by instantiation */
+      styles: Record<string, string[]>; // styleName -> [filename, ...] (ordered by instantiation)
     }
   >;
 };
@@ -238,6 +238,9 @@ class ClientToolsCacheManager {
   private sourceFileMtimeMemo = new Map<string, number | null>();
   private filesWithMtimeChange = new Set<string>();
 
+  /** Tracks instantiation order per file per name per kind (handler/style) */
+  private nameOccurrences = new Map<string, number>();
+
   private hashConfig: ClientToolsCacheV1["hashConfig"] = getCurrentHashConfig();
 
   files: ClientToolsCacheV1["files"] = {};
@@ -272,10 +275,31 @@ class ClientToolsCacheManager {
           loadedHashConfig.styleHashLength === current.styleHashLength
         ) {
           this.files = loaded.files;
+          this.normalizeLoadedFiles();
         }
       }
     } catch {
       // ignore missing/invalid cache
+    }
+  }
+
+  /** Normalize v2 cache entries where handlers/styles were plain strings into string[] */
+  private normalizeLoadedFiles(): void {
+    for (const fileEntry of Object.values(this.files)) {
+      for (const [name, value] of Object.entries(fileEntry.handlers)) {
+        if (typeof value === "string") {
+          (fileEntry.handlers as Record<string, string | string[]>)[name] = [
+            value,
+          ];
+        }
+      }
+      for (const [name, value] of Object.entries(fileEntry.styles)) {
+        if (typeof value === "string") {
+          (fileEntry.styles as Record<string, string | string[]>)[name] = [
+            value,
+          ];
+        }
+      }
     }
   }
 
@@ -285,6 +309,68 @@ class ClientToolsCacheManager {
     this.hashConfig = getCurrentHashConfig();
     this.sourceFileMtimeMemo.clear();
     this.filesWithMtimeChange.clear();
+    this.nameOccurrences.clear();
+    this.markDirty();
+  }
+
+  /**
+   * Get the next occurrence index for a name in a file.
+   * Each call increments the counter, so call exactly once per ClientTools instance per name.
+   */
+  getNextOccurrenceIndex(
+    sourceFileUrl: string,
+    name: string,
+    kind: "handler" | "style",
+  ): number {
+    const key = `${kind}::${sourceFileUrl}::${name}`;
+    const index = this.nameOccurrences.get(key) ?? 0;
+    this.nameOccurrences.set(key, index + 1);
+    return index;
+  }
+
+  /** Read a cached handler filename by instantiation index */
+  getCachedHandler(
+    sourceFileUrl: string,
+    fnName: string,
+    index: number,
+  ): string | undefined {
+    return this.files[sourceFileUrl]?.handlers[fnName]?.[index];
+  }
+
+  /** Write a cached handler filename at the given instantiation index */
+  setCachedHandler(
+    sourceFileUrl: string,
+    fnName: string,
+    index: number,
+    filename: string,
+  ): void {
+    const entry = this.files[sourceFileUrl];
+    if (!entry) return;
+    entry.handlers[fnName] ??= [];
+    entry.handlers[fnName][index] = filename;
+    this.markDirty();
+  }
+
+  /** Read a cached style filename by instantiation index */
+  getCachedStyle(
+    sourceFileUrl: string,
+    styleName: string,
+    index: number,
+  ): string | undefined {
+    return this.files[sourceFileUrl]?.styles[styleName]?.[index];
+  }
+
+  /** Write a cached style filename at the given instantiation index */
+  setCachedStyle(
+    sourceFileUrl: string,
+    styleName: string,
+    index: number,
+    filename: string,
+  ): void {
+    const entry = this.files[sourceFileUrl];
+    if (!entry) return;
+    entry.styles[styleName] ??= [];
+    entry.styles[styleName][index] = filename;
     this.markDirty();
   }
 
