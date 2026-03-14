@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "files": {
+    "file:///C:/Users/Reece/Documents/Projects/hono-tester/package/tests/honoFactory.typecheck.test.tsx": {
+      "mtimeMs": 1768013739516,
+      "externalImports": [],
+      "handlers": {
+        "testHandler": "testHandler_4e641eb7",
+        "anotherHandler": "anotherHandler_4e21e70",
+        "childHandler": "childHandler_534d0497",
+        "handler1": "handler1_7462a1c7",
+        "handler2": "handler2_23bc315a",
+        "handler3": "handler3_4424fb85",
+        "myHandler": "myHandler_6d98bbce",
+        "routeHandler": "routeHandler_1b94dd93"
+      },
+      "styles": {
+        "testStyle": "testStyle_523469bb",
+        "anotherStyle": "anotherStyle_3694989e",
+        "childStyle": "childStyle_33a11b6",
+        "style1": "style1_b423713",
+        "style2": "style2_3183c0a1",
+        "style3": "style3_5c26a6f8",
+        "myStyle": "myStyle_5c26a6f8"
+      }
+    },
+    "file:///C:/Users/Reece/Documents/Projects/hono-tester/package/tests/runtime.test.tsx": {
+      "mtimeMs": 1768013980803,
+      "externalImports": [
+        "file:///C:/Users/Reece/Documents/Projects/hono-tester/package/tests/runtime.test.tsx::externalHandler",
+        "file:///C:/Users/Reece/Documents/Projects/hono-tester/package/tests/runtime.test.tsx::handlerFromA",
+        "file:///C:/Users/Reece/Documents/Projects/hono-tester/package/tests/runtime.test.tsx::handlerFromB"
+      ],
+      "handlers": {
+        "testHandler": "testHandler_7823bb13",
+        "handlerA": "handlerA_d8a9049",
+        "handlerB": "handlerB_5a569c96",
+        "handlerC": "handlerC_3dc8368b",
+        "parentHandler": "parentHandler_940616c",
+        "localHandler": "localHandler_2df2af83",
+        "localOnly": "localOnly_7e639ccd",
+        "rootHandler": "rootHandler_23dc2dcc",
+        "middleHandler": "middleHandler_21be8261",
+        "leafHandler": "leafHandler_9dab038",
+        "externalHandler": "externalHandler_2a403855",
+        "handlerFromA": "handlerFromA_d8a9049",
+        "handlerFromB": "handlerFromB_5a569c96",
+        "mainHandler": "mainHandler_51398283",
+        "duplicateName": "duplicateName_2a403855",
+        "componentHandler": "componentHandler_5cb0d985",
+        "handleClick": "handleClick_14839e51",
+        "parentClick": "parentClick_2146fcef",
+        "localClick": "localClick_7ff7fec6",
+        "consistentHandler": "consistentHandler_33df777c",
+        "handlerOne": "handlerOne_78fdbdb2",
+        "handlerTwo": "handlerTwo_7c5f64f4",
+        "sharedName": "sharedName_7b1c34f4",
+        "existingHandler": "existingHandler_55b7f646",
+        "routeHandler": "routeHandler_3a3742f"
+      },
+      "styles": {
+        "parentStyle": "parentStyle_5c26a6f8",
+        "testStyle": "testStyle_5c26a6f8",
+        "localStyle": "localStyle_b423713",
+        "externalStyle": "externalStyle_3183c0a1",
+        "mainStyle": "mainStyle_1f18ddea"
+      }
+    }
+  }
+}

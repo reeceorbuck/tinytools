@@ -1,0 +1,813 @@
+/**
+ * Hono Factory module for @tiny-tools/hono
+ *
+ * Provides setup functions and middleware for enhancing Hono apps with
+ * ClientTools (client-side functions and scoped styles).
+ *
+ * @module
+ */
+
+import type { Context, MiddlewareHandler } from "hono";
+import type { Child } from "hono/jsx";
+import {
+  contextStorage,
+  getContext as honoGetContext,
+} from "hono/context-storage";
+import {
+  type ActivatedClientTools,
+  type ClientTools,
+  resolveToolAccessFromChain,
+  setGeneratedFilenameHashLength,
+  setGeneratedHandlerHashLength,
+  setGeneratedStyleHashLength,
+  type ToolResolutionTarget,
+} from "./clientTools.ts";
+import type { ActivateClientFunctions } from "./jsx-runtime.ts";
+import type { ActivateScopedStyles } from "./scopedStyles.ts";
+import { serveStatic } from "hono/deno";
+import { jsxRenderer } from "hono/jsx-renderer";
+import { AssetTags } from "@tiny-tools/hono/components";
+import type { JSX } from "hono/jsx/jsx-runtime";
+import { clientFiles } from "./client/dist/manifest.ts";
+
+/** URL prefix for package-provided client scripts */
+export const TINYTOOLS_CLIENT_PREFIX = "/_tinytools";
+
+const ROUTE_LAYOUT_APPLIED_KEY = "tinyToolsRouteLayoutApplied";
+
+// Pre-resolve URLs for all package client files (works for both file:// and https://)
+const packageClientFileUrls = new Map<string, string>();
+for (const file of clientFiles) {
+  packageClientFileUrls.set(file, import.meta.resolve(`./client/dist/${file}`));
+}
+
+// ============================================================================
+// Type Helpers
+// ============================================================================
+
+// deno-lint-ignore no-explicit-any
+type AnyClientTools = ClientTools<any, any, any>;
+
+/** Extract raw functions type from ClientTools */
+// deno-lint-ignore no-explicit-any
+type ExtractFunctions<T> = T extends ClientTools<infer F, any, any> ? F
+  : object;
+
+/** Extract raw styles type from ClientTools */
+// deno-lint-ignore no-explicit-any
+type ExtractStyles<T> = T extends ClientTools<any, infer S, any> ? S : object;
+
+/**
+ * Infer the activated tools type from a ClientTools instance.
+ * Use this for optional ContextVariableMap augmentation or manual type imports.
+ *
+ * @example
+ * ```ts
+ * // Optional: augment ContextVariableMap for typed c.var.tools
+ * declare module "hono" {
+ *   interface ContextVariableMap {
+ *     tools: InferTools<typeof myTools>;
+ *   }
+ * }
+ *
+ * // Or import for manual typing
+ * import type { InferTools } from "@tiny-tools/hono";
+ * type MyTools = InferTools<typeof myTools>;
+ * ```
+ */
+export type InferTools<T extends AnyClientTools> = T extends // deno-lint-ignore no-explicit-any
+ClientTools<infer F, infer S, any> ? ActivatedClientTools<F, S>
+  : never;
+
+/**
+ * Helper to extract all functions from a tools intersection.
+ * Works with RawToolsType, MergedToolsAccess, or intersections thereof.
+ * Returns object when property doesn't exist instead of never.
+ */
+type ExtractAllFunctions<T> = T extends { __functions: infer F } ? F : object;
+
+/**
+ * Helper to extract all styles from a tools intersection.
+ * Works with RawToolsType, MergedToolsAccess, or intersections thereof.
+ * Returns object when property doesn't exist instead of never.
+ */
+type ExtractAllStyles<T> = T extends { __styles: infer S } ? S : object;
+
+/**
+ * Raw tools type for middleware - stores raw F/S types in __functions/__styles.
+ * When intersected, these phantom properties merge correctly.
+ */
+interface RawToolsType<TFunctions, TStyles> {
+  /** Phantom property for type merging - stores function types */
+  readonly __functions: TFunctions;
+  /** Phantom property for type merging - stores style types */
+  readonly __styles: TStyles;
+  /**
+   * Access functions - type comes from __functions.
+   */
+  readonly fn: ActivateClientFunctions<TFunctions>;
+  /**
+   * Access styles - type comes from __styles.
+   */
+  readonly styled: ActivateScopedStyles<TStyles>;
+  /**
+   * Extend with local tools. Returns typed access to all merged functions and styles.
+   * Uses `this` to capture the actual object type (including any intersections),
+   * then extracts __functions/__styles from it.
+   */
+  extend<TLocalTools extends [AnyClientTools, ...AnyClientTools[]]>(
+    ...localTools: TLocalTools
+  ): MergedToolsAccess<
+    TFunctions,
+    TStyles,
+    TLocalTools
+  >;
+}
+
+/**
+ * Result of extend - provides typed access to merged functions and styles.
+ */
+type MergedToolsAccess<
+  TAccumulatedFunctions,
+  TAccumulatedStyles,
+  TLocalTools extends AnyClientTools[],
+> = {
+  readonly __functions:
+    & TAccumulatedFunctions
+    & UnionToIntersection<ExtractFunctions<TLocalTools[number]>>;
+  readonly __styles:
+    & TAccumulatedStyles
+    & UnionToIntersection<ExtractStyles<TLocalTools[number]>>;
+  readonly fn: ActivateClientFunctions<
+    & TAccumulatedFunctions
+    & UnionToIntersection<ExtractFunctions<TLocalTools[number]>>
+  >;
+  readonly styled: ActivateScopedStyles<
+    TAccumulatedStyles & UnionToIntersection<ExtractStyles<TLocalTools[number]>>
+  >;
+  extend<TNextTools extends [AnyClientTools, ...AnyClientTools[]]>(
+    ...localTools: TNextTools
+  ): MergedToolsAccess<
+    & TAccumulatedFunctions
+    & UnionToIntersection<ExtractFunctions<TLocalTools[number]>>,
+    & TAccumulatedStyles
+    & UnionToIntersection<ExtractStyles<TLocalTools[number]>>,
+    TNextTools
+  >;
+};
+
+/** Convert ClientTools to RawToolsType for middleware typing */
+type InferRawTools<T extends AnyClientTools> = T extends // deno-lint-ignore no-explicit-any
+ClientTools<infer F, infer S, any> ? RawToolsType<F, S>
+  : never;
+
+// Helper type to convert union to intersection
+// deno-lint-ignore no-explicit-any
+type UnionToIntersection<U> = (U extends any ? (k: U) => void : never) extends
+  ((k: infer I) => void) ? I : never;
+
+/** Extract merged functions from RawToolsType intersection */
+type ExtractMergedFunctions<T> = T extends { __functions: infer F } ? F : never;
+
+/** Extract merged styles from RawToolsType intersection */
+type ExtractMergedStyles<T> = T extends { __styles: infer S } ? S : never;
+
+// Helper type to combine tools array into merged raw tools
+type CombinedToolsRaw<T extends AnyClientTools[]> = UnionToIntersection<
+  { [K in keyof T]: InferRawTools<T[K]> }[number]
+>;
+
+type CombinedTools<T extends AnyClientTools[]> = RawToolsType<
+  ExtractMergedFunctions<CombinedToolsRaw<T>>,
+  ExtractMergedStyles<CombinedToolsRaw<T>>
+>;
+
+/**
+ * Base type for tools when no type parameter is provided to getTools().
+ * Provides the extend() method for adding local tools.
+ * Uses `this` type parameter to preserve accumulated types from middleware.
+ */
+export type BaseTools = {
+  /** Phantom property for type merging - stores function types */
+  readonly __functions?: unknown;
+  /** Phantom property for type merging - stores style types */
+  readonly __styles?: unknown;
+  /**
+   * Extend with component-local tools.
+   * Returns a typed tools object that merges accumulated types with local tools.
+   * Uses `this` to properly infer accumulated types from middleware.
+   */
+  extend<TSelf, TLocalTools extends [AnyClientTools, ...AnyClientTools[]]>(
+    this: TSelf,
+    ...localTools: TLocalTools
+  ): MergedToolsAccess<
+    ExtractAllFunctions<TSelf>,
+    ExtractAllStyles<TSelf>,
+    TLocalTools
+  >;
+};
+
+/**
+ * Helper type for augmenting Hono's ContextVariableMap with TinyTools.
+ * Merges your custom variables with the required `tools` property.
+ *
+ * @example
+ * ```ts
+ * type Variables = {
+ *   user: User;
+ *   session: Session;
+ * };
+ *
+ * declare module "hono" {
+ *   interface ContextVariableMap extends TinyToolsVariables<Variables> {}
+ * }
+ * ```
+ */
+export type TinyToolsVariables<V = object> = V & { tools: BaseTools };
+
+/**
+ * Get tools from the current request context.
+ * Primary API for accessing ClientTools in components.
+ *
+ * @example Without type parameter - local tools only
+ * ```tsx
+ * // Returns BaseTools - extend() returns only local tool types
+ * const { fn } = getTools().extend(localTools);
+ * ```
+ *
+ * @example With ancestor tools
+ * ```tsx
+ * import type { globalTools } from "./main.tsx";
+ *
+ * // Returns typed tools with ancestors, extend() merges local + ancestors
+ * const { fn } = getTools<[typeof globalTools]>().extend(localTools);
+ * ```
+ *
+ * @example With multiple ancestor tools
+ * ```tsx
+ * import type { globalTools } from "./main.tsx";
+ * import type { parentTools } from "./parent.tsx";
+ *
+ * // Combine multiple ancestor tools
+ * const { fn } = getTools<[typeof parentTools, typeof globalTools]>().extend(localTools);
+ * ```
+ */
+export function getTools<
+  TAncestorTools extends AnyClientTools[] | undefined = undefined,
+>(): TAncestorTools extends AnyClientTools[] ? CombinedTools<TAncestorTools>
+  : BaseTools {
+  const c = honoGetContext<{ Variables: { tools: BaseTools } }>();
+  return c.var.tools as TAncestorTools extends AnyClientTools[]
+    ? CombinedTools<TAncestorTools>
+    : BaseTools;
+}
+
+// ============================================================================
+// extendTools - Typed middleware for extending tools in child routes
+// ============================================================================
+
+/**
+ * Create a typed middleware that extends tools with local tools.
+ * The local tools type is automatically inferred and merged by Hono's `.use()`.
+ *
+ * @example Root route (no ancestors):
+ * ```ts
+ * const localTools = new ClientTools(import.meta.url, {
+ *   functions: {
+ *     handleClick() { console.log("clicked"); },
+ *   },
+ * });
+ *
+ * export const route = new Hono()
+ *   .use(extendTools(localTools))
+ *   .get("/", (c) => {
+ *     const { fn } = c.var.tools;  // Fully typed!
+ *     return c.render(<div onClick={fn.handleClick}>Click</div>);
+ *   });
+ * ```
+ *
+ * @example Child route with ancestor tools:
+ * ```tsx
+ * import type { globalTools } from "./main.tsx";
+ * import type { localTools as parentTools } from "./parent.tsx";
+ *
+ * const localTools = new ClientTools(import.meta.url, {
+ *   functions: {
+ *     localHandler() {},
+ *   },
+ * });
+ *
+ * // Only specify ancestors - localTools type is inferred from extendTools!
+ * export const route = new Hono<withAncestors<[typeof parentTools, typeof globalTools]>>()
+ *   .use(extendTools(localTools))
+ *   .get("/", (c) => {
+ *     c.var.tools.fn.localHandler;   // Inferred from extendTools
+ *     c.var.tools.fn.parentHandler;  // From ancestors
+ *     c.var.tools.fn.globalHandler;  // From ancestors
+ *   });
+ * @example Without tools (just declares BaseTools for type inference):
+ * ```tsx
+ * export const route = new Hono()
+ *   .use(extendTools())  // Declares tools: BaseTools for downstream handlers
+ *   .get("/", (c) => {
+ *     const { fn } = c.var.tools.extend(localTools);
+ *   });
+ * ```
+ */
+export function extendTools(): MiddlewareHandler<
+  { Variables: { tools: BaseTools } }
+>;
+export function extendTools<TTools extends AnyClientTools>(
+  tools: TTools,
+): MiddlewareHandler<{ Variables: { tools: InferRawTools<TTools> } }>;
+// deno-lint-ignore no-explicit-any
+export function extendTools(tools?: AnyClientTools): MiddlewareHandler<any> {
+  return async (c, next) => {
+    if (tools) {
+      const currentTools = c.var.tools as BaseTools;
+      // deno-lint-ignore no-explicit-any
+      c.set("tools", currentTools.extend(tools) as any);
+    }
+    await next();
+  };
+}
+
+/**
+ * Middleware to add global styles to the accessed styles for every request.
+ * This ensures the style's CSS files are included in AssetTags on every page.
+ *
+ * Use this with styles defined using `globalStyles` option in ClientTools.
+ *
+ * @param styles - One or more ScopedStyleImpl instances (from globalStyles option)
+ *
+ * @example
+ * ```ts
+ * const tools = new ClientTools(import.meta.url, {
+ *   globalStyles: { globalStyles: css`body { font-family: sans-serif; }` },
+ * });
+ *
+ * const app = new Hono()
+ *   .use(...addTinyTools())
+ *   .use(extendTools(tools))
+ *   .use(addGlobalStyles(...tools.globalStyles));
+ * ```
+ */
+export function addGlobalStyles(
+  ...styles: { filename: string }[]
+): MiddlewareHandler {
+  return async (c, next) => {
+    const accessedStyleFiles = c.get("accessedStyleFiles") as Set<string> ||
+      new Set<string>();
+    for (const style of styles) {
+      accessedStyleFiles.add(style.filename + ".css");
+    }
+    c.set("accessedStyleFiles", accessedStyleFiles);
+    await next();
+  };
+}
+
+/**
+ * Pre-render layout JSX to ensure all tools/styles are registered before
+ * the root middleware's AssetTags renders.
+ *
+ * In nested jsxRenderer middleware, the return JSX renders AFTER the parent
+ * middleware's JSX (where AssetTags lives). This function pre-renders the
+ * layout JSX to a string, which triggers all component renders and tool
+ * registrations, then returns it as raw HTML.
+ *
+ * This is more convenient than `preregisterTools` because:
+ * - Works automatically with any components the layout uses
+ * - No need to manually track which tools each component needs
+ * - Just wrap your return JSX once
+ *
+ * @example
+ * ```tsx
+ * jsxRenderer(({ children, Layout, title }) => {
+ *   // Instead of manually preregistering tools:
+/**
+ * Register layout tools/styles by doing a dummy render.
+ * Takes a render function that receives children placeholder, runs it once
+ * to trigger tool/style registration, then discards the result.
+ *
+ * @param renderLayout - Function that takes children placeholder and returns layout JSX
+ *
+ * @example
+ * ```tsx
+ * jsxRenderer(async ({ children, Layout, title }) => {
+ *   if (partialNav) return <>{children}</>;
+ *
+ *   // Dummy render to register TwoColumnSplit's tools/styles
+ *   await withLayoutTools((content) => (
+ *     <TwoColumnSplit contentPanelChildren={content}>
+ *       <Navigation ... />
+ *     </TwoColumnSplit>
+ *   ));
+ *
+ *   // Return actual JSX normally
+ *   return (
+ *     <Layout title={title}>
+ *       <TwoColumnSplit contentPanelChildren={children}>
+ *         <Navigation ... />
+ *       </TwoColumnSplit>
+ *     </Layout>
+ *   );
+ * })
+ * ```
+ */
+export async function withLayoutTools(
+  renderLayout: (children: Child) => JSX.Element,
+): Promise<void> {
+  // Dummy render with null to register tools/styles
+  await renderLayout(null).toString();
+}
+
+/**
+ * Type for route layout component props
+ */
+export type RouteLayoutProps = {
+  children: Child;
+};
+
+/**
+ * Create a middleware that wraps routes with a layout component.
+ * Handles partial navigation (source-url header) by returning children directly,
+ * otherwise wraps children in the provided layout component.
+ *
+ * The layout is rendered once as a dummy (with empty fragment) to register
+ * any tools/styles before the actual render.
+ *
+ * @param LayoutComponent - A JSX component that receives children and context
+ *
+ * @example With a simple component
+ * ```tsx
+ * const MyLayout = ({ children }: { children: Child }) => (
+ *   <TwoColumnSplit contentPanelChildren={children}>
+ *     <nav>Sidebar</nav>
+ *   </TwoColumnSplit>
+ * );
+ *
+ * export const route = new Hono()
+ *   .use(addRouteLayout(MyLayout))
+ *   .get("/", (c) => c.render(<div>Content</div>));
+ * ```
+ *
+ * @example With inline JSX function
+ * ```tsx
+ * export const route = new Hono()
+ *   .use(extendTools())
+ *   .use(addRouteLayout(({ children }, c) => (
+ *     <TwoColumnSplit contentPanelChildren={children}>
+ *       <nav>Sidebar</nav>
+ *     </TwoColumnSplit>
+ *   )))
+ *   .get("/", (c) => c.render(<div>Content</div>));
+ * ```
+ */
+export function addRouteLayout<
+  V extends Record<string, unknown> = Record<string, never>,
+>(
+  LayoutComponent: (
+    props: RouteLayoutProps,
+    c: Context,
+  ) => JSX.Element,
+): MiddlewareHandler {
+  // deno-lint-ignore no-explicit-any
+  return jsxRenderer(async ({ children, Layout, title }, c: any) => {
+    const sourceUrl = !!c.req.header("source-url");
+    if (!sourceUrl) {
+      c.set(ROUTE_LAYOUT_APPLIED_KEY, true);
+    }
+
+    // Await children to ensure they are rendered
+    await children;
+
+    // Partial navigation - return children inside Layout without our route layout
+    if (sourceUrl) {
+      return <Layout title={title}>{children}</Layout>;
+    }
+
+    // Full page navigation - dummy render to register tools/styles
+    await withLayoutTools((content) => (
+      LayoutComponent({ children: content }, c)
+    ));
+
+    // Return actual JSX with layout wrapping children
+    return (
+      <Layout title={title}>
+        {LayoutComponent({ children }, c)}
+      </Layout>
+    );
+  }, {
+    stream: true,
+  }) as MiddlewareHandler<{ Variables: V & { tools: BaseTools } }>;
+}
+
+/**
+ * Type helper for Hono generic to declare ancestor tools.
+ * Local tools are inferred from extendTools() - only ancestors need to be declared.
+ *
+ * @example
+ * ```tsx
+ * // Ancestors only - local type comes from extendTools(localTools)
+ * new Hono<withAncestors<[typeof parentTools, typeof globalTools]>>()
+ *   .use(extendTools(localTools))
+ * ```
+ */
+export type withAncestors<TAncestors extends AnyClientTools[]> = {
+  Variables: { tools: CombinedTools<TAncestors> };
+};
+
+// ============================================================================
+// ContextRenderer declaration
+// ============================================================================
+
+declare module "hono" {
+  interface ContextRenderer {
+    (
+      content: string | Promise<string>,
+      props?: {
+        title?: string;
+      },
+    ): Response;
+  }
+}
+
+// ============================================================================
+// addTinyTools - Setup function for Hono apps
+// ============================================================================
+
+/**
+ * Create TinyTools setup middleware for a Hono app.
+ * This returns middleware that sets up static file serving, context storage,
+ * the JSX renderer, and initializes empty tools with tracking infrastructure.
+ *
+ * @example
+ * ```ts
+ * import { Hono } from "hono";
+ * import { addTinyTools, extendTools, ClientTools, css } from "@tiny-tools/hono";
+ *
+ * const myStyle = css`color: blue;`;
+ *
+ * const tools = new ClientTools(import.meta.url, {
+ *   functions: {
+ *     handleClick(e) { console.log("clicked"); },
+ *   },
+ *   styles: { myStyle },
+ * });
+ *
+ * export const app = new Hono()
+ *   .use(addTinyTools())
+ *   .use(extendTools(tools))
+ *   .get("/", (c) => {
+     const { fn, styled } = c.var.tools;
+ *     return c.render(<div onClick={fn.handleClick}>Click me</div>);
+ *   });
+ * ```
+ */
+
+// ============================================================================
+// Internal: Tools Middleware Factory
+// ============================================================================
+
+/** Internal type for the tools proxy object */
+interface ToolsProxy {
+  fn: unknown;
+  styled: unknown;
+  extend(...localTools: AnyClientTools[]): ToolsProxy;
+}
+
+export type AddTinyToolsOptions = {
+  /**
+   * Number of hash characters used in generated client function/style filenames.
+   * Valid range is 1-8, values outside range are clamped.
+   */
+  generatedFilenameHashLength?: number;
+  /**
+   * Number of hash characters used in generated client handler filenames.
+   * Valid range is 1-8, values outside range are clamped.
+   */
+  generatedHandlerHashLength?: number;
+  /**
+   * Number of hash characters used in generated style filenames and class names.
+   * Valid range is 1-8, values outside range are clamped.
+   */
+  generatedStyleHashLength?: number;
+};
+
+/**
+ * Create a middleware that sets up request-scoped tracking for both
+ * functions and styles. Internal use only.
+ * @internal
+ */
+function createToolsMiddleware(): MiddlewareHandler {
+  return async (c, next) => {
+    // Initialize fresh tracking sets for this request
+    const accessedHandlerFiles = new Set<string>();
+    const accessedStyleFiles = new Set<string>();
+    c.set("accessedHandlerFiles", accessedHandlerFiles);
+    c.set("accessedStyleFiles", accessedStyleFiles);
+
+    // Helper to create a tracking proxy for functions or styles
+    const createTrackingProxy = (
+      tools: ToolResolutionTarget,
+      type: "function" | "style",
+      parentProxy?: unknown,
+    ): unknown => {
+      const accessedFiles = type === "function"
+        ? accessedHandlerFiles
+        : accessedStyleFiles;
+      const extension = type === "function" ? ".js" : ".css";
+
+      return new Proxy(tools, {
+        get(_target, prop, receiver) {
+          const resolved = resolveToolAccessFromChain(
+            [tools],
+            type,
+            prop,
+            (_usageType, filename) => {
+              accessedFiles.add(filename + extension);
+            },
+          );
+
+          if (resolved !== undefined) {
+            return resolved;
+          }
+
+          // Fall through to parent proxy for inherited items
+          if (parentProxy && typeof prop === "string") {
+            const parentValue = (parentProxy as Record<string, unknown>)[prop];
+            if (parentValue !== undefined) {
+              return parentValue;
+            }
+          }
+
+          return Reflect.get(tools as object, prop, receiver);
+        },
+      });
+    };
+
+    // Helper to create the combined tools object
+    const createToolsProxy = (
+      functionsProxy: unknown,
+      stylesProxy: unknown,
+    ): ToolsProxy => ({
+      get fn() {
+        return functionsProxy;
+      },
+      get styled() {
+        return stylesProxy;
+      },
+      extend(...localTools: AnyClientTools[]) {
+        let nextFunctionsProxy = functionsProxy;
+        let nextStylesProxy = stylesProxy;
+
+        for (const tools of localTools) {
+          nextFunctionsProxy = createTrackingProxy(
+            tools,
+            "function",
+            nextFunctionsProxy,
+          );
+          nextStylesProxy = createTrackingProxy(
+            tools,
+            "style",
+            nextStylesProxy,
+          );
+        }
+
+        return createToolsProxy(
+          nextFunctionsProxy,
+          nextStylesProxy,
+        );
+      },
+    });
+
+    // Create root tools proxy - starts empty, extended via extend()
+    const emptyTarget: ToolResolutionTarget = {
+      _handlerFilenames: new Map<string, string>(),
+      _styleFilenames: new Map<string, string>(),
+      _styles: new Map(),
+    };
+
+    c.set(
+      "tools",
+      createToolsProxy(
+        createTrackingProxy(emptyTarget, "function"),
+        createTrackingProxy(emptyTarget, "style"),
+      ) as unknown as BaseTools,
+    );
+
+    await next();
+  };
+}
+
+/**
+ * Middleware that serves pre-built package client JS files from /_tinytools/*.
+ * Resolves files via import.meta.resolve so it works for both local and JSR.
+ */
+function servePackageClientFiles(): MiddlewareHandler {
+  return async (c, next) => {
+    const path = c.req.path;
+    if (!path.startsWith(TINYTOOLS_CLIENT_PREFIX + "/")) {
+      return next();
+    }
+
+    const fileName = path.slice(TINYTOOLS_CLIENT_PREFIX.length + 1);
+    const resolvedUrl = packageClientFileUrls.get(fileName);
+    if (!resolvedUrl) {
+      return next();
+    }
+
+    if (resolvedUrl.startsWith("file://")) {
+      const { fromFileUrl } = await import("jsr:@std/path");
+      const content = await Deno.readTextFile(fromFileUrl(resolvedUrl));
+      c.header("Content-Type", "application/javascript; charset=utf-8");
+      c.header("Cache-Control", "public, max-age=31536000, immutable");
+      return c.body(content);
+    } else {
+      const response = await fetch(resolvedUrl);
+      if (!response.ok) return next();
+      c.header("Content-Type", "application/javascript; charset=utf-8");
+      c.header("Cache-Control", "public, max-age=31536000, immutable");
+      return c.body(await response.text());
+    }
+  };
+}
+
+export function addTinyTools(
+  options: AddTinyToolsOptions = {},
+): MiddlewareHandler[] {
+  if (options.generatedFilenameHashLength !== undefined) {
+    setGeneratedFilenameHashLength(options.generatedFilenameHashLength);
+  }
+  if (options.generatedHandlerHashLength !== undefined) {
+    setGeneratedHandlerHashLength(options.generatedHandlerHashLength);
+  }
+  if (options.generatedStyleHashLength !== undefined) {
+    setGeneratedStyleHashLength(options.generatedStyleHashLength);
+  }
+
+  performance.mark("startup:appCreated");
+
+  return [
+    // Serve package client JS files from /_tinytools/
+    servePackageClientFiles(),
+    // Static file serving for user's public directory
+    serveStatic({
+      root: "./public/",
+      onNotFound: (_path, _c) => {
+        // Silent 404 for static files - let routes handle it
+      },
+    }),
+    // Context storage for getContext() in async components
+    contextStorage(),
+    // Initialize empty tools with tracking infrastructure
+    createToolsMiddleware(),
+    // JSX renderer with AssetTags
+    jsxRenderer(async (
+      { children, title },
+      c,
+    ) => {
+      console.log(
+        "Rendering page with jsx renderer for layout, title: ",
+        title,
+      );
+      const evaluatedBody = await children;
+      const routeLayoutApplied = c.get(ROUTE_LAYOUT_APPLIED_KEY) === true;
+
+      const sourceUrl = c.req.header("source-url");
+      console.log("Source URL: ", sourceUrl);
+      if (sourceUrl) {
+        return (
+          <update>
+            <template>
+              <head-update>
+                <AssetTags fullPageLoad={false} />
+              </head-update>
+              <body-update>{evaluatedBody}</body-update>
+            </template>
+          </update>
+        );
+      }
+
+      return (
+        <html>
+          <head>
+            <title>{title}</title>
+            <meta
+              name="viewport"
+              content="width=device-width, initial-scale=1"
+            />
+            <style>
+              @layer global, unscoped, limited, normal, important, debug;
+            </style>
+            <AssetTags />
+          </head>
+          {routeLayoutApplied ? evaluatedBody : <body>{evaluatedBody}</body>}
+        </html>
+      );
+    }, {
+      stream: true,
+      docType: true,
+    }),
+  ];
+}
