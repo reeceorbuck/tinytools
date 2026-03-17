@@ -2,7 +2,8 @@
 
 TinyTools is not a replacement for Hono.
 
-It is a small layer on top of Hono's server-side JSX flow that adds a few extra capabilities, with `ClientTools` as the core feature.
+It is a small layer on top of Hono's server-side JSX flow that adds a few extra
+capabilities, with `ClientTools` as the core feature.
 
 The goal is simple: keep writing normal server-rendered Hono apps, but gain:
 
@@ -13,9 +14,13 @@ The goal is simple: keep writing normal server-rendered Hono apps, but gain:
 
 ## What `ClientTools` does
 
-`ClientTools` lets you define browser event handlers and scoped styles in the same file as your Hono routes or components.
+`ClientTools` lets you define browser event handlers and scoped styles in the
+same file as your Hono routes or components.
 
-You write a function in TypeScript, attach it inline in JSX, and tinyTools takes care of generating and serving the browser code behind it. The page is still rendered on the server. There is no React-style hydration step and no client-side component tree taking over after load.
+You write a function in TypeScript, attach it inline in JSX, and tinyTools takes
+care of generating and serving the browser code behind it. The page is still
+rendered on the server. There is no React-style hydration step and no
+client-side component tree taking over after load.
 
 That makes the mental model straightforward:
 
@@ -42,7 +47,8 @@ That makes the mental model straightforward:
 
 ## Quick Start
 
-This is still just a Hono app. The only extra setup is adding the tinyTools middleware and defining a `ClientTools` instance at module scope.
+This is still just a Hono app. The only extra setup is adding the tinyTools
+middleware and defining a `ClientTools` instance at module scope.
 
 ```tsx
 import { Hono } from "hono";
@@ -95,7 +101,8 @@ That is the main idea of the package.
 - `styled.button` is a generated scoped class name
 - the middleware handles the generated assets for the page
 
-If you want a tools instance to be available across many routes, register it once with middleware and read from `c.var.tools`:
+If you want a tools instance to be available across many routes, register it
+once with middleware and read from `c.var.tools`:
 
 ```tsx
 import { Hono } from "hono";
@@ -122,26 +129,33 @@ app.get("/", (c) => {
 
 ## Why it feels different
 
-TinyTools aims to cover some of the jobs people often reach for a full-stack framework to solve, but without introducing client-side rendering as the default architecture.
+TinyTools aims to cover some of the jobs people often reach for a full-stack
+framework to solve, but without introducing client-side rendering as the default
+architecture.
 
 The design bias is:
 
 - server-render HTML first
 - send small targeted client behavior when needed
 - keep event handlers and styles close to the components that use them
-- add progressive browser features without turning the app into a client-rendered SPA
+- add progressive browser features without turning the app into a
+  client-rendered SPA
 
 ## Optional feature modules
 
-`ClientTools` is the main, most important feature. Everything below is optional and currently less developed.
+`ClientTools` is the main, most important feature. Everything below is optional
+and currently less developed.
 
 ### `tiny.middleware.navApiTools()`
 
 Adds Navigation API based page transitions and partial updates.
 
-The intent is SPA-style navigation without building a client-rendered app. HTML still comes from the server. tinyTools swaps the new server-rendered content into the page instead of handing control to a browser framework.
+The intent is SPA-style navigation without building a client-rendered app. HTML
+still comes from the server. tinyTools swaps the new server-rendered content
+into the page instead of handing control to a browser framework.
 
-This is one of the more ambitious parts of the package and should be treated as evolving.
+This is one of the more ambitious parts of the package and should be treated as
+evolving.
 
 ```ts
 const app = new Hono()
@@ -151,23 +165,30 @@ const app = new Hono()
 
 ### Other optional middleware
 
-- `tiny.middleware.sseTools()` adds the package's Server-Sent Events client support
-- `tiny.middleware.localRoutes()` adds local route matching helpers for navigation flows
-- `tiny.middleware.webComponents()` adds small web-component based browser helpers
-- `tiny.middleware.layout(...)` adds a route layout wrapper for server-rendered pages
+- `tiny.middleware.sseTools()` adds the package's Server-Sent Events client
+  support
+- `tiny.middleware.localRoutes()` adds local route matching helpers for
+  navigation flows
+- `tiny.middleware.webComponents()` adds small web-component based browser
+  helpers
+- `tiny.middleware.layout(...)` adds a route layout wrapper for server-rendered
+  pages
 
 ### Optional components
 
 - `Partial` is for server-driven partial page updates
 - `Suspense` is for streaming async content with a fallback
 
-These are useful building blocks, but they are still part of the developing side of the package rather than the core day-one story.
+These are useful building blocks, but they are still part of the developing side
+of the package rather than the core day-one story.
 
 ## Build step
 
-For development, handler and style assets can be generated lazily when they are first used.
+For development, handler and style assets can be generated lazily when they are
+first used.
 
-If you want an explicit build step for deployment or pre-generation, use the build module:
+If you want an explicit build step for deployment or pre-generation, use the
+build module:
 
 ```ts
 import { buildScriptFiles } from "@tiny-tools/hono/build";
@@ -178,14 +199,19 @@ await buildScriptFiles();
 ## A few practical rules
 
 - declare `ClientTools` instances at module scope, not inside route handlers
-- use `fn` from `c.var.tools` or from `await tools.engage()` when attaching handlers in JSX
-- treat tinyTools as an enhancement to normal Hono routing, not a separate framework
-- start with `ClientTools`; add the other modules only when you actually need them
+- use `fn` from `c.var.tools` or from `await tools.engage()` when attaching
+  handlers in JSX
+- treat tinyTools as an enhancement to normal Hono routing, not a separate
+  framework
+- start with `ClientTools`; add the other modules only when you actually need
+  them
 
 ## Summary
 
-If you want Hono to stay server-rendered but still feel ergonomic for interactive UI, `ClientTools` is the reason to use this package.
+If you want Hono to stay server-rendered but still feel ergonomic for
+interactive UI, `ClientTools` is the reason to use this package.
 
-The other modules are promising and useful, but they are still secondary. The clearest way to understand tinyTools today is:
+The other modules are promising and useful, but they are still secondary. The
+clearest way to understand tinyTools today is:
 
 Hono first, tinyTools on top.
