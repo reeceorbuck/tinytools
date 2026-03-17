@@ -8,7 +8,7 @@ performance.mark("import:@tiny-tools/hono:start");
  * @example Basic Usage with ClientTools
  * ```ts
  * import { Hono } from "hono";
- * import { addTinyTools, ClientTools, css, extendTools } from "@tiny-tools/hono";
+ * import { tiny, ClientTools, css, extendTools } from "@tiny-tools/hono";
  *
  * const buttonStyle = css`
  *   background: blue;
@@ -25,7 +25,7 @@ performance.mark("import:@tiny-tools/hono:start");
  * });
  *
  * const app = new Hono()
- *   .use(...addTinyTools())
+ *   .use(...tiny.middleware.all())
  *   .use(extendTools(tools));
  *
  * app.get("/", (c) => {
@@ -43,14 +43,18 @@ performance.mark("import:@tiny-tools/hono:start");
 export {
   addGlobalStyles,
   addRouteLayout,
-  addTinyTools,
-  type AddTinyToolsOptions,
   type BaseTools,
+  type ClientToolsOptions,
   extendTools,
   getTools,
   type InferTools,
+  type LocalRoutesOptions,
+  type NavApiToolsOptions,
   type RouteLayoutProps,
+  type SseToolsOptions,
+  tiny,
   type TinyToolsVariables,
+  type WebComponentsOptions,
   type withAncestors,
   withLayoutTools,
 } from "./honoFactory.tsx";

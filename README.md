@@ -44,11 +44,11 @@ enhanced JSX event handlers.
 ```tsx
 import { Hono } from "hono";
 import {
-  addTinyTools,
   ClientTools,
   css,
   extendTools,
   setCustomScope,
+  tiny,
 } from "@tiny-tools/hono";
 import { buildScriptFiles } from "@tiny-tools/hono/build";
 
@@ -107,7 +107,7 @@ const tools = new ClientTools(import.meta.url, {
 
 // Create Hono app with tools using middleware
 const app = new Hono()
-  .use(...addTinyTools())
+  .use(...tiny.middleware.all())
   .use(extendTools(tools));
 
 // Use in routes
@@ -146,15 +146,32 @@ export default app;
 
 ### Core Module (`@tiny-tools/hono`)
 
-#### `addTinyTools()`
+#### `tiny.middleware`
 
-Returns an array of middleware that sets up TinyTools infrastructure including
-static file serving, context storage, JSX renderer, and empty tools
-initialization.
+The `tiny` singleton provides composable middleware for opt-in feature
+selection. Each feature is a separate middleware that can be applied
+independently.
+
+**`tiny.middleware.clientTools(options?)`** - Core middleware array (context
+storage, static file serving, JSX renderer, tools init). Spread into `.use()`.
+
+**`tiny.middleware.navApiTools()`** - Enables client-side navigation (Navigation
+API + event handlers).
+
+**`tiny.middleware.sseTools()`** - Enables Server-Sent Events support.
+
+**`tiny.middleware.localRoutes()`** - Enables client-side local route matching.
+
+**`tiny.middleware.webComponents()`** - Enables lifecycle and window-event web
+components.
+
+**`tiny.middleware.layout(renderFn)`** - Adds a layout wrapper for sub-routes.
+
+**`tiny.middleware.all(options?)`** - Enables all features at once.
 
 ```ts
 import { Hono } from "hono";
-import { addTinyTools, ClientTools, extendTools } from "@tiny-tools/hono";
+import { ClientTools, extendTools, tiny } from "@tiny-tools/hono";
 
 const tools = new ClientTools(import.meta.url, {
   functions: {
@@ -164,8 +181,21 @@ const tools = new ClientTools(import.meta.url, {
   },
 });
 
+// Opt-in: only core tools (no client scripts)
 const app = new Hono()
-  .use(...addTinyTools())
+  .use(...tiny.middleware.clientTools())
+  .use(extendTools(tools));
+
+// Opt-in: core + navigation + SSE
+const app2 = new Hono()
+  .use(...tiny.middleware.clientTools())
+  .use(tiny.middleware.navApiTools())
+  .use(tiny.middleware.sseTools())
+  .use(extendTools(tools));
+
+// Everything enabled
+const app3 = new Hono()
+  .use(...tiny.middleware.all({ generatedStyleHashLength: 4 }))
   .use(extendTools(tools));
 ```
 
@@ -176,7 +206,7 @@ ClientTools. Use this to add route-specific or app-level tools.
 
 ```ts
 import { Hono } from "hono";
-import { addTinyTools, ClientTools, extendTools } from "@tiny-tools/hono";
+import { ClientTools, extendTools, tiny } from "@tiny-tools/hono";
 
 const globalTools = new ClientTools(import.meta.url, {
   functions: {
@@ -187,7 +217,7 @@ const globalTools = new ClientTools(import.meta.url, {
 });
 
 const app = new Hono()
-  .use(...addTinyTools())
+  .use(...tiny.middleware.clientTools())
   .use(extendTools(globalTools));
 ```
 
@@ -333,13 +363,13 @@ export const tools = new ClientTools(import.meta.url, {
 Use `fn.*` only when attaching handlers in JSX/render code:
 
 ```tsx
-app.get("/", (c) => {
-  const { fn } = c.var.tools.extend(localTools);
+app.get("/", async (c) => {
+  const { fn } = await c.var.tools.extend(localTools);
   return c.render(<button onClick={fn.handleClick}>Run</button>);
 });
 ```
 
-#### `c.var.tools.extend(localTools)`
+#### `await c.var.tools.extend(localTools)`
 
 Extend tools within a route handler for single-route tools that don't need
 middleware. Returns a tools object with both parent and local tools.
@@ -358,9 +388,9 @@ const singleRouteTools = new ClientTools(import.meta.url, {
   },
 });
 
-app.get("/special", (c) => {
+app.get("/special", async (c) => {
   // Use extend inside the handler to access the tools
-  const { fn, styled } = c.var.tools.extend(
+  const { fn, styled } = await c.var.tools.extend(
     singleRouteTools,
   );
 

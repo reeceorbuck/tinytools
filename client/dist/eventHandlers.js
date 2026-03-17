@@ -2,24 +2,23 @@ const basePath = "/handlers";
 globalThis.handlers = new Proxy({}, {
   get(target, prop, receiver) {
     if (prop in target) {
-      return (...args) => {
-        const [thisValue, ...rest] = args;
-        return Reflect.get(target, prop, receiver).call(thisValue, ...rest);
-      };
+      return Reflect.get(target, prop, receiver);
     }
-    console.warn(
-      `Handler function "${prop.toString()}" not found in handlers proxy, importing...`
-    );
+    if (typeof prop === "symbol") {
+      return void 0;
+    }
     const callFunctionName = prop.toString();
+    console.warn(
+      `Handler function "${callFunctionName}" not found in handlers proxy, importing...`
+    );
     const scriptContent = import(`${basePath}/${callFunctionName}.js`).then(({ default: scriptContent2 }) => {
       console.warn(`Handler function "${callFunctionName}" imported on use.`);
       globalThis.handlers[callFunctionName] = scriptContent2;
       return scriptContent2;
     });
-    return async (...args) => {
+    return async function(...args) {
       const scriptFunction = await scriptContent;
-      const [thisValue, ...rest] = args;
-      return scriptFunction.call(thisValue, ...rest);
+      return scriptFunction.call(this, ...args);
     };
   }
 });

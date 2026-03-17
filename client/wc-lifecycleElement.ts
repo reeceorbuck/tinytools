@@ -13,7 +13,7 @@ import type { HandlerProxy } from "./eventHandlers.ts";
  * Handles both plain names and full expressions like "handlers.handleMount_6fec3866(this, event)"
  */
 function extractHandlerName(attrValue: string): string {
-  const match = attrValue.match(/^handlers\.([^(]+)\(/);
+  const match = attrValue.match(/^handlers\.(\w+)/);
   if (match) {
     return match[1];
   }
@@ -65,7 +65,7 @@ customElements.define(
           `[lifecycle-element] Calling mount handler "${mountHandler}"`,
         );
         console.log("this: ", this.firstChild);
-        (globalThis.handlers as HandlerProxy)[mountHandler](this);
+        (globalThis.handlers as HandlerProxy)[mountHandler].call(this, this);
       }
     }
 
@@ -77,7 +77,7 @@ customElements.define(
         console.log(
           `[lifecycle-element] Calling unmount handler "${unmountHandler}"`,
         );
-        (globalThis.handlers as HandlerProxy)[unmountHandler](this);
+        (globalThis.handlers as HandlerProxy)[unmountHandler].call(this, this);
       }
       this.setAttribute("mounted", "false");
     }

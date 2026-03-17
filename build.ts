@@ -33,7 +33,7 @@ const STYLE_LAYER_ORDER: ScopedStyleLayer[] = [
   "debug",
 ];
 
-function buildLayeredCssContent(styles: ScopedStyleEntry[]): string {
+export function buildLayeredCssContent(styles: ScopedStyleEntry[]): string {
   const byLayer = new Map<ScopedStyleLayer, string[]>();
 
   for (const style of styles) {
@@ -155,6 +155,17 @@ export async function buildScriptFiles(options: BuildOptions = {}) {
 
   performance.mark("startup:buildScriptFilesStart");
   performance.mark("buildScriptFiles:begin");
+
+  // Revalidate all handlers and styles. Since constructors no longer stat
+  // source files, we do a full pass here to detect changes and update filenames.
+  performance.mark("buildScriptFiles:revalidateStart");
+  for (const handler of handlers.values()) {
+    await handler.revalidateAndBuild(handlerDir);
+  }
+  for (const style of scopedStylesRegistry.values()) {
+    style.revalidate();
+  }
+  performance.mark("buildScriptFiles:revalidateEnd");
 
   // Ensure the public directories exist
   performance.mark("buildScriptFiles:mkdirStart");
@@ -403,44 +414,8 @@ export async function buildScriptFiles(options: BuildOptions = {}) {
     "buildScriptFiles:end",
   );
 
-  // Startup-level marks and measures
+  // Startup-level marks (measures are created by logStartupPerformanceSummary)
   performance.mark("startup:buildScriptFilesEnd");
-  performance.mark("startup:end");
-
-  const hasMark = (name: string) =>
-    performance.getEntriesByName(name, "mark").length > 0;
-
-  const measureIfMarksExist = (
-    name: string,
-    startMark: string,
-    endMark: string,
-  ) => {
-    if (hasMark(startMark) && hasMark(endMark)) {
-      performance.measure(name, startMark, endMark);
-    }
-  };
-
-  measureIfMarksExist(
-    "startup:imports",
-    "startup:begin",
-    "startup:importsComplete",
-  );
-  measureIfMarksExist(
-    "startup:createApp",
-    "startup:importsComplete",
-    "startup:appCreated",
-  );
-  measureIfMarksExist(
-    "startup:routes",
-    "startup:appCreated",
-    "startup:routesRegistered",
-  );
-  measureIfMarksExist(
-    "startup:buildScriptFiles",
-    "startup:buildScriptFilesStart",
-    "startup:buildScriptFilesEnd",
-  );
-  measureIfMarksExist("startup:total", "startup:begin", "startup:end");
 }
 
 async function transpileClientFile(

@@ -170,6 +170,7 @@ export interface ScopedStyleEntry {
   layer: ScopedStyleLayer;
   buildCssLayerContent(): string;
   buildCssContent(): string;
+  revalidate(): boolean;
 }
 
 /** Global registry of all scoped styles for build process */
@@ -242,6 +243,8 @@ export class ScopedStyleImpl {
   isGlobal: boolean;
   scope: ScopedStyleScopeConfig;
   layer: ScopedStyleLayer;
+  private occurrenceIndex = 0;
+  private hashInput: string = "";
 
   constructor(
     styleName: string,
@@ -261,20 +264,19 @@ export class ScopedStyleImpl {
         ? "limited"
         : "normal");
     const hashInput = isGlobal
-      ? `${cssContent}::layer:${resolvedLayer}`
-      : `${cssContent}::${
-        serializeScopeConfig(normalizedScope)
+      ? `${cssContent}::${sourceFileUrl ?? ""}::layer:${resolvedLayer}`
+      : `${cssContent}::${serializeScopeConfig(normalizedScope)}::${
+        sourceFileUrl ?? ""
       }::layer:${resolvedLayer}`;
 
-    const mtimeChanged = sourceFileUrl
-      ? cache.checkAndTrackMtimeChange(sourceFileUrl)
-      : false;
+    const mtimeChanged = false; // Deferred to ensureBuilt() at request time
 
     // Get the occurrence index for this name in this file (0 for first, 1 for second, etc.)
     const occurrenceIndex = sourceFileUrl
       ? cache.getNextOccurrenceIndex(sourceFileUrl, styleName, "style")
       : 0;
 
+    // Try to use a cached filename directly (no file stat needed).
     let cachedFilename: string | undefined;
     if (sourceFileUrl && !mtimeChanged) {
       cachedFilename = cache.getCachedStyle(
@@ -295,34 +297,19 @@ export class ScopedStyleImpl {
       resolvedFilename = `${styleName}_${generateStyleHash(hashInput)}`;
 
       if (sourceFileUrl) {
-        const sourceMtimeMs = cache.getSourceFileMtimeMs(sourceFileUrl);
-        if (sourceMtimeMs !== null) {
-          cache.files[sourceFileUrl] ??= {
-            mtimeMs: sourceMtimeMs,
-            externalImports: [],
-            handlers: {},
-            styles: {},
-          };
-          const oldFilename = cache.getCachedStyle(
-            sourceFileUrl,
-            styleName,
-            occurrenceIndex,
-          );
+        cache.files[sourceFileUrl] ??= {
+          mtimeMs: 0,
+          externalImports: [],
+          handlers: {},
+          styles: {},
+        };
 
-          if (oldFilename && oldFilename !== resolvedFilename) {
-            console.log(
-              `Style ${styleName} filename changed: ${oldFilename} -> ${resolvedFilename}`,
-            );
-            changedStyleKeys.add(`${sourceFileUrl}::${styleName}`);
-          }
-
-          cache.setCachedStyle(
-            sourceFileUrl,
-            styleName,
-            occurrenceIndex,
-            resolvedFilename,
-          );
-        }
+        cache.setCachedStyle(
+          sourceFileUrl,
+          styleName,
+          occurrenceIndex,
+          resolvedFilename,
+        );
       }
     }
 
@@ -333,6 +320,8 @@ export class ScopedStyleImpl {
     this.isGlobal = isGlobal;
     this.scope = normalizedScope;
     this.layer = resolvedLayer;
+    this.occurrenceIndex = occurrenceIndex;
+    this.hashInput = hashInput;
 
     scopedStylesRegistry.set(this.filename, this);
   }
@@ -365,5 +354,43 @@ export class ScopedStyleImpl {
     );
 
     return [...new Set(scopeSelectors)].join(", ");
+  }
+
+  /**
+   * Deferred validation and build. Called at request time via ensureBuilt().
+   * Checks if the source file changed, re-hashes if needed, and writes the .css file.
+   * Returns true if the filename changed.
+   */
+  revalidate(): boolean {
+    if (!this.sourceFileUrl) return false;
+
+    const mtimeChanged = cache.checkAndTrackMtimeChange(this.sourceFileUrl);
+    if (!mtimeChanged) return false;
+
+    const newFilename = `${this.styleName}_${
+      generateStyleHash(this.hashInput)
+    }`;
+    if (newFilename === this.filename) return false;
+
+    const oldFilename = this.filename;
+    // Remove old registry entry
+    scopedStylesRegistry.delete(oldFilename);
+
+    this.filename = newFilename;
+    scopedStylesRegistry.set(this.filename, this);
+
+    // Update cache
+    cache.setCachedStyle(
+      this.sourceFileUrl,
+      this.styleName,
+      this.occurrenceIndex,
+      this.filename,
+    );
+
+    changedStyleKeys.add(`${this.sourceFileUrl}::${this.styleName}`);
+    console.log(
+      `Style ${this.styleName} filename changed: ${oldFilename} -> ${this.filename}`,
+    );
+    return true;
   }
 }

@@ -1,5 +1,5 @@
 /**
- * Type checking tests for addTinyTools and extendTools with ClientTools.
+ * Type checking tests for tiny.middleware and extendTools with ClientTools.
  *
  * These tests verify that the TypeScript compiler correctly infers and enforces
  * types when creating Hono instances with ClientTools.
@@ -12,9 +12,9 @@
 import { assertEquals, assertExists } from "@std/assert";
 import { Hono } from "hono";
 import {
-  addTinyTools,
   extendTools,
   type InferTools,
+  tiny,
   type withAncestors,
 } from "../honoFactory.tsx";
 import { ClientTools } from "../clientTools.ts";
@@ -77,22 +77,22 @@ function createChildTools() {
 }
 
 // ============================================================================
-// Test Suite: addTinyTools and extendTools basic functionality
+// Test Suite: tiny.middleware.clientTools and extendTools basic functionality
 // ============================================================================
 
-Deno.test("addTinyTools - creates middleware array", () => {
-  const middleware = addTinyTools();
+Deno.test("tiny.middleware.clientTools - creates middleware array", () => {
+  const middleware = tiny.middleware.clientTools();
 
   // Should return an array of middleware
   assertEquals(Array.isArray(middleware), true);
   assertExists(middleware.length);
 });
 
-Deno.test("Hono with addTinyTools and extendTools - has correct types", () => {
+Deno.test("Hono with tiny.middleware.clientTools and extendTools - has correct types", () => {
   const tools = createMockTools();
 
   const app = new Hono()
-    .use(...addTinyTools())
+    .use(...tiny.middleware.clientTools())
     .use(extendTools(tools));
 
   // Should have standard Hono methods
@@ -109,7 +109,7 @@ Deno.test("extendTools - context has correct fn type in route handler", () => {
   const tools = createMockTools();
 
   const app = new Hono()
-    .use(...addTinyTools())
+    .use(...tiny.middleware.clientTools())
     .use(extendTools(tools));
 
   // Register a route to verify context types
@@ -135,7 +135,7 @@ Deno.test("extendTools - context has correct styled type in route handler", () =
   const tools = createMockTools();
 
   const app = new Hono()
-    .use(...addTinyTools())
+    .use(...tiny.middleware.clientTools())
     .use(extendTools(tools));
 
   app.get("/test", (c) => {
@@ -160,7 +160,7 @@ Deno.test("extendTools - context has both fn and styled via tools", () => {
   const tools = createMockTools();
 
   const app = new Hono()
-    .use(...addTinyTools())
+    .use(...tiny.middleware.clientTools())
     .use(extendTools(tools));
 
   app.get("/test", (c) => {
@@ -190,7 +190,7 @@ Deno.test("withAncestors - child route with ancestor types", () => {
 
   // Parent app
   const parentApp = new Hono()
-    .use(...addTinyTools())
+    .use(...tiny.middleware.clientTools())
     .use(extendTools(parentTools));
 
   // Child route with ancestor type declaration
@@ -225,7 +225,7 @@ Deno.test("Type safety - accessing non-existent handler should be type error (co
   const tools = createMockTools();
 
   const app = new Hono()
-    .use(...addTinyTools())
+    .use(...tiny.middleware.clientTools())
     .use(extendTools(tools));
 
   app.get("/typecheck", (c) => {
@@ -248,7 +248,7 @@ Deno.test("Type safety - accessing non-existent style should be type error (comp
   const tools = createMockTools();
 
   const app = new Hono()
-    .use(...addTinyTools())
+    .use(...tiny.middleware.clientTools())
     .use(extendTools(tools));
 
   app.get("/typecheck", (c) => {
@@ -275,7 +275,7 @@ Deno.test("JSX types - onClick requires ActivatedClientFunction", () => {
   const tools = createMockTools();
 
   const app = new Hono()
-    .use(...addTinyTools())
+    .use(...tiny.middleware.clientTools())
     .use(extendTools(tools));
 
   app.get("/test", (c) => {
@@ -311,7 +311,7 @@ Deno.test("ClientTools - constructor with multiple functions preserves accumulat
   });
 
   const app = new Hono()
-    .use(...addTinyTools())
+    .use(...tiny.middleware.clientTools())
     .use(extendTools(tools));
 
   app.get("/test", (c) => {
@@ -354,7 +354,7 @@ Deno.test("ClientTools - constructor with multiple styles preserves accumulated 
   });
 
   const app = new Hono()
-    .use(...addTinyTools())
+    .use(...tiny.middleware.clientTools())
     .use(extendTools(tools));
 
   app.get("/test", (c) => {
@@ -400,7 +400,7 @@ Deno.test("ClientTools - mixed functions and styles in constructor", () => {
   });
 
   const app = new Hono()
-    .use(...addTinyTools())
+    .use(...tiny.middleware.clientTools())
     .use(extendTools(tools));
 
   app.get("/test", (c) => {
@@ -431,7 +431,7 @@ Deno.test("extend - extends tools within a route handler", () => {
   const parentTools = createMockTools();
 
   const app = new Hono()
-    .use(...addTinyTools())
+    .use(...tiny.middleware.clientTools())
     .use(extendTools(parentTools));
 
   const singleRouteTools = new ClientTools(import.meta.url, {
@@ -442,8 +442,8 @@ Deno.test("extend - extends tools within a route handler", () => {
     },
   });
 
-  app.get("/test", (c) => {
-    const { fn } = c.var.tools.extend(singleRouteTools);
+  app.get("/test", async (c) => {
+    const { fn } = await c.var.tools.extend(singleRouteTools);
 
     // Should have access to parent handlers
     const _parentHandler: AnyActivatedClientFunction = fn.testHandler;
@@ -480,11 +480,11 @@ Deno.test("extend - accepts multiple local tools in one call", () => {
   });
 
   const app = new Hono()
-    .use(...addTinyTools())
+    .use(...tiny.middleware.clientTools())
     .use(extendTools(parentTools));
 
-  app.get("/test-multi-extend", (c) => {
-    const { fn } = c.var.tools.extend(localToolsA, localToolsB);
+  app.get("/test-multi-extend", async (c) => {
+    const { fn } = await c.var.tools.extend(localToolsA, localToolsB);
 
     const _parentHandler: AnyActivatedClientFunction = fn.testHandler;
     const _routeHandlerA: AnyActivatedClientFunction = fn.routeHandlerA;
@@ -548,7 +548,7 @@ Deno.test("Multiple extendTools - combines tools from multiple middleware", () =
   });
 
   const app = new Hono()
-    .use(...addTinyTools())
+    .use(...tiny.middleware.clientTools())
     .use(extendTools(tools1))
     .use(extendTools(tools2));
 

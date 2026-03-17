@@ -14,6 +14,7 @@ import type {
 } from "./jsx-runtime.ts";
 import {
   type ActivateScopedStyles,
+  changedStyleKeys,
   mergeClassNames,
   normalizeScopedStyleInput,
   SCOPE_BOUNDARY_CLASS,
@@ -32,7 +33,7 @@ import { changedHandlerKeys, ClientFunctionImpl } from "./clientFunctions.ts";
 // ============================================================================
 
 type ClientToolsCacheV1 = {
-  version: 2;
+  version: 3;
   hashConfig: {
     handlerHashLength: number;
     styleHashLength: number;
@@ -243,16 +244,21 @@ class ClientToolsCacheManager {
 
   private hashConfig: ClientToolsCacheV1["hashConfig"] = getCurrentHashConfig();
 
+  /** When true, skip all file stat checks and trust cached filenames */
+  readonly trustCache: boolean;
+
   files: ClientToolsCacheV1["files"] = {};
 
   constructor() {
+    this.trustCache = Deno.args.includes("--prod");
+
     // Load the cache from disk
     try {
       const text = Deno.readTextFileSync(CACHE_PATH);
       const parsed = JSON.parse(text);
 
       if (
-        parsed && parsed.version === 2 && parsed.files &&
+        parsed && parsed.version === 3 && parsed.files &&
         typeof parsed.files === "object" && parsed.hashConfig
       ) {
         const loaded = parsed as ClientToolsCacheV1;
@@ -280,6 +286,14 @@ class ClientToolsCacheManager {
       }
     } catch {
       // ignore missing/invalid cache
+    }
+
+    if (this.trustCache && Object.keys(this.files).length === 0) {
+      console.warn(
+        "[tiny-tools] --prod flag set but no valid cache found. " +
+          "Run a build first. Falling back to normal mode.",
+      );
+      (this as { trustCache: boolean }).trustCache = false;
     }
   }
 
@@ -376,6 +390,7 @@ class ClientToolsCacheManager {
 
   /** Mark the cache as dirty and schedule a flush to disk */
   markDirty(): void {
+    if (this.trustCache) return;
     this.dirty = true;
     this.scheduleFlush();
   }
@@ -389,7 +404,7 @@ class ClientToolsCacheManager {
       try {
         Deno.mkdirSync(CACHE_DIR, { recursive: true });
         const data: ClientToolsCacheV1 = {
-          version: 2,
+          version: 3,
           hashConfig: this.hashConfig,
           files: this.files,
         };
@@ -403,6 +418,9 @@ class ClientToolsCacheManager {
 
   /** Get the mtime of a source file (memoized) */
   getSourceFileMtimeMs(sourceFileUrl: string): number | null {
+    if (this.trustCache) {
+      return this.files[sourceFileUrl]?.mtimeMs ?? null;
+    }
     const memo = this.sourceFileMtimeMemo.get(sourceFileUrl);
     if (memo !== undefined) return memo;
     try {
@@ -418,6 +436,8 @@ class ClientToolsCacheManager {
 
   /** Check if file mtime changed and track it (only first caller updates cache) */
   checkAndTrackMtimeChange(sourceFileUrl: string): boolean {
+    if (this.trustCache) return false;
+
     // If we already detected a change for this file this run, return true
     if (this.filesWithMtimeChange.has(sourceFileUrl)) {
       return true;
@@ -505,7 +525,7 @@ export interface ActivatedClientTools<TFunctions, TStyles> {
    *
    * @example
    * ```tsx
-   * const { fn, styled } = c.var.tools.extend(singleRouteTools);
+   * const { fn, styled } = await c.var.tools.extend(singleRouteTools);
    * ```
    */
   // deno-lint-ignore no-explicit-any
@@ -636,7 +656,7 @@ interface ClientToolsConstructor {
  * @example
  * ```ts
  * import { Hono } from "hono";
- * import { addTinyTools, extendTools, ClientTools, css } from "@tiny-tools/hono";
+ * import { tiny, extendTools, ClientTools, css } from "@tiny-tools/hono";
  *
  * const buttonStyle = css`
  *   background: blue;
@@ -654,7 +674,7 @@ interface ClientToolsConstructor {
  *
  * // Create app with middleware
  * const app = new Hono()
- *   .use(...addTinyTools())
+ *   .use(...tiny.middleware.clientTools())
  *   .use(extendTools(tools));
  *
  * // In route handlers
@@ -693,6 +713,11 @@ class ClientToolsClass<
   private _ownStyleNames = new Set<string>();
   /** Stores ScopedStyleImpl instances for global styles (not exposed on styled) */
   private _globalStyles = new Map<string, ScopedStyleImpl>();
+  /** Tracks imported ClientTools instances for cascading ensureBuilt() */
+  // deno-lint-ignore no-explicit-any
+  private _importedTools: ClientToolsClass<any, any, any>[] = [];
+  /** Whether ensureBuilt() has already run */
+  private _ensureBuiltPromise: Promise<void> | null = null;
 
   constructor(
     sourceFileUrl: string | URL,
@@ -788,6 +813,174 @@ class ClientToolsClass<
     }
   }
 
+  /**
+   * Deferred validation and build for all handlers and styles in this instance.
+   * Called at request time by extendTools() middleware. Skips entirely in --prod mode.
+   * Subsequent calls return the same promise (idempotent).
+   */
+  async ensureBuilt(): Promise<void> {
+    if (cache.trustCache) return;
+    if (this._ensureBuiltPromise) return this._ensureBuiltPromise;
+    this._ensureBuiltPromise = this._doEnsureBuilt();
+    return this._ensureBuiltPromise;
+  }
+
+  private async _doEnsureBuilt(): Promise<void> {
+    const handlerDir = "./public/handlers";
+    const stylesDir = "./public/styles";
+
+    // Ensure imported tools are built first (their bundles need to exist)
+    await Promise.all(this._importedTools.map((t) => t.ensureBuilt()));
+
+    // Revalidate all handlers (own + imported)
+    for (const [fnName, impl] of this._clientFunctions) {
+      const rebuilt = await impl.revalidateAndBuild(handlerDir);
+      if (rebuilt || impl.filename !== this.handlerFilenames.get(fnName)) {
+        // Update our filename map if the handler's filename changed
+        this.handlerFilenames.set(fnName, impl.filename);
+        // deno-lint-ignore no-explicit-any
+        (this as any)[fnName] = (impl as any)[impl.fnName];
+      }
+    }
+
+    // Capture old filenames before revalidation so we can clean up stale files
+    const oldGlobalStyleFilenames = new Map<string, string>();
+    for (const [name, impl] of this._globalStyles) {
+      oldGlobalStyleFilenames.set(name, impl.filename);
+    }
+
+    // Revalidate all scoped styles (own + imported)
+    let anyStyleChanged = false;
+    for (const [styleName, impl] of this._scopedStyles) {
+      const changed = impl.revalidate();
+      if (changed) {
+        anyStyleChanged = true;
+      }
+    }
+
+    // Revalidate global styles too
+    for (const [, impl] of this._globalStyles) {
+      const changed = impl.revalidate();
+      if (changed) {
+        anyStyleChanged = true;
+      }
+    }
+
+    // If any own style changed, re-finalize the bundle
+    if (anyStyleChanged && this._ownStyleNames.size > 0) {
+      // Capture old bundle filename before re-finalizing
+      const oldBundleFilename = this._ownStyleNames.size > 0
+        ? this.styleFilenames.get([...this._ownStyleNames][0])
+        : undefined;
+
+      this._finalizeStyleBundle();
+
+      // Delete old bundle CSS if the filename changed
+      const newBundleFilename = this.styleFilenames.get(
+        [...this._ownStyleNames][0],
+      );
+      if (
+        oldBundleFilename && newBundleFilename &&
+        oldBundleFilename !== newBundleFilename
+      ) {
+        styleBundleRegistry.delete(oldBundleFilename);
+        await Deno.remove(`${stylesDir}/${oldBundleFilename}.css`).catch(
+          () => {},
+        );
+      }
+    }
+
+    // Update styleFilenames for any imported styles whose filename changed
+    if (anyStyleChanged) {
+      for (const [styleName, impl] of this._scopedStyles) {
+        if (!this._ownStyleNames.has(styleName)) {
+          // Imported style — update to its current filename
+          this.styleFilenames.set(styleName, impl.filename);
+        }
+      }
+    }
+
+    // Build style bundle CSS files
+    if (this._ownStyleNames.size > 0) {
+      const ownStyles = [...this._scopedStyles.entries()]
+        .filter(([name]) => this._ownStyleNames.has(name));
+      if (ownStyles.length > 0) {
+        const bundleFilename = this.styleFilenames.get(
+          ownStyles[0][0],
+        );
+        if (bundleFilename) {
+          await this._ensureStyleBundleBuilt(
+            stylesDir,
+            bundleFilename,
+            ownStyles.map(([, s]) => s),
+          );
+        }
+      }
+    }
+
+    // Build individual global style files
+    for (const [name, impl] of this._globalStyles) {
+      const oldFilename = oldGlobalStyleFilenames.get(name);
+      await this._ensureStyleFileBuilt(stylesDir, impl);
+      // If revalidate changed the filename, the old file on disk is stale
+      if (oldFilename && oldFilename !== impl.filename) {
+        await Deno.remove(`${stylesDir}/${oldFilename}.css`).catch(
+          () => {},
+        );
+      }
+    }
+  }
+
+  private async _ensureStyleBundleBuilt(
+    stylesDir: string,
+    bundleFilename: string,
+    styles: ScopedStyleImpl[],
+  ): Promise<void> {
+    const filePath = `${stylesDir}/${bundleFilename}.css`;
+    const fileExists = await Deno.stat(filePath).then(() => true).catch(
+      () => false,
+    );
+
+    const anyChanged = styles.some((style) => {
+      const styleKey = style.sourceFileUrl
+        ? `${style.sourceFileUrl}::${style.styleName}`
+        : "";
+      return styleKey && changedStyleKeys.has(styleKey);
+    });
+
+    if (fileExists && !anyChanged) return;
+
+    const { buildLayeredCssContent } = await import("./build.ts");
+    await Deno.mkdir(stylesDir, { recursive: true });
+    const cssContent = buildLayeredCssContent(styles);
+    await Deno.writeTextFile(filePath, cssContent);
+    console.log(
+      `Style bundle written: ${filePath} (${styles.length} styles)`,
+    );
+  }
+
+  private async _ensureStyleFileBuilt(
+    stylesDir: string,
+    style: ScopedStyleImpl,
+  ): Promise<void> {
+    const filePath = `${stylesDir}/${style.filename}.css`;
+    const fileExists = await Deno.stat(filePath).then(() => true).catch(
+      () => false,
+    );
+
+    if (fileExists) {
+      const styleKey = style.sourceFileUrl
+        ? `${style.sourceFileUrl}::${style.styleName}`
+        : "";
+      if (!styleKey || !changedStyleKeys.has(styleKey)) return;
+    }
+
+    await Deno.mkdir(stylesDir, { recursive: true });
+    const cssContent = style.buildCssContent();
+    await Deno.writeTextFile(filePath, cssContent);
+    console.log(`Style file written: ${filePath}`);
+  }
+
   /** Internal helper to process style definitions */
   private _processStyles<T extends Record<string, ScopedStyleInput | string>>(
     styles: T,
@@ -835,6 +1028,7 @@ class ClientToolsClass<
   private _processImport<T extends ClientToolsClass<any, any, any>>(
     externalTools: T,
   ): void {
+    this._importedTools.push(externalTools);
     // deno-lint-ignore no-explicit-any
     const externalClientFunctions = (externalTools as any)
       ._clientFunctions as Map<string, ClientFunctionImpl>;
@@ -1017,9 +1211,11 @@ class ClientToolsClass<
   extend<T1 extends ClientToolsClass<any, any, any>>(
     t1: T1,
   ): {
-    engage: () => EngageResult<
-      AccumulatedFunctions & ExtractFunctions<T1>,
-      AccumulatedStyles & ExtractStyles<T1>
+    engage: () => Promise<
+      EngageResult<
+        AccumulatedFunctions & ExtractFunctions<T1>,
+        AccumulatedStyles & ExtractStyles<T1>
+      >
     >;
   };
   extend<
@@ -1031,9 +1227,11 @@ class ClientToolsClass<
     t1: T1,
     t2: T2,
   ): {
-    engage: () => EngageResult<
-      AccumulatedFunctions & ExtractFunctions<T1> & ExtractFunctions<T2>,
-      AccumulatedStyles & ExtractStyles<T1> & ExtractStyles<T2>
+    engage: () => Promise<
+      EngageResult<
+        AccumulatedFunctions & ExtractFunctions<T1> & ExtractFunctions<T2>,
+        AccumulatedStyles & ExtractStyles<T1> & ExtractStyles<T2>
+      >
     >;
   };
   extend<
@@ -1048,27 +1246,30 @@ class ClientToolsClass<
     t2: T2,
     t3: T3,
   ): {
-    engage: () => EngageResult<
-      & AccumulatedFunctions
-      & ExtractFunctions<T1>
-      & ExtractFunctions<T2>
-      & ExtractFunctions<T3>,
-      & AccumulatedStyles
-      & ExtractStyles<T1>
-      & ExtractStyles<T2>
-      & ExtractStyles<T3>
+    engage: () => Promise<
+      EngageResult<
+        & AccumulatedFunctions
+        & ExtractFunctions<T1>
+        & ExtractFunctions<T2>
+        & ExtractFunctions<T3>,
+        & AccumulatedStyles
+        & ExtractStyles<T1>
+        & ExtractStyles<T2>
+        & ExtractStyles<T3>
+      >
     >;
   };
   // deno-lint-ignore no-explicit-any
   extend(...others: ClientToolsClass<any, any, any>[]): {
-    engage: () => EngageResult<unknown, unknown>;
+    engage: () => Promise<EngageResult<unknown, unknown>>;
   };
   // deno-lint-ignore no-explicit-any
   extend(...others: ClientToolsClass<any, any, any>[]): {
-    engage: () => EngageResult<unknown, unknown>;
+    engage: () => Promise<EngageResult<unknown, unknown>>;
   } {
     return {
-      engage: () => {
+      engage: async () => {
+        await Promise.all([this, ...others].map((t) => t.ensureBuilt()));
         const c = tryGetContext();
         if (!c) {
           return this._engageWithoutContext([...others, this]);
@@ -1077,10 +1278,10 @@ class ClientToolsClass<
         let tools = (c as any).var.tools as any;
         // Extend with the additional tools first (ancestors/shared)
         for (const other of others) {
-          tools = tools.extend(other);
+          tools = await tools.extend(other);
         }
         // Extend with self (the most-local tools) last
-        tools = tools.extend(this);
+        tools = await tools.extend(this);
         return { ...tools, c };
       },
     };
@@ -1096,13 +1297,16 @@ class ClientToolsClass<
    *
    * @returns The extended tools (`fn`, `styled`, `extend`) plus `c` (the Hono context)
    */
-  engage(): EngageResult<AccumulatedFunctions, AccumulatedStyles> {
+  async engage(): Promise<
+    EngageResult<AccumulatedFunctions, AccumulatedStyles>
+  > {
+    await this.ensureBuilt();
     const c = tryGetContext();
     if (!c) {
       return this._engageWithoutContext([this]);
     }
     // deno-lint-ignore no-explicit-any
-    const tools = (c as any).var.tools.extend(this);
+    const tools = await (c as any).var.tools.extend(this);
     return { ...tools, c };
   }
 }

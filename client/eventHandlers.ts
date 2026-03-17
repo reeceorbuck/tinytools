@@ -22,16 +22,15 @@ const basePath = "/handlers";
 globalThis.handlers = new Proxy<HandlerProxy>({} as HandlerProxy, {
   get(target, prop, receiver) {
     if (prop in target) {
-      // deno-lint-ignore no-explicit-any
-      return (...args: any[]) => {
-        const [thisValue, ...rest] = args;
-        return Reflect.get(target, prop, receiver).call(thisValue, ...rest);
-      };
+      return Reflect.get(target, prop, receiver);
     }
-    console.warn(
-      `Handler function "${prop.toString()}" not found in handlers proxy, importing...`,
-    );
+    if (typeof prop === "symbol") {
+      return undefined;
+    }
     const callFunctionName = prop.toString();
+    console.warn(
+      `Handler function "${callFunctionName}" not found in handlers proxy, importing...`,
+    );
     const scriptContent = import(
       `${basePath}/${callFunctionName}.js`
     ).then(({ default: scriptContent }) => {
@@ -41,10 +40,9 @@ globalThis.handlers = new Proxy<HandlerProxy>({} as HandlerProxy, {
     });
 
     // deno-lint-ignore no-explicit-any
-    return async (...args: any[]) => {
+    return async function (this: any, ...args: any[]) {
       const scriptFunction = await scriptContent;
-      const [thisValue, ...rest] = args;
-      return scriptFunction.call(thisValue, ...rest);
+      return scriptFunction.call(this, ...args);
     };
   },
 });

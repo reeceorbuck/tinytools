@@ -98,6 +98,12 @@ customElements.define(
       if (!parent) return;
 
       // Move all children before this element, then remove this element
+      if (this.children.length === 0) {
+        console.warn(
+          "window-event-listener has no children to replace itself with",
+        );
+        return;
+      }
       while (this.firstChild) {
         parent.insertBefore(this.firstChild, this);
       }
@@ -132,7 +138,7 @@ customElements.define(
         const eventConfig = windowEventMap[attrNameLower];
         if (!eventConfig) continue;
 
-        const handlerName = attr.value.match(/^handlers\.([^(]+)\(/)?.[1];
+        const handlerName = attr.value.match(/^handlers\.(\w+)/)?.[1];
         if (!handlerName) continue;
 
         this.addWindowEventListener(eventConfig, handlerName, signal);
@@ -152,7 +158,11 @@ customElements.define(
         (event: Event) => {
           // Call handler for each captured child element
           for (const element of targetElements) {
-            (globalThis.handlers as HandlerProxy)[handlerName](element, event);
+            (globalThis.handlers as HandlerProxy)[handlerName].call(
+              element,
+              element,
+              event,
+            );
           }
         },
         { signal },

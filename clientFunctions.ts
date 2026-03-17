@@ -21,6 +21,7 @@ export interface ClientFunctionEntry {
   sourceFileUrl?: string;
   needsRebuildDueToDependencyChange(): boolean;
   buildCode(): Promise<string>;
+  revalidateAndBuild(handlerDir: string): Promise<boolean>;
 }
 
 /** Global registry of all handlers for build process */
@@ -73,6 +74,7 @@ export class ClientFunctionImpl<
   fn: T;
   filename: string;
   sourceFileUrl?: string;
+  private occurrenceIndex: number;
 
   constructor(
     fnName: FName,
@@ -83,17 +85,15 @@ export class ClientFunctionImpl<
       throw new Error("ClientFunction requires a function");
     }
 
-    const mtimeChanged = sourceFileUrl
-      ? cache.checkAndTrackMtimeChange(sourceFileUrl)
-      : false;
-
     // Get the occurrence index for this name in this file (0 for first, 1 for second, etc.)
     const occurrenceIndex = sourceFileUrl
       ? cache.getNextOccurrenceIndex(sourceFileUrl, fnName, "handler")
       : 0;
 
+    // Try to use a cached filename directly (no file stat needed).
+    // Change detection is deferred to ensureBuilt() at request time.
     let cachedFilename: string | undefined;
-    if (sourceFileUrl && !mtimeChanged) {
+    if (sourceFileUrl) {
       cachedFilename = cache.getCachedHandler(
         sourceFileUrl,
         fnName,
@@ -109,39 +109,23 @@ export class ClientFunctionImpl<
         "Generating filename for ClientFunction by hashing: ",
         fnName,
       );
-      const str = fn.toString();
+      const str = fn.toString() + "::" + (sourceFileUrl ?? "");
       resolvedFilename = `${fnName}_${generateHandlerHash(str)}`;
 
       if (sourceFileUrl) {
-        const sourceMtimeMs = cache.getSourceFileMtimeMs(sourceFileUrl);
-        if (sourceMtimeMs !== null) {
-          cache.files[sourceFileUrl] ??= {
-            mtimeMs: sourceMtimeMs,
-            externalImports: [],
-            handlers: {},
-            styles: {},
-          };
-          const oldFilename = cache.getCachedHandler(
-            sourceFileUrl,
-            fnName,
-            occurrenceIndex,
-          );
+        cache.files[sourceFileUrl] ??= {
+          mtimeMs: 0,
+          externalImports: [],
+          handlers: {},
+          styles: {},
+        };
 
-          if (oldFilename && oldFilename !== resolvedFilename) {
-            console.log(
-              `Handler ${fnName} filename changed: ${oldFilename} -> ${resolvedFilename}`,
-            );
-            changedHandlerKeys.add(handlerKey(sourceFileUrl, fnName));
-            filesWithChangedHandlers.add(sourceFileUrl);
-          }
-
-          cache.setCachedHandler(
-            sourceFileUrl,
-            fnName,
-            occurrenceIndex,
-            resolvedFilename,
-          );
-        }
+        cache.setCachedHandler(
+          sourceFileUrl,
+          fnName,
+          occurrenceIndex,
+          resolvedFilename,
+        );
       }
     }
     Object.defineProperty(fn, "name", { value: fnName });
@@ -149,9 +133,10 @@ export class ClientFunctionImpl<
     this.fn = fn;
     this.filename = resolvedFilename;
     this.sourceFileUrl = sourceFileUrl;
+    this.occurrenceIndex = occurrenceIndex;
     // deno-lint-ignore no-explicit-any
     (this as any)[fnName] =
-      `handlers.${this.filename}(this, event)` as unknown as T;
+      `handlers.${this.filename}.call(this, event)` as unknown as T;
 
     handlers.set(fn, this);
     const registry = getImportRegistry(sourceFileUrl);
@@ -220,5 +205,70 @@ export class ClientFunctionImpl<
     const { buildHandlerCode } = await import("./build.ts");
     const registry = getImportRegistry(this.sourceFileUrl);
     return buildHandlerCode(this.fnName, this.fn, this.filename, registry);
+  }
+
+  /**
+   * Deferred validation and build. Called at request time via ensureBuilt().
+   * Checks if the source file changed, re-hashes if needed, and writes the .js file.
+   * Returns true if a rebuild was performed.
+   */
+  async revalidateAndBuild(handlerDir: string): Promise<boolean> {
+    if (!this.sourceFileUrl) return false;
+
+    const mtimeChanged = cache.checkAndTrackMtimeChange(this.sourceFileUrl);
+
+    if (mtimeChanged) {
+      // Re-hash and check if filename actually changed
+      const str = this.fn.toString() + "::" + (this.sourceFileUrl ?? "");
+      const newFilename = `${this.fnName}_${generateHandlerHash(str)}`;
+
+      if (newFilename !== this.filename) {
+        const oldFilename = this.filename;
+        this.filename = newFilename;
+        // deno-lint-ignore no-explicit-any
+        (this as any)[this.fnName] =
+          `handlers.${this.filename}.call(this, event)` as unknown;
+
+        // Update registries
+        const registry = getImportRegistry(this.sourceFileUrl);
+        registry.set(this.fnName, this.filename);
+
+        // Update cache
+        cache.setCachedHandler(
+          this.sourceFileUrl,
+          this.fnName,
+          this.occurrenceIndex,
+          this.filename,
+        );
+
+        // Track the change for dependency rebuilds
+        changedHandlerKeys.add(handlerKey(this.sourceFileUrl, this.fnName));
+        filesWithChangedHandlers.add(this.sourceFileUrl);
+
+        console.log(
+          `Handler ${this.fnName} filename changed: ${oldFilename} -> ${this.filename}`,
+        );
+
+        // Remove the old handler file from disk
+        await Deno.remove(`${handlerDir}/${oldFilename}.js`).catch(() => {});
+      }
+    }
+
+    // Build if .js file doesn't exist
+    try {
+      await Deno.stat(`${handlerDir}/${this.filename}.js`);
+      // File exists — check if we need to rebuild due to dependency changes
+      if (!this.needsRebuildDueToDependencyChange()) {
+        return false;
+      }
+    } catch {
+      // File doesn't exist, need to build
+    }
+
+    const functionCode = await this.buildCode();
+    await Deno.mkdir(handlerDir, { recursive: true });
+    await Deno.writeTextFile(`${handlerDir}/${this.filename}.js`, functionCode);
+    console.log(`Handler file written: ${handlerDir}/${this.filename}.js`);
+    return true;
   }
 }

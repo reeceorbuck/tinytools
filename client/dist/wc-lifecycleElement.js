@@ -1,5 +1,5 @@
 function extractHandlerName(attrValue) {
-  const match = attrValue.match(/^handlers\.([^(]+)\(/);
+  const match = attrValue.match(/^handlers\.(\w+)/);
   if (match) {
     return match[1];
   }
@@ -33,7 +33,7 @@ customElements.define(
           `[lifecycle-element] Calling mount handler "${mountHandler}"`
         );
         console.log("this: ", this.firstChild);
-        globalThis.handlers[mountHandler](this);
+        globalThis.handlers[mountHandler].call(this, this);
       }
     }
     disconnectedCallback() {
@@ -43,7 +43,7 @@ customElements.define(
         console.log(
           `[lifecycle-element] Calling unmount handler "${unmountHandler}"`
         );
-        globalThis.handlers[unmountHandler](this);
+        globalThis.handlers[unmountHandler].call(this, this);
       }
       this.setAttribute("mounted", "false");
     }

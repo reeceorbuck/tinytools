@@ -9,27 +9,6 @@ type AssetTagsProps = {
    * @default true
    */
   fullPageLoad?: boolean;
-  /**
-   * Whether to include essential client-side scripts for navigation and updates.
-   * These are required for SPA-like navigation and partial page updates to work.
-   * @default true
-   */
-  essentials?: boolean;
-  /**
-   * Whether to include the SSE (Server-Sent Events) script for live updates.
-   * @default true
-   */
-  sse?: boolean;
-  /**
-   * Whether to include the local routes script for client-side template routing.
-   * @default true
-   */
-  localRoutes?: boolean;
-  /**
-   * Whether to include web component scripts (lifecycle-element, window-event-listener).
-   * @default true
-   */
-  webComponents?: boolean;
   /** Optional explicit handler assets (e.g. for non-request update rendering) */
   accessedHandlerFiles?: Iterable<string>;
   /** Optional explicit style assets (e.g. for non-request update rendering) */
@@ -37,49 +16,44 @@ type AssetTagsProps = {
 };
 
 /**
- * Renders script and link tags for handler and style assets, along with essential
- * client-side scripts required for the framework to function.
+ * Renders script and link tags for handler and style assets, along with
+ * client-side scripts for enabled features.
  *
- * Essential scripts (included by default):
- * - navigation.js - Handles client-side navigation
- * - processIncomingData.js - Processes incoming data from server
- * - processIncomingHtml.js - Processes incoming HTML updates
- * - performFetchAndUpdate.js - Performs fetch requests and DOM updates
- * - eventHandlers.js - Manages event handler delegation
+ * Feature scripts are controlled by the `tinyToolsFeatures` context set,
+ * populated by individual feature middleware (e.g. `tiny.middleware.navApiTools()`).
  *
- * Optional scripts (included by default, can be disabled):
- * - sse.js - Server-Sent Events for live updates
- * - localRoutes.js - Client-side template routing
- * - wc-lifecycleElement.js - Web component for lifecycle events
- * - wc-windowEventlistener.js - Web component for window event listeners
+ * Features and their scripts:
+ * - `"navigation"` - navigation.js, processIncomingData.js, processIncomingHtml.js,
+ *                     performFetchAndUpdate.js, eventHandlers.js
+ * - `"sse"` - sse.js
+ * - `"localRoutes"` - localRoutes.js
+ * - `"webComponents"` - wc-lifecycleElement.js, wc-windowEventlistener.js
  *
  * @example
- * // Include all scripts (default)
+ * ```tsx
+ * // Scripts are determined by which feature middleware is active
  * <AssetTags />
  *
- * @example
- * // Disable SSE and local routes
- * <AssetTags sse={false} localRoutes={false} />
+ * // For partial nav / SSE updates (no framework scripts)
+ * <AssetTags fullPageLoad={false} />
+ * ```
  */
 export const AssetTags: FC<AssetTagsProps> = ({
   fullPageLoad = true,
-  essentials = true,
-  sse = true,
-  localRoutes = true,
-  webComponents = true,
   accessedHandlerFiles: explicitHandlerFiles,
   accessedStyleFiles: explicitStyleFiles,
 }) => {
   let accessedStyleFilesArray: string[];
   let accessedHandlerFilesArray: string[];
 
+  // deno-lint-ignore no-explicit-any
+  const c = tryGetContext() as any;
+
   if (explicitHandlerFiles || explicitStyleFiles) {
     accessedHandlerFilesArray = Array.from(explicitHandlerFiles ?? []);
     accessedStyleFilesArray = Array.from(explicitStyleFiles ?? []);
   } else {
-    // These are set internally by the tools middleware initialized by addTinyTools
-    // deno-lint-ignore no-explicit-any
-    const c = tryGetContext() as any;
+    // These are set internally by the tools middleware initialized by tiny.middleware.clientTools()
     const accessedStyleFiles = c?.var?.accessedStyleFiles as Set<string> ||
       new Set<string>();
     console.log(
@@ -95,10 +69,18 @@ export const AssetTags: FC<AssetTagsProps> = ({
     accessedHandlerFilesArray = Array.from(accessedHandlerFiles);
     accessedHandlerFiles.clear();
   }
+
+  // Read enabled features from context (populated by feature middleware)
+  const features = c?.var?.tinyToolsFeatures as Set<string> | undefined;
+  const hasNavigation = features?.has("navigation") ?? false;
+  const hasSse = features?.has("sse") ?? false;
+  const hasLocalRoutes = features?.has("localRoutes") ?? false;
+  const hasWebComponents = features?.has("webComponents") ?? false;
+
   return (
     <>
-      {/* Essential scripts for navigation and page updates */}
-      {fullPageLoad && essentials && (
+      {/* Navigation and partial page update scripts */}
+      {fullPageLoad && hasNavigation && (
         <>
           <script src={`${P}/navigation.js`} type="module" />
           <script src={`${P}/processIncomingData.js`} type="module" />
@@ -107,19 +89,19 @@ export const AssetTags: FC<AssetTagsProps> = ({
         </>
       )}
 
-      {/* Optional: Server-Sent Events for live updates */}
-      {fullPageLoad && sse && <script src={`${P}/sse.js`} type="module" />}
+      {/* Server-Sent Events for live updates */}
+      {fullPageLoad && hasSse && <script src={`${P}/sse.js`} type="module" />}
 
-      {/* Optional: Client-side template routing */}
-      {fullPageLoad && localRoutes && (
+      {/* Client-side template routing */}
+      {fullPageLoad && hasLocalRoutes && (
         <script src={`${P}/localRoutes.js`} type="module" />
       )}
 
-      {/* Optional: Web components for lifecycle and window events */}
-      {fullPageLoad && webComponents && (
+      {/* Web components for lifecycle and window events */}
+      {fullPageLoad && hasWebComponents && (
         <>
-          <script src={`${P}/wc-lifecycleElement.js`} async />
-          <script src={`${P}/wc-windowEventlistener.js`} async />
+          <script src={`${P}/wc-lifecycleElement.js`} defer />
+          <script src={`${P}/wc-windowEventlistener.js`} defer />
         </>
       )}
 
@@ -136,11 +118,11 @@ export const AssetTags: FC<AssetTagsProps> = ({
         />
       ))}
 
-      {/* Event handler delegation and scoped style injection (must come after handlers) */}
-      {fullPageLoad && essentials && (
-        <>
-          <script src={`${P}/eventHandlers.js`} />
-        </>
+      {/* Event handler proxy for lazy-loading user handlers */}
+      {fullPageLoad && hasNavigation && (
+        <script
+          src={`${P}/eventHandlers.js`}
+        />
       )}
     </>
   );

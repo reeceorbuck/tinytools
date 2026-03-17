@@ -55,6 +55,12 @@ customElements.define(
     replaceWithChildren() {
       const parent = this.parentNode;
       if (!parent) return;
+      if (this.children.length === 0) {
+        console.warn(
+          "window-event-listener has no children to replace itself with"
+        );
+        return;
+      }
       while (this.firstChild) {
         parent.insertBefore(this.firstChild, this);
       }
@@ -81,7 +87,7 @@ customElements.define(
         if (!attrNameLower.startsWith("on")) continue;
         const eventConfig = windowEventMap[attrNameLower];
         if (!eventConfig) continue;
-        const handlerName = attr.value.match(/^handlers\.([^(]+)\(/)?.[1];
+        const handlerName = attr.value.match(/^handlers\.(\w+)/)?.[1];
         if (!handlerName) continue;
         this.addWindowEventListener(eventConfig, handlerName, signal);
       }
@@ -93,7 +99,7 @@ customElements.define(
         eventName,
         (event) => {
           for (const element of targetElements) {
-            globalThis.handlers[handlerName](element, event);
+            globalThis.handlers[handlerName].call(element, element, event);
           }
         },
         { signal }
