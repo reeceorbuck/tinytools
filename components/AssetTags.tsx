@@ -1,5 +1,6 @@
 import type { FC } from "hono/jsx";
 import { tryGetContext } from "hono/context-storage";
+import { getClientFileName } from "../client/dist/manifest.ts";
 
 /** URL prefix for package-provided client scripts */
 const P = "/_tinytools";
@@ -82,26 +83,49 @@ export const AssetTags: FC<AssetTagsProps> = ({
       {/* Navigation and partial page update scripts */}
       {fullPageLoad && hasNavigation && (
         <>
-          <script src={`${P}/navigation.js`} type="module" />
-          <script src={`${P}/processIncomingData.js`} type="module" />
-          <script src={`${P}/processIncomingHtml.js`} type="module" />
-          <script src={`${P}/performFetchAndUpdate.js`} type="module" />
+          <script
+            src={`${P}/${getClientFileName("navigation.js")}`}
+            type="module"
+          />
+          <script
+            src={`${P}/${getClientFileName("processIncomingData.js")}`}
+            type="module"
+          />
+          <script
+            src={`${P}/${getClientFileName("processIncomingHtml.js")}`}
+            type="module"
+          />
+          <script
+            src={`${P}/${getClientFileName("performFetchAndUpdate.js")}`}
+            type="module"
+          />
         </>
       )}
 
       {/* Server-Sent Events for live updates */}
-      {fullPageLoad && hasSse && <script src={`${P}/sse.js`} type="module" />}
+      {fullPageLoad && hasSse && (
+        <script src={`${P}/${getClientFileName("sse.js")}`} type="module" />
+      )}
 
       {/* Client-side template routing */}
       {fullPageLoad && hasLocalRoutes && (
-        <script src={`${P}/localRoutes.js`} type="module" />
+        <script
+          src={`${P}/${getClientFileName("localRoutes.js")}`}
+          type="module"
+        />
       )}
 
       {/* Web components for lifecycle and window events */}
       {fullPageLoad && hasWebComponents && (
         <>
-          <script src={`${P}/wc-lifecycleElement.js`} defer />
-          <script src={`${P}/wc-windowEventlistener.js`} defer />
+          <script
+            src={`${P}/${getClientFileName("wc-lifecycleElement.js")}`}
+            defer
+          />
+          <script
+            src={`${P}/${getClientFileName("wc-windowEventlistener.js")}`}
+            defer
+          />
         </>
       )}
 
@@ -121,7 +145,7 @@ export const AssetTags: FC<AssetTagsProps> = ({
       {/* Event handler proxy for lazy-loading user handlers */}
       {fullPageLoad && hasNavigation && (
         <script
-          src={`${P}/eventHandlers.js`}
+          src={`${P}/${getClientFileName("eventHandlers.js")}`}
         />
       )}
     </>

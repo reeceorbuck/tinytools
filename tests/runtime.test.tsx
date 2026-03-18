@@ -10,8 +10,15 @@
 
 /// <reference lib="dom" />
 
-import { assert, assertEquals, assertExists, assertThrows } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertExists,
+  assertStringIncludes,
+  assertThrows,
+} from "@std/assert";
 import { Hono } from "hono";
+import { getClientFileName } from "../client/dist/manifest.ts";
 import { tiny } from "../honoFactory.tsx";
 import {
   ClientTools,
@@ -214,6 +221,29 @@ Deno.test("Runtime - startup cache hydration avoids reset for same style hash le
       // ignore cleanup errors
     }
   }
+});
+
+Deno.test("Runtime - AssetTags renders versioned package client asset URLs", async () => {
+  const app = new Hono()
+    .use(...tiny.middleware.core())
+    .use(tiny.middleware.navApiTools());
+
+  app.get("/", (c) => c.render(<div>Home</div>));
+
+  const res = await app.fetch(new Request("http://localhost/"));
+  const html = await res.text();
+
+  assertEquals(res.status, 200);
+  assertStringIncludes(
+    html,
+    `/_tinytools/${getClientFileName("navigation.js")}`,
+  );
+  assertStringIncludes(
+    html,
+    `/_tinytools/${getClientFileName("eventHandlers.js")}`,
+  );
+  assertEquals(html.includes("/_tinytools/navigation.js"), false);
+  assertEquals(html.includes("/_tinytools/eventHandlers.js"), false);
 });
 
 // ============================================================================

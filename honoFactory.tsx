@@ -798,13 +798,23 @@ function createCoreMiddleware(
   return [
     // Serve package client JS files from /_tinytools/
     servePackageClientFiles(),
-    // Static file serving for user's public directory
+    // Static file serving for user's public directory with aggressive caching for content-hashed files
     serveStatic({
       root: "./public/",
-      onNotFound: (_path, _c) => {
-        // Silent 404 for static files - let routes handle it
+      onFound: (path, c) => {
+        // Handler files (public/handlers/*.js) and style files (public/styles/*.css)
+        // have content-hashed filenames, so they're immutable and can be cached forever
+        if (path.startsWith("/handlers/") || path.startsWith("/styles/")) {
+          c.header("Cache-Control", "public, max-age=31536000, immutable");
+        }
+      },
+      onNotFound: (path, _c) => {
+        if (path.startsWith("/handlers/") || path.startsWith("/styles/")) {
+          console.error(`Handler or style file not found: ${path}`);
+        }
       },
     }),
+
     // Context storage for getContext() in async components
     contextStorage(),
     // Initialize empty tools with tracking infrastructure

@@ -12,6 +12,7 @@ import { HtmlEscapedCallbackPhase, resolveCallback } from "hono/utils/html";
 import type { HtmlEscapedString } from "hono/utils/html";
 import type { Child, FC, PropsWithChildren } from "hono/jsx";
 import { getContext } from "hono/context-storage";
+import { getClientFileName } from "../client/dist/manifest.ts";
 
 const childrenToString = async (
   children: Child[],
@@ -166,7 +167,9 @@ export const Suspense: FC<
               ? ""
               : `<update id="u${index}"><template><head-update>${headUpdate}</head-update><body-update><partial id="suspended-${index}" mode="blast">${content}</partial></body-update></template></update>${
                 sourceUrl === undefined
-                  ? `<script type="module" id="s${index}">import{processIncomingHtml}from'/_tinytools/processIncomingHtml.js';const u=document.getElementById('u${index}'),t=u.querySelector('template').content;t.querySelector('head-update').childNodes.forEach(c=>document.head.appendChild(c.cloneNode(true)));processIncomingHtml(t.querySelector('body-update'));u.remove();document.getElementById('s${index}').remove()</script>`
+                  ? `<script type="module" id="s${index}">import{processIncomingHtml}from'/_tinytools/${
+                    getClientFileName("processIncomingHtml.js")
+                  }';const u=document.getElementById('u${index}'),t=u.querySelector('template').content;t.querySelector('head-update').childNodes.forEach(c=>document.head.appendChild(c.cloneNode(true)));processIncomingHtml(t.querySelector('body-update'));u.remove();document.getElementById('s${index}').remove()</script>`
                   : ""
               }`;
 
