@@ -1,5 +1,5 @@
 /**
- * ClientTools module for @tiny-tools/hono
+ * ClientTools module for @tinytools/hono-tools
  *
  * Provides a unified factory for creating both client-side event handlers
  * and scoped CSS styles. Consolidates ClientFunctionFactory and ScopedStyleFactory
@@ -482,7 +482,7 @@ type AnyFunction = (...args: any[]) => any;
 // Type Definitions
 // ============================================================================
 
-/** Helper type for extend return - accumulates raw function and style types */
+/** Helper type for extendWithImports return - accumulates raw function and style types */
 type ExtendResult<
   TAccumulatedFunctions,
   TAccumulatedStyles,
@@ -496,7 +496,7 @@ type ExtendResult<
     TAccumulatedStyles & ExtractStyles<TLocalTools>
   >;
   // deno-lint-ignore no-explicit-any
-  extend<TNextTools extends ClientTools<any, any, any>>(
+  extendWithImports<TNextTools extends ClientTools<any, any, any>>(
     tools: TNextTools,
   ): ExtendResult<
     TAccumulatedFunctions & ExtractFunctions<TLocalTools>,
@@ -507,7 +507,7 @@ type ExtendResult<
 
 /**
  * Helper type for the activated client tools proxy.
- * Provides access to functions and styles, plus extend() method.
+ * Provides access to functions and styles, plus extendWithImports() method.
  */
 export interface ActivatedClientTools<TFunctions, TStyles> {
   /**
@@ -525,11 +525,11 @@ export interface ActivatedClientTools<TFunctions, TStyles> {
    *
    * @example
    * ```tsx
-   * const { fn, styled } = await c.var.tools.extend(singleRouteTools);
+   * const { fn, styled } = await c.var.tools.extendWithImports(singleRouteTools);
    * ```
    */
   // deno-lint-ignore no-explicit-any
-  extend<TLocalTools extends ClientToolsClass<any, any, any>>(
+  extendWithImports<TLocalTools extends ClientToolsClass<any, any, any>>(
     localTools: TLocalTools,
   ): ExtendResult<
     TFunctions,
@@ -565,6 +565,13 @@ type EngageResult<TFunctions, TStyles> = {
   readonly c: Context;
 };
 
+// deno-lint-ignore no-explicit-any
+type AnyClientToolsInstance = ClientToolsClass<any, any, any>;
+
+// deno-lint-ignore no-explicit-any
+type UnionToIntersection<U> = (U extends any ? (arg: U) => void : never) extends
+  ((arg: infer I) => void) ? I : never;
+
 // ============================================================================
 // ClientTools Factory Class
 // ============================================================================
@@ -589,6 +596,24 @@ export interface ClientToolsOptions<
   /** Global styles to define (not wrapped in @scope) */
   globalStyles?: TGlobalStyles;
   /** Other ClientTools instances to import functions and styles from */
+  imports?: TImports;
+}
+
+export interface HandlersOptions<
+  // deno-lint-ignore no-explicit-any
+  TImports extends AnyClientToolsInstance[] = [],
+> {
+  /** Other TinyTools instances to import functions and styles from */
+  imports?: TImports;
+}
+
+export interface StylesOptions<
+  // deno-lint-ignore no-explicit-any
+  TImports extends AnyClientToolsInstance[] = [],
+> {
+  /** Mark all defined styles as global styles */
+  global?: boolean;
+  /** Other TinyTools instances to import functions and styles from */
   imports?: TImports;
 }
 
@@ -649,6 +674,69 @@ interface ClientToolsConstructor {
   >;
 }
 
+interface HandlersConstructor {
+  // deno-lint-ignore ban-types
+  new <TFunctions extends Record<string, AnyFunction> = {}>(
+    sourceFileUrl: string | URL,
+    functions: TFunctions,
+  ): ClientToolsClass<TFunctions, {}, {}>;
+
+  new <
+    // deno-lint-ignore ban-types
+    TFunctions extends Record<string, AnyFunction> = {},
+    // deno-lint-ignore no-explicit-any
+    TImports extends AnyClientToolsInstance[] = [],
+  >(
+    sourceFileUrl: string | URL,
+    functions: TFunctions,
+    options: HandlersOptions<TImports>,
+  ): ClientToolsClass<
+    TFunctions & UnionOfFunctions<TImports>,
+    UnionOfStyles<TImports>,
+    {}
+  >;
+}
+
+interface StylesConstructor {
+  new <
+    // deno-lint-ignore ban-types
+    TStyles extends Record<string, ScopedStyleInput> = {},
+  >(
+    sourceFileUrl: string | URL,
+    styles: ForbidReservedStyledKeys<TStyles>,
+  ): ClientToolsClass<{}, TStyles, {}>;
+
+  new <
+    // deno-lint-ignore ban-types
+    TStyles extends Record<string, ScopedStyleInput> = {},
+    // deno-lint-ignore no-explicit-any
+    TImports extends AnyClientToolsInstance[] = [],
+  >(
+    sourceFileUrl: string | URL,
+    styles: ForbidReservedStyledKeys<TStyles>,
+    options: { global: true; imports?: TImports },
+  ): ClientToolsClass<
+    UnionOfFunctions<TImports>,
+    UnionOfStyles<TImports>,
+    TStyles
+  >;
+
+  new <
+    // deno-lint-ignore ban-types
+    TStyles extends Record<string, ScopedStyleInput> = {},
+    // deno-lint-ignore no-explicit-any
+    TImports extends AnyClientToolsInstance[] = [],
+  >(
+    sourceFileUrl: string | URL,
+    styles: ForbidReservedStyledKeys<TStyles>,
+    options: StylesOptions<TImports>,
+  ): ClientToolsClass<
+    UnionOfFunctions<TImports>,
+    TStyles & UnionOfStyles<TImports>,
+    {}
+  >;
+}
+
 /**
  * Unified factory for creating both client functions and scoped styles.
  * All options are passed to the constructor for a cleaner API.
@@ -656,7 +744,7 @@ interface ClientToolsConstructor {
  * @example
  * ```ts
  * import { Hono } from "hono";
- * import { tiny, extendTools, ClientTools, css } from "@tiny-tools/hono";
+ * import { tiny, ClientTools, css } from "@tinytools/hono-tools";
  *
  * const buttonStyle = css`
  *   background: blue;
@@ -674,8 +762,8 @@ interface ClientToolsConstructor {
  *
  * // Create app with middleware
  * const app = new Hono()
- *   .use(...tiny.middleware.clientTools())
- *   .use(extendTools(tools));
+ *   .use(...tiny.middleware.core())
+ *   .use(tiny.middleware.sharedImports(tools));
  *
  * // In route handlers
  * app.get("/", (c) => {
@@ -815,7 +903,7 @@ class ClientToolsClass<
 
   /**
    * Deferred validation and build for all handlers and styles in this instance.
-   * Called at request time by extendTools() middleware. Skips entirely in --prod mode.
+   * Called at request time by tiny.middleware.sharedImports(). Skips entirely in --prod mode.
    * Subsequent calls return the same promise (idempotent).
    */
   async ensureBuilt(): Promise<void> {
@@ -1144,7 +1232,7 @@ class ClientToolsClass<
   }
 
   /**
-   * Get all global styles as an array for use with addGlobalStyles middleware.
+   * Get all global styles as an array for use with tiny.middleware.globalStyles().
    * Returns an array of ScopedStyleImpl instances that were defined with globalStyles.
    *
    * @example
@@ -1154,7 +1242,7 @@ class ClientToolsClass<
    * });
    *
    * // Pass to middleware:
-   * app.use(addGlobalStyles(...tools.globalStyles));
+   * app.use(tiny.middleware.globalStyles(...tools.globalStyles));
    * ```
    */
   get globalStyles(): ScopedStyleImpl[] {
@@ -1278,10 +1366,10 @@ class ClientToolsClass<
         let tools = (c as any).var.tools as any;
         // Extend with the additional tools first (ancestors/shared)
         for (const other of others) {
-          tools = await tools.extend(other);
+          tools = await tools.extendWithImports(other);
         }
         // Extend with self (the most-local tools) last
-        tools = await tools.extend(this);
+        tools = await tools.extendWithImports(this);
         return { ...tools, c };
       },
     };
@@ -1295,7 +1383,7 @@ class ClientToolsClass<
    * const { fn, styled, c } = componentTools.engage();
    * ```
    *
-   * @returns The extended tools (`fn`, `styled`, `extend`) plus `c` (the Hono context)
+   * @returns The extended tools (`fn`, `styled`, `extendWithImports`) plus `c` (the Hono context)
    */
   async engage(): Promise<
     EngageResult<AccumulatedFunctions, AccumulatedStyles>
@@ -1306,7 +1394,7 @@ class ClientToolsClass<
       return this._engageWithoutContext([this]);
     }
     // deno-lint-ignore no-explicit-any
-    const tools = await (c as any).var.tools.extend(this);
+    const tools = await (c as any).var.tools.extendWithImports(this);
     return { ...tools, c };
   }
 }
@@ -1318,6 +1406,74 @@ class ClientToolsClass<
  */
 export const ClientTools: ClientToolsConstructor =
   ClientToolsClass as ClientToolsConstructor;
+
+class HandlersClass extends ClientToolsClass<{}, {}, {}> {
+  constructor(
+    sourceFileUrl: string | URL,
+    functions: Record<string, AnyFunction>,
+    // deno-lint-ignore no-explicit-any
+    options?: HandlersOptions<any>,
+  ) {
+    super(sourceFileUrl, {
+      functions,
+      imports: options?.imports,
+    });
+  }
+}
+
+class StylesClass extends ClientToolsClass<{}, {}, {}> {
+  constructor(
+    sourceFileUrl: string | URL,
+    styles: Record<string, ScopedStyleInput>,
+    // deno-lint-ignore no-explicit-any
+    options?: StylesOptions<any>,
+  ) {
+    super(
+      sourceFileUrl,
+      options?.global
+        ? { globalStyles: styles, imports: options.imports }
+        : { styles, imports: options?.imports },
+    );
+  }
+}
+
+export const Handlers: HandlersConstructor =
+  HandlersClass as unknown as HandlersConstructor;
+
+export const Styles: StylesConstructor =
+  StylesClass as unknown as StylesConstructor;
+
+export async function imports(): Promise<EngageResult<{}, {}>>;
+export async function imports<
+  const TTools extends [AnyClientToolsInstance, ...AnyClientToolsInstance[]],
+>(
+  ...tools: TTools
+): Promise<
+  EngageResult<
+    UnionToIntersection<ExtractFunctions<TTools[number]>>,
+    UnionToIntersection<ExtractStyles<TTools[number]>>
+  >
+>;
+export async function imports(
+  ...tools: AnyClientToolsInstance[]
+): Promise<EngageResult<unknown, unknown>> {
+  if (tools.length === 0) {
+    const c = tryGetContext();
+    if (!c) {
+      throw new Error(
+        "tiny.imports() requires at least one TinyTools instance when no Hono request context is active.",
+      );
+    }
+    return { ...(c as any).var.tools, c };
+  }
+
+  const [localTools, ...ancestorTools] = tools.slice().reverse();
+  if (ancestorTools.length === 0) {
+    return await localTools.engage();
+  }
+
+  return await localTools.extend(...ancestorTools).engage();
+}
 
 /** Type alias for external use - represents a ClientTools instance */
 // deno-lint-ignore no-explicit-any

@@ -1,5 +1,5 @@
 /**
- * Server-Sent Events client script for @tiny-tools/hono
+ * Server-Sent Events client script for @tinytools/hono-tools
  *
  * Provides SSE connection handling for real-time updates from the server.
  */

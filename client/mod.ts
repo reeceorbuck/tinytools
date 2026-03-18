@@ -1,5 +1,5 @@
 /**
- * Client-side module for @tiny-tools/hono
+ * Client-side module for @tinytools/hono-tools
  *
  * Provides client-side scripts for partial navigation, event handling,
  * and DOM updates. These scripts should be served from your public directory.

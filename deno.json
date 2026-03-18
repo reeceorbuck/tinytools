@@ -1,5 +1,6 @@
 {
-  "name": "@tiny-tools/hono",
+  "name": "@tinytools/hono-tools",
+  "description": "A lightweight enhancement layer for Hono web applications running on Deno. Provides type-safe client functions, scoped styles, and enhanced JSX event handlers.",
   "version": "0.1.0",
   "license": "MIT",
   "exports": {
@@ -14,17 +15,16 @@
     "test": "deno test --check --allow-env --allow-read=./.test-build-output --allow-read=./.test-client-src --allow-write=./.test-build-output --allow-write=./.test-client-src --allow-run tests/"
   },
   "imports": {
-    "@std/assert": "jsr:@std/assert@^1.0.16",
-    "esbuild": "npm:esbuild@^0.27.1",
-    "hono": "jsr:@hono/hono@^4.0.10"
+    "@std/assert": "jsr:@std/assert@^1.0.19",
+    "esbuild": "npm:esbuild@^0.27.4",
+    "hono": "jsr:@hono/hono@^4.12.8"
   },
   "compilerOptions": {
     "jsx": "precompile",
-    "jsxImportSource": "@tiny-tools/hono",
+    "jsxImportSource": "@tinytools/hono-tools",
     "lib": [
       "esnext",
       "deno.ns",
-      "deno.unstable",
       "dom",
       "dom.iterable",
       "dom.asynciterable"

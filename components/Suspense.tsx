@@ -1,5 +1,5 @@
 /**
- * Suspense Component for @tiny-tools/hono
+ * Suspense Component for @tinytools/hono-tools
  *
  * Custom streaming module based on Hono's streaming.ts
  * This module enables JSX to support streaming Response with partial updates.
@@ -58,7 +58,7 @@ let suspenseCounter = 0;
  *
  * @example
  * ```tsx
- * import { Suspense } from "@tiny-tools/hono/components";
+ * import { Suspense } from "@tinytools/hono-tools/components";
  *
  * app.get("/dashboard", (c) => {
  *   return c.render(

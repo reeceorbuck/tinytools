@@ -1,4 +1,4 @@
-# @tiny-tools/hono
+# @tinytools/hono-tools
 
 Add client interactivity and scoped CSS to your [Hono](https://hono.dev/) + Deno
 app — without shipping a client-side framework to the browser.
@@ -8,9 +8,9 @@ capabilities on top.
 
 ## The idea
 
-Hono already renders JSX on the server. **@tiny-tools/hono** lets you attach
-real event handlers and scoped styles to that server-rendered HTML. You write
-the handler function, reference it inline in JSX with full TypeScript type
+Hono already renders JSX on the server. **@tinytools/hono-tools** lets you
+attach real event handlers and scoped styles to that server-rendered HTML. You
+write the handler function, reference it inline in JSX with full TypeScript type
 safety, and the framework takes care of the rest — extracting, bundling, and
 lazy-loading only what's needed.
 
@@ -23,13 +23,13 @@ the server, and tiny JS handler files are loaded on-demand when an event fires.
 // deno.json
 {
   "imports": {
-    "@tiny-tools/hono": "jsr:@tiny-tools/hono@^0.1.0",
-    "@tiny-tools/hono/jsx-runtime": "jsr:@tiny-tools/hono@^0.1.0/jsx-runtime",
+    "@tinytools/hono-tools": "jsr:@tinytools/hono-tools@^0.1.0",
+    "@tinytools/hono-tools/jsx-runtime": "jsr:@tinytools/hono-tools@^0.1.0/jsx-runtime",
     "hono": "jsr:@hono/hono@^4.12.7"
   },
   "compilerOptions": {
     "jsx": "precompile",
-    "jsxImportSource": "@tiny-tools/hono"
+    "jsxImportSource": "@tinytools/hono-tools"
   }
 }
 ```
@@ -38,7 +38,7 @@ the server, and tiny JS handler files are loaded on-demand when an event fires.
 
 ```tsx
 import { Hono } from "hono";
-import { ClientTools, css, tiny } from "@tiny-tools/hono";
+import { ClientTools, css, tiny } from "@tinytools/hono-tools";
 
 // Define your client-side handlers and styles at module level
 const tools = new ClientTools(import.meta.url, {
@@ -59,7 +59,7 @@ const tools = new ClientTools(import.meta.url, {
 
 // Create a standard Hono app with tiny middleware
 const app = new Hono()
-  .use(...tiny.middleware.clientTools());
+  .use(...tiny.middleware.core());
 
 // Use handlers and styles in routes
 app.get("/", async (c) => {
@@ -82,8 +82,8 @@ client-side framework — everything is handled automatically behind the scenes.
 
 1. **`ClientTools`** — declared at module level — defines the functions and
    styles you want available in the browser.
-2. **`tiny.middleware.clientTools()`** — sets up the Hono middleware (context
-   storage, static file serving, JSX renderer).
+2. **`tiny.middleware.core()`** — sets up the Hono middleware (context storage,
+   static file serving, JSX renderer).
 3. **`tools.engage()`** — called inside a route handler or component — returns
    activated `fn` and `styled` proxies that are type-safe and ready to use in
    JSX.
@@ -139,7 +139,7 @@ const { fn, styled } = await localTools.extend(sharedTools).engage();
 Tagged template literal for defining CSS:
 
 ```ts
-import { css } from "@tiny-tools/hono";
+import { css } from "@tinytools/hono-tools";
 
 const card = css`
   padding: 16px;
@@ -153,7 +153,7 @@ Composable middleware — opt into only the features you need:
 
 | Method             | Purpose                                                                         |
 | ------------------ | ------------------------------------------------------------------------------- |
-| `clientTools()`    | **Required.** Core context, static serving, JSX renderer. Spread into `.use()`. |
+| `core()`           | **Required.** Core context, static serving, JSX renderer. Spread into `.use()`. |
 | `layout(renderFn)` | Wrap routes with a shared layout component.                                     |
 | `navApiTools()`    | Client-side SPA navigation (see below).                                         |
 | `sseTools()`       | Server-Sent Events support.                                                     |
@@ -212,7 +212,7 @@ const pageTools = new ClientTools(import.meta.url, {
 ## Build module
 
 ```ts
-import { buildScriptFiles } from "@tiny-tools/hono/build";
+import { buildScriptFiles } from "@tinytools/hono-tools/build";
 
 await buildScriptFiles(); // builds handlers + styles to public/
 ```
@@ -237,7 +237,7 @@ comes from the server.
 
 ```ts
 const app = new Hono()
-  .use(...tiny.middleware.clientTools())
+  .use(...tiny.middleware.core())
   .use(tiny.middleware.navApiTools());
 ```
 
@@ -246,7 +246,7 @@ const app = new Hono()
 Declares regions of the page that can be independently updated:
 
 ```tsx
-import { Partial } from "@tiny-tools/hono/components";
+import { Partial } from "@tinytools/hono-tools/components";
 
 <Partial id="user-info" mode="replace">
   <UserCard user={user} />
@@ -260,7 +260,7 @@ Modes: `replace`, `delete`, `blast`, `merge-content`, `attributes`.
 Streaming content with a fallback while async content loads:
 
 ```tsx
-import { Suspense } from "@tiny-tools/hono/components";
+import { Suspense } from "@tinytools/hono-tools/components";
 
 <Suspense fallback={<p>Loading...</p>}>
   <AsyncContent />

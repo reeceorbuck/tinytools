@@ -1,5 +1,5 @@
 /**
- * Hono Factory module for @tiny-tools/hono
+ * Hono Factory module for @tinytools/hono-tools
  *
  * Provides setup functions and middleware for enhancing Hono apps with
  * ClientTools (client-side functions and scoped styles).
@@ -16,17 +16,20 @@ import {
 import {
   type ActivatedClientTools,
   type ClientTools,
+  Handlers,
+  imports as importTools,
   resolveToolAccessFromChain,
   setGeneratedFilenameHashLength,
   setGeneratedHandlerHashLength,
   setGeneratedStyleHashLength,
+  Styles,
   type ToolResolutionTarget,
 } from "./clientTools.ts";
 import type { ActivateClientFunctions } from "./jsx-runtime.ts";
-import type { ActivateScopedStyles } from "./scopedStyles.ts";
+import { type ActivateScopedStyles, css } from "./scopedStyles.ts";
 import { serveStatic } from "hono/deno";
 import { jsxRenderer } from "hono/jsx-renderer";
-import { AssetTags } from "@tiny-tools/hono/components";
+import { AssetTags } from "@tinytools/hono-tools/components";
 import type { JSX } from "hono/jsx/jsx-runtime";
 import { clientFiles } from "./client/dist/manifest.ts";
 
@@ -71,7 +74,7 @@ type ExtractStyles<T> = T extends ClientTools<any, infer S, any> ? S : object;
  * }
  *
  * // Or import for manual typing
- * import type { InferTools } from "@tiny-tools/hono";
+ * import type { InferTools } from "@tinytools/hono-tools";
  * type MyTools = InferTools<typeof myTools>;
  * ```
  */
@@ -115,7 +118,7 @@ interface RawToolsType<TFunctions, TStyles> {
    * Uses `this` to capture the actual object type (including any intersections),
    * then extracts __functions/__styles from it.
    */
-  extend<TLocalTools extends [AnyClientTools, ...AnyClientTools[]]>(
+  extendWithImports<TLocalTools extends [AnyClientTools, ...AnyClientTools[]]>(
     ...localTools: TLocalTools
   ): Promise<
     MergedToolsAccess<
@@ -147,7 +150,7 @@ type MergedToolsAccess<
   readonly styled: ActivateScopedStyles<
     TAccumulatedStyles & UnionToIntersection<ExtractStyles<TLocalTools[number]>>
   >;
-  extend<TNextTools extends [AnyClientTools, ...AnyClientTools[]]>(
+  extendWithImports<TNextTools extends [AnyClientTools, ...AnyClientTools[]]>(
     ...localTools: TNextTools
   ): Promise<
     MergedToolsAccess<
@@ -188,7 +191,7 @@ type CombinedTools<T extends AnyClientTools[]> = RawToolsType<
 
 /**
  * Base type for tools when no type parameter is provided to getTools().
- * Provides the extend() method for adding local tools.
+ * Provides the extendWithImports() method for adding local tools.
  * Uses `this` type parameter to preserve accumulated types from middleware.
  */
 export type BaseTools = {
@@ -201,7 +204,10 @@ export type BaseTools = {
    * Returns a typed tools object that merges accumulated types with local tools.
    * Uses `this` to properly infer accumulated types from middleware.
    */
-  extend<TSelf, TLocalTools extends [AnyClientTools, ...AnyClientTools[]]>(
+  extendWithImports<
+    TSelf,
+    TLocalTools extends [AnyClientTools, ...AnyClientTools[]],
+  >(
     this: TSelf,
     ...localTools: TLocalTools
   ): Promise<
@@ -237,16 +243,16 @@ export type TinyToolsVariables<V = object> = V & { tools: BaseTools };
  *
  * @example Without type parameter - local tools only
  * ```tsx
- * // Returns BaseTools - extend() returns only local tool types
- * const { fn } = getTools().extend(localTools);
+ * // Returns BaseTools - extendWithImports() returns only local tool types
+ * const { fn } = getTools().extendWithImports(localTools);
  * ```
  *
  * @example With ancestor tools
  * ```tsx
  * import type { globalTools } from "./main.tsx";
  *
- * // Returns typed tools with ancestors, extend() merges local + ancestors
- * const { fn } = getTools<[typeof globalTools]>().extend(localTools);
+ * // Returns typed tools with ancestors, extendWithImports() merges local + ancestors
+ * const { fn } = getTools<[typeof globalTools]>().extendWithImports(localTools);
  * ```
  *
  * @example With multiple ancestor tools
@@ -255,7 +261,7 @@ export type TinyToolsVariables<V = object> = V & { tools: BaseTools };
  * import type { parentTools } from "./parent.tsx";
  *
  * // Combine multiple ancestor tools
- * const { fn } = getTools<[typeof parentTools, typeof globalTools]>().extend(localTools);
+ * const { fn } = getTools<[typeof parentTools, typeof globalTools]>().extendWithImports(localTools);
  * ```
  */
 export function getTools<
@@ -269,11 +275,11 @@ export function getTools<
 }
 
 // ============================================================================
-// extendTools - Typed middleware for extending tools in child routes
+// sharedImports middleware implementation
 // ============================================================================
 
 /**
- * Create a typed middleware that extends tools with local tools.
+ * Create a typed middleware that extends tools with one or more local tools.
  * The local tools type is automatically inferred and merged by Hono's `.use()`.
  *
  * @example Root route (no ancestors):
@@ -285,10 +291,20 @@ export function getTools<
  * });
  *
  * export const route = new Hono()
- *   .use(extendTools(localTools))
+ *   .use(tiny.middleware.sharedImports(localTools))
  *   .get("/", (c) => {
  *     const { fn } = c.var.tools;  // Fully typed!
  *     return c.render(<div onClick={fn.handleClick}>Click</div>);
+ *   });
+ * ```
+ *
+ * @example Root route with multiple tool groups:
+ * ```ts
+ * export const route = new Hono()
+ *   .use(tiny.middleware.sharedImports(localStyles, localHandlers))
+ *   .get("/", (c) => {
+ *     c.var.tools.fn.handleClick;
+ *     c.var.tools.styled.panel;
  *   });
  * ```
  *
@@ -303,39 +319,51 @@ export function getTools<
  *   },
  * });
  *
- * // Only specify ancestors - localTools type is inferred from extendTools!
+ * // Only specify ancestors - localTools type is inferred from tiny.middleware.sharedImports!
  * export const route = new Hono<withAncestors<[typeof parentTools, typeof globalTools]>>()
- *   .use(extendTools(localTools))
+ *   .use(tiny.middleware.sharedImports(localTools))
  *   .get("/", (c) => {
- *     c.var.tools.fn.localHandler;   // Inferred from extendTools
+ *     c.var.tools.fn.localHandler;   // Inferred from tiny.middleware.sharedImports
  *     c.var.tools.fn.parentHandler;  // From ancestors
  *     c.var.tools.fn.globalHandler;  // From ancestors
  *   });
  * @example Without tools (just declares BaseTools for type inference):
  * ```tsx
  * export const route = new Hono()
- *   .use(extendTools())  // Declares tools: BaseTools for downstream handlers
+ *   .use(tiny.middleware.sharedImports())  // Declares tools: BaseTools for downstream handlers
  *   .get("/", (c) => {
- *     const { fn } = c.var.tools.extend(localTools);
+ *     const { fn } = c.var.tools.extendWithImports(localTools);
  *   });
  * ```
  */
-export function extendTools(): MiddlewareHandler<
+function createSharedImportsMiddleware(): MiddlewareHandler<
   { Variables: { tools: BaseTools } }
 >;
-export function extendTools<TTools extends AnyClientTools>(
-  tools: TTools,
-): MiddlewareHandler<{ Variables: { tools: InferRawTools<TTools> } }>;
+function createSharedImportsMiddleware<
+  const TTools extends [AnyClientTools, ...AnyClientTools[]],
+>(
+  ...tools: TTools
+): MiddlewareHandler<{ Variables: { tools: CombinedTools<TTools> } }>;
 // deno-lint-ignore no-explicit-any
-export function extendTools(tools?: AnyClientTools): MiddlewareHandler<any> {
+function createSharedImportsMiddleware(
+  ...tools: AnyClientTools[]
+): MiddlewareHandler<any> {
   return async (c, next) => {
-    if (tools) {
+    if (tools.length > 0) {
+      const toolsToExtend = tools as [AnyClientTools, ...AnyClientTools[]];
       // Ensure deferred build runs for tools accessed via c.var.tools (without engage())
-      // deno-lint-ignore no-explicit-any
-      await (tools as any).ensureBuilt();
+      await Promise.all(
+        toolsToExtend.map(
+          // deno-lint-ignore no-explicit-any
+          (tool) => (tool as any).ensureBuilt(),
+        ),
+      );
       const currentTools = c.var.tools as BaseTools;
       // deno-lint-ignore no-explicit-any
-      c.set("tools", await currentTools.extend(tools) as any);
+      c.set(
+        "tools",
+        await currentTools.extendWithImports(...toolsToExtend) as any,
+      );
     }
     await next();
   };
@@ -356,9 +384,9 @@ export function extendTools(tools?: AnyClientTools): MiddlewareHandler<any> {
  * });
  *
  * const app = new Hono()
- *   .use(...tiny.middleware.clientTools())
- *   .use(extendTools(tools))
- *   .use(addGlobalStyles(...tools.globalStyles));
+ *   .use(...tiny.middleware.core())
+ *   .use(tiny.middleware.sharedImports(tools))
+ *   .use(tiny.middleware.globalStyles(...tools.globalStyles));
  * ```
  */
 export function addGlobalStyles(
@@ -463,7 +491,7 @@ export type RouteLayoutProps = {
  * @example With inline JSX function
  * ```tsx
  * export const route = new Hono()
- *   .use(extendTools())
+ *   .use(tiny.middleware.sharedImports())
  *   .use(addRouteLayout(({ children }, c) => (
  *     <TwoColumnSplit contentPanelChildren={children}>
  *       <nav>Sidebar</nav>
@@ -513,13 +541,13 @@ export function addRouteLayout<
 
 /**
  * Type helper for Hono generic to declare ancestor tools.
- * Local tools are inferred from extendTools() - only ancestors need to be declared.
+ * Local tools are inferred from tiny.middleware.sharedImports() - only ancestors need to be declared.
  *
  * @example
  * ```tsx
- * // Ancestors only - local type comes from extendTools(localTools)
+ * // Ancestors only - local type comes from tiny.middleware.sharedImports(localTools)
  * new Hono<withAncestors<[typeof parentTools, typeof globalTools]>>()
- *   .use(extendTools(localTools))
+ *   .use(tiny.middleware.sharedImports(localTools))
  * ```
  */
 export type withAncestors<TAncestors extends AnyClientTools[]> = {
@@ -549,11 +577,11 @@ declare module "hono" {
 interface ToolsProxy {
   fn: unknown;
   styled: unknown;
-  extend(...localTools: AnyClientTools[]): Promise<ToolsProxy>;
+  extendWithImports(...localTools: AnyClientTools[]): Promise<ToolsProxy>;
 }
 
 /**
- * Options for `tiny.middleware.clientTools()` and `tiny.middleware.all()`.
+ * Options for `tiny.middleware.core()` and `tiny.middleware.all()`.
  */
 export type ClientToolsOptions = {
   /**
@@ -651,7 +679,7 @@ function createToolsMiddleware(): MiddlewareHandler {
       get styled() {
         return stylesProxy;
       },
-      async extend(...localTools: AnyClientTools[]) {
+      async extendWithImports(...localTools: AnyClientTools[]) {
         // Ensure deferred build runs for tools extended at request time
         await Promise.all(
           // deno-lint-ignore no-explicit-any
@@ -681,7 +709,7 @@ function createToolsMiddleware(): MiddlewareHandler {
       },
     });
 
-    // Create root tools proxy - starts empty, extended via extend()
+    // Create root tools proxy - starts empty, extended via extendWithImports()
     const emptyTarget: ToolResolutionTarget = {
       _handlerFilenames: new Map<string, string>(),
       _styleFilenames: new Map<string, string>(),
@@ -748,11 +776,11 @@ function createFeatureMiddleware(featureName: string): MiddlewareHandler {
 }
 
 /**
- * Create the core clientTools middleware array.
+ * Create the core middleware array.
  * Sets up static file serving, context storage, tools tracking, and JSX rendering.
  * @internal
  */
-function createClientToolsMiddleware(
+function createCoreMiddleware(
   options: ClientToolsOptions = {},
 ): MiddlewareHandler[] {
   if (options.generatedFilenameHashLength !== undefined) {
@@ -844,10 +872,10 @@ function createClientToolsMiddleware(
  * @example Granular opt-in
  * ```ts
  * import { Hono } from "hono";
- * import { tiny, ClientTools, css, extendTools } from "@tiny-tools/hono";
+ * import { tiny, ClientTools, css } from "@tinytools/hono-tools";
  *
  * const app = new Hono()
- *   .use(...tiny.middleware.clientTools({ generatedStyleHashLength: 4 }))
+ *   .use(...tiny.middleware.core({ generatedStyleHashLength: 4 }))
  *   .use(tiny.middleware.navApiTools())
  *   .use(tiny.middleware.sseTools())
  *   .use(tiny.middleware.layout(MyLayout))
@@ -863,11 +891,15 @@ function createClientToolsMiddleware(
  * @example Minimal (client tools only, no SPA features)
  * ```ts
  * const app = new Hono()
- *   .use(...tiny.middleware.clientTools())
+ *   .use(...tiny.middleware.core())
  *   .use(tiny.middleware.layout(MyLayout))
  * ```
  */
 export const tiny = {
+  Handlers,
+  Styles,
+  css,
+  imports: importTools,
   middleware: {
     /**
      * Core middleware that sets up static file serving, context storage,
@@ -881,11 +913,48 @@ export const tiny = {
      * @example
      * ```ts
      * const app = new Hono()
-     *   .use(...tiny.middleware.clientTools({ generatedStyleHashLength: 4 }))
+     *   .use(...tiny.middleware.core({ generatedStyleHashLength: 4 }))
      * ```
      */
-    clientTools(options?: ClientToolsOptions): MiddlewareHandler[] {
-      return createClientToolsMiddleware(options);
+    core(options?: ClientToolsOptions): MiddlewareHandler[] {
+      return createCoreMiddleware(options);
+    },
+
+    /**
+     * Add one or more global style assets to every request so AssetTags always
+     * includes their CSS files.
+     *
+     * Use this with styles defined using the `globalStyles` option in ClientTools.
+     *
+     * @param styles - One or more global styles from `tools.globalStyles`
+     *
+     * @example
+     * ```ts
+     * const app = new Hono()
+     *   .use(...tiny.middleware.core())
+     *   .use(tiny.middleware.sharedImports(tools))
+     * ```
+     */
+    sharedImports: createSharedImportsMiddleware,
+
+    /**
+     * Add one or more global style assets to every request so AssetTags always
+     * includes their CSS files.
+     *
+     * Use this with styles defined using the `globalStyles` option in ClientTools.
+     *
+     * @param styles - One or more global styles from `tools.globalStyles`
+     *
+     * @example
+     * ```ts
+     * const app = new Hono()
+     *   .use(...tiny.middleware.core())
+     *   .use(tiny.middleware.sharedImports(tools))
+     *   .use(tiny.middleware.globalStyles(...tools.globalStyles))
+     * ```
+     */
+    globalStyles(...styles: { filename: string }[]): MiddlewareHandler {
+      return addGlobalStyles(...styles);
     },
 
     /**
@@ -899,7 +968,7 @@ export const tiny = {
      * @example
      * ```ts
      * const app = new Hono()
-     *   .use(...tiny.middleware.clientTools())
+     *   .use(...tiny.middleware.core())
      *   .use(tiny.middleware.navApiTools())
      * ```
      */
@@ -917,7 +986,7 @@ export const tiny = {
      * @example
      * ```ts
      * const app = new Hono()
-     *   .use(...tiny.middleware.clientTools())
+     *   .use(...tiny.middleware.core())
      *   .use(tiny.middleware.sseTools())
      * ```
      */
@@ -935,7 +1004,7 @@ export const tiny = {
      * @example
      * ```ts
      * const app = new Hono()
-     *   .use(...tiny.middleware.clientTools())
+     *   .use(...tiny.middleware.core())
      *   .use(tiny.middleware.localRoutes())
      * ```
      */
@@ -953,7 +1022,7 @@ export const tiny = {
      * @example
      * ```ts
      * const app = new Hono()
-     *   .use(...tiny.middleware.clientTools())
+     *   .use(...tiny.middleware.core())
      *   .use(tiny.middleware.webComponents())
      * ```
      */
@@ -980,14 +1049,14 @@ export const tiny = {
      * );
      *
      * const app = new Hono()
-     *   .use(...tiny.middleware.clientTools())
+     *   .use(...tiny.middleware.core())
      *   .use(tiny.middleware.layout(MyLayout))
      * ```
      *
      * @example With inline JSX function
      * ```tsx
      * const app = new Hono()
-     *   .use(...tiny.middleware.clientTools())
+     *   .use(...tiny.middleware.core())
      *   .use(tiny.middleware.layout(({ children }, c) => (
      *     <TwoColumnSplit contentPanelChildren={children}>
      *       <nav>Sidebar</nav>
@@ -1001,10 +1070,10 @@ export const tiny = {
      * Enable all features: navigation, SSE, local routes, and web components.
      *
      * Returns an array of middleware handlers (use spread operator).
-     * Equivalent to using clientTools() + navApiTools() + sseTools() +
+     * Equivalent to using core() + navApiTools() + sseTools() +
      * localRoutes() + webComponents() individually.
      *
-     * @param options - Optional configuration for hash lengths (passed to clientTools)
+     * @param options - Optional configuration for hash lengths (passed to core)
      *
      * @example
      * ```ts
@@ -1015,7 +1084,7 @@ export const tiny = {
      */
     all(options?: ClientToolsOptions): MiddlewareHandler[] {
       return [
-        ...createClientToolsMiddleware(options),
+        ...createCoreMiddleware(options),
         createFeatureMiddleware("navigation"),
         createFeatureMiddleware("sse"),
         createFeatureMiddleware("localRoutes"),

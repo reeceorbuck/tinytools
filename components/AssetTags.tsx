@@ -53,7 +53,7 @@ export const AssetTags: FC<AssetTagsProps> = ({
     accessedHandlerFilesArray = Array.from(explicitHandlerFiles ?? []);
     accessedStyleFilesArray = Array.from(explicitStyleFiles ?? []);
   } else {
-    // These are set internally by the tools middleware initialized by tiny.middleware.clientTools()
+    // These are set internally by the tools middleware initialized by tiny.middleware.core()
     const accessedStyleFiles = c?.var?.accessedStyleFiles as Set<string> ||
       new Set<string>();
     console.log(

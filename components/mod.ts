@@ -1,5 +1,5 @@
 /**
- * Optional Components module for @tiny-tools/hono
+ * Optional Components module for @tinytools/hono-tools
  *
  * Provides Suspense and Partial components for streaming and partial page updates.
  *

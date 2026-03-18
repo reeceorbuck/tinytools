@@ -1,5 +1,5 @@
 /**
- * Window Event Listener Web Component for @tiny-tools/hono
+ * Window Event Listener Web Component for @tinytools/hono-tools
  *
  * A web component that attaches event listeners to window/document/navigation objects.
  */

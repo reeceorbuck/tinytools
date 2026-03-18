@@ -1,5 +1,5 @@
 /**
- * Scoped Styles Registry module for @tiny-tools/hono
+ * Scoped Styles Registry module for @tinytools/hono-tools
  *
  * Provides shared registries for scoped CSS styles.
  * The actual implementation is in clientTools.ts.

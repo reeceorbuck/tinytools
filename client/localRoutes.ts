@@ -1,5 +1,5 @@
 /**
- * Local Routes client script for @tiny-tools/hono
+ * Local Routes client script for @tinytools/hono-tools
  *
  * Processes local suspense templates using URL pattern matching.
  */

@@ -1,5 +1,5 @@
 /**
- * Lifecycle Element Web Component for @tiny-tools/hono
+ * Lifecycle Element Web Component for @tinytools/hono-tools
  *
  * A web component that calls client functions when mounted or unmounted from the DOM.
  */

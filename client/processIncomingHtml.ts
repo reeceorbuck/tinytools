@@ -1,5 +1,5 @@
 /**
- * Process Incoming HTML client script for @tiny-tools/hono
+ * Process Incoming HTML client script for @tinytools/hono-tools
  *
  * Processes incoming HTML fragments and applies partial updates to the DOM.
  */

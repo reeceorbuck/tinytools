@@ -1,5 +1,5 @@
 /**
- * Navigation client script for @tiny-tools/hono
+ * Navigation client script for @tinytools/hono-tools
  *
  * Intercepts browser navigation events and performs partial page updates.
  */

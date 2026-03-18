@@ -1,4 +1,4 @@
-# @tiny-tools/hono
+# @tinytools/hono-tools
 
 TinyTools is not a replacement for Hono.
 
@@ -35,12 +35,12 @@ That makes the mental model straightforward:
 // deno.json
 {
   "imports": {
-    "@tiny-tools/hono": "jsr:@tiny-tools/hono@^0.1.0",
+    "@tinytools/hono-tools": "jsr:@tinytools/hono-tools@^0.1.0",
     "hono": "jsr:@hono/hono@^4.12.7"
   },
   "compilerOptions": {
     "jsx": "precompile",
-    "jsxImportSource": "@tiny-tools/hono"
+    "jsxImportSource": "@tinytools/hono-tools"
   }
 }
 ```
@@ -52,7 +52,7 @@ middleware and defining a `ClientTools` instance at module scope.
 
 ```tsx
 import { Hono } from "hono";
-import { ClientTools, css, tiny } from "@tiny-tools/hono";
+import { ClientTools, css, tiny } from "@tinytools/hono-tools";
 
 const pageTools = new ClientTools(import.meta.url, {
   functions: {
@@ -75,7 +75,7 @@ const pageTools = new ClientTools(import.meta.url, {
 });
 
 const app = new Hono()
-  .use(...tiny.middleware.clientTools());
+  .use(...tiny.middleware.core());
 
 app.get("/", async (c) => {
   const { fn, styled } = await pageTools.engage();
@@ -106,7 +106,7 @@ once with middleware and read from `c.var.tools`:
 
 ```tsx
 import { Hono } from "hono";
-import { ClientTools, extendTools, tiny } from "@tiny-tools/hono";
+import { ClientTools, tiny } from "@tinytools/hono-tools";
 
 const appTools = new ClientTools(import.meta.url, {
   functions: {
@@ -118,8 +118,8 @@ const appTools = new ClientTools(import.meta.url, {
 });
 
 const app = new Hono()
-  .use(...tiny.middleware.clientTools())
-  .use(extendTools(appTools));
+  .use(...tiny.middleware.core())
+  .use(tiny.middleware.sharedImports(appTools));
 
 app.get("/", (c) => {
   const { fn } = c.var.tools;
@@ -159,7 +159,7 @@ evolving.
 
 ```ts
 const app = new Hono()
-  .use(...tiny.middleware.clientTools())
+  .use(...tiny.middleware.core())
   .use(tiny.middleware.navApiTools());
 ```
 
@@ -191,7 +191,7 @@ If you want an explicit build step for deployment or pre-generation, use the
 build module:
 
 ```ts
-import { buildScriptFiles } from "@tiny-tools/hono/build";
+import { buildScriptFiles } from "@tinytools/hono-tools/build";
 
 await buildScriptFiles();
 ```

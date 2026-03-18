@@ -1,5 +1,5 @@
 /**
- * Client Functions Registry module for @tiny-tools/hono
+ * Client Functions Registry module for @tinytools/hono-tools
  *
  * Provides shared registries for client-side event handlers.
  * The actual implementation is in clientTools.ts.

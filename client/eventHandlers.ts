@@ -1,5 +1,5 @@
 /**
- * Event Handlers client script for @tiny-tools/hono
+ * Event Handlers client script for @tinytools/hono-tools
  *
  * Provides a global handlers proxy that lazily loads handler modules
  * when they are first called.

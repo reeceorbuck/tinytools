@@ -1,5 +1,5 @@
 /**
- * Partial Component for @tiny-tools/hono
+ * Partial Component for @tinytools/hono-tools
  *
  * Provides a component for declaring partial page update regions.
  * Works with the client-side navigation system to update specific parts of the page.
@@ -64,7 +64,7 @@ export type PartialProps = (NonChildPartial | ChildPartial) & {
  *
  * @example
  * ```tsx
- * import { Partial } from "@tiny-tools/hono/components";
+ * import { Partial } from "@tinytools/hono-tools/components";
  *
  * // Simple replacement
  * <Partial id="user-profile" mode="replace">

@@ -1,4 +1,4 @@
-# @tiny-tools/hono
+# @tinytools/hono-tools
 
 A lightweight enhancement layer for [Hono](https://hono.dev/) web applications
 running on Deno. Provides type-safe client functions, scoped styles, and
@@ -27,14 +27,14 @@ enhanced JSX event handlers.
 // deno.json
 {
   "imports": {
-    "@tiny-tools/hono": "jsr:@tiny-tools/hono@^0.1.0",
-    "@tiny-tools/hono/jsx-runtime": "jsr:@tiny-tools/hono@^0.1.0/jsx-runtime",
-    "@tiny-tools/hono/build": "jsr:@tiny-tools/hono@^0.1.0/build",
-    "@tiny-tools/hono/components": "jsr:@tiny-tools/hono@^0.1.0/components"
+    "@tinytools/hono-tools": "jsr:@tinytools/hono-tools@^0.1.0",
+    "@tinytools/hono-tools/jsx-runtime": "jsr:@tinytools/hono-tools@^0.1.0/jsx-runtime",
+    "@tinytools/hono-tools/build": "jsr:@tinytools/hono-tools@^0.1.0/build",
+    "@tinytools/hono-tools/components": "jsr:@tinytools/hono-tools@^0.1.0/components"
   },
   "compilerOptions": {
     "jsx": "precompile",
-    "jsxImportSource": "@tiny-tools/hono"
+    "jsxImportSource": "@tinytools/hono-tools"
   }
 }
 ```
@@ -43,14 +43,8 @@ enhanced JSX event handlers.
 
 ```tsx
 import { Hono } from "hono";
-import {
-  ClientTools,
-  css,
-  extendTools,
-  setCustomScope,
-  tiny,
-} from "@tiny-tools/hono";
-import { buildScriptFiles } from "@tiny-tools/hono/build";
+import { ClientTools, css, setCustomScope, tiny } from "@tinytools/hono-tools";
+import { buildScriptFiles } from "@tinytools/hono-tools/build";
 
 // Define client-side event handlers and styles together
 const buttonStyle = css`
@@ -108,7 +102,7 @@ const tools = new ClientTools(import.meta.url, {
 // Create Hono app with tools using middleware
 const app = new Hono()
   .use(...tiny.middleware.all())
-  .use(extendTools(tools));
+  .use(tiny.middleware.sharedImports(tools));
 
 // Use in routes
 app.get("/", (c) => {
@@ -144,7 +138,7 @@ export default app;
 
 ## API Reference
 
-### Core Module (`@tiny-tools/hono`)
+### Core Module (`@tinytools/hono-tools`)
 
 #### `tiny.middleware`
 
@@ -152,8 +146,8 @@ The `tiny` singleton provides composable middleware for opt-in feature
 selection. Each feature is a separate middleware that can be applied
 independently.
 
-**`tiny.middleware.clientTools(options?)`** - Core middleware array (context
-storage, static file serving, JSX renderer, tools init). Spread into `.use()`.
+**`tiny.middleware.core(options?)`** - Core middleware array (context storage,
+static file serving, JSX renderer, tools init). Spread into `.use()`.
 
 **`tiny.middleware.navApiTools()`** - Enables client-side navigation (Navigation
 API + event handlers).
@@ -165,13 +159,16 @@ API + event handlers).
 **`tiny.middleware.webComponents()`** - Enables lifecycle and window-event web
 components.
 
+**`tiny.middleware.globalStyles(...styles)`** - Ensures `ClientTools`
+`globalStyles` assets are included on every request.
+
 **`tiny.middleware.layout(renderFn)`** - Adds a layout wrapper for sub-routes.
 
 **`tiny.middleware.all(options?)`** - Enables all features at once.
 
 ```ts
 import { Hono } from "hono";
-import { ClientTools, extendTools, tiny } from "@tiny-tools/hono";
+import { ClientTools, tiny } from "@tinytools/hono-tools";
 
 const tools = new ClientTools(import.meta.url, {
   functions: {
@@ -183,30 +180,31 @@ const tools = new ClientTools(import.meta.url, {
 
 // Opt-in: only core tools (no client scripts)
 const app = new Hono()
-  .use(...tiny.middleware.clientTools())
-  .use(extendTools(tools));
+  .use(...tiny.middleware.core())
+  .use(tiny.middleware.sharedImports(tools));
 
 // Opt-in: core + navigation + SSE
 const app2 = new Hono()
-  .use(...tiny.middleware.clientTools())
+  .use(...tiny.middleware.core())
   .use(tiny.middleware.navApiTools())
   .use(tiny.middleware.sseTools())
-  .use(extendTools(tools));
+  .use(tiny.middleware.sharedImports(tools));
 
 // Everything enabled
 const app3 = new Hono()
   .use(...tiny.middleware.all({ generatedStyleHashLength: 4 }))
-  .use(extendTools(tools));
+  .use(tiny.middleware.sharedImports(tools));
 ```
 
-#### `extendTools(tools)`
+#### `tiny.middleware.sharedImports(...tools)`
 
 Creates middleware that extends the current tools context with additional
-ClientTools. Use this to add route-specific or app-level tools.
+ClientTools. Pass one or more tool groups to add route-specific or app-level
+handlers and styles in a single middleware call.
 
 ```ts
 import { Hono } from "hono";
-import { ClientTools, extendTools, tiny } from "@tiny-tools/hono";
+import { ClientTools, tiny } from "@tinytools/hono-tools";
 
 const globalTools = new ClientTools(import.meta.url, {
   functions: {
@@ -217,8 +215,17 @@ const globalTools = new ClientTools(import.meta.url, {
 });
 
 const app = new Hono()
-  .use(...tiny.middleware.clientTools())
-  .use(extendTools(globalTools));
+  .use(...tiny.middleware.core())
+  .use(tiny.middleware.sharedImports(globalTools));
+
+const routeTools = new Hono()
+  .use(...tiny.middleware.core())
+  .use(tiny.middleware.sharedImports(globalTools, routeStyles));
+
+const themedApp = new Hono()
+  .use(...tiny.middleware.core())
+  .use(tiny.middleware.sharedImports(globalTools))
+  .use(tiny.middleware.globalStyles(...globalTools.globalStyles));
 ```
 
 #### `withAncestors<T>`
@@ -228,7 +235,7 @@ safety when accessing tools from parent routes.
 
 ```ts
 import { Hono } from "hono";
-import { ClientTools, extendTools, withAncestors } from "@tiny-tools/hono";
+import { ClientTools, tiny, withAncestors } from "@tinytools/hono-tools";
 import type { globalTools } from "./main.tsx";
 import type { parentTools } from "./parent.tsx";
 
@@ -244,7 +251,7 @@ const localTools = new ClientTools(import.meta.url, {
 export const childRoute = new Hono<
   withAncestors<[typeof parentTools, typeof globalTools]>
 >()
-  .use(extendTools(localTools))
+  .use(tiny.middleware.sharedImports(localTools))
   .get("/", (c) => {
     const { fn } = c.var.tools;
     // Has access to: localHandler, parentTools handlers, globalTools handlers
@@ -262,7 +269,7 @@ styles.
 > and included in the build process.
 
 ```ts
-import { ClientTools, css } from "@tiny-tools/hono";
+import { ClientTools, css } from "@tinytools/hono-tools";
 
 const myStyle = css`
   color: blue;
@@ -315,7 +322,7 @@ There are two different patterns to follow:
 ##### Across separate `ClientTools` instances (including different files)
 
 ```ts
-import { ClientTools } from "@tiny-tools/hono";
+import { ClientTools } from "@tinytools/hono-tools";
 
 const externalTools = new ClientTools(import.meta.url, {
   functions: {
@@ -343,7 +350,7 @@ export const localTools = new ClientTools(import.meta.url, {
 ##### Within the same `ClientTools` instance
 
 ```ts
-import { ClientTools } from "@tiny-tools/hono";
+import { ClientTools } from "@tinytools/hono-tools";
 
 // Declare at module scope so other handlers can reference it safely. Must be defined in the same file.
 const sharedHandler = function (this: HTMLElement, e: MouseEvent) {
@@ -364,19 +371,19 @@ Use `fn.*` only when attaching handlers in JSX/render code:
 
 ```tsx
 app.get("/", async (c) => {
-  const { fn } = await c.var.tools.extend(localTools);
+  const { fn } = await c.var.tools.extendWithImports(localTools);
   return c.render(<button onClick={fn.handleClick}>Run</button>);
 });
 ```
 
-#### `await c.var.tools.extend(localTools)`
+#### `await c.var.tools.extendWithImports(localTools)`
 
 Extend tools within a route handler for single-route tools that don't need
 middleware. Returns a tools object with both parent and local tools.
 
 > **Note:** The `ClientTools` instance must still be declared at module level,
-> outside the route handler. Only the `extend()` call happens inside the
-> handler.
+> outside the route handler. Only the `extendWithImports()` call happens inside
+> the handler.
 
 ```ts
 // ✅ Declare at module level - registered once at startup
@@ -389,8 +396,8 @@ const singleRouteTools = new ClientTools(import.meta.url, {
 });
 
 app.get("/special", async (c) => {
-  // Use extend inside the handler to access the tools
-  const { fn, styled } = await c.var.tools.extend(
+  // Use extendWithImports inside the handler to access the tools
+  const { fn, styled } = await c.var.tools.extendWithImports(
     singleRouteTools,
   );
 
@@ -409,7 +416,7 @@ Hono's context storage to retrieve the current request's tools.
 > `getTools()` is for accessing tools inside components, not for declaring them.
 
 ```tsx
-import { ClientTools, css, getTools } from "@tiny-tools/hono";
+import { ClientTools, css, getTools } from "@tinytools/hono-tools";
 
 const buttonStyle = css`
   background: blue;
@@ -428,7 +435,7 @@ const componentTools = new ClientTools(import.meta.url, {
 // Component that uses tools
 function MyButton({ label }: { label: string }) {
   // Access tools from context - works in async components
-  const { fn, styled } = getTools().extend(
+  const { fn, styled } = getTools().extendWithImports(
     componentTools,
   );
 
@@ -460,7 +467,7 @@ function MyComponent() {
 }
 ```
 
-### Build Module (`@tiny-tools/hono/build`)
+### Build Module (`@tinytools/hono-tools/build`)
 
 #### `buildScriptFiles(options?)`
 
@@ -468,7 +475,7 @@ Builds all registered client functions and scoped styles to the public
 directory.
 
 ```ts
-import { buildScriptFiles } from "@tiny-tools/hono/build";
+import { buildScriptFiles } from "@tinytools/hono-tools/build";
 
 await buildScriptFiles({
   clientDir: "./client", // Source directory for client scripts
@@ -478,14 +485,14 @@ await buildScriptFiles({
 });
 ```
 
-### Components Module (`@tiny-tools/hono/components`)
+### Components Module (`@tinytools/hono-tools/components`)
 
 #### `Suspense`
 
 Streaming content with fallback support.
 
 ```tsx
-import { Suspense } from "@tiny-tools/hono/components";
+import { Suspense } from "@tinytools/hono-tools/components";
 
 <Suspense fallback={<Loading />}>
   <AsyncContent />
@@ -497,7 +504,7 @@ import { Suspense } from "@tiny-tools/hono/components";
 Declarative partial page updates.
 
 ```tsx
-import { Partial } from "@tiny-tools/hono/components";
+import { Partial } from "@tinytools/hono-tools/components";
 
 // Replace content
 <Partial id="user-profile" mode="replace">
@@ -513,7 +520,7 @@ import { Partial } from "@tiny-tools/hono/components";
 <Partial id="submit-btn" mode="attributes" disabled="true" />
 ```
 
-### Client Module (`@tiny-tools/hono/client`)
+### Client Module (`@tinytools/hono-tools/client`)
 
 Client-side scripts for partial navigation. Copy these to your public directory
 or use the build module to transpile them.

@@ -1,5 +1,5 @@
 /**
- * Fetch and Update client script for @tiny-tools/hono
+ * Fetch and Update client script for @tinytools/hono-tools
  *
  * Performs fetch requests and processes incoming HTML responses.
  */

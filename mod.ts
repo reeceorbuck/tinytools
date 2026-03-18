@@ -1,6 +1,6 @@
-performance.mark("import:@tiny-tools/hono:start");
+performance.mark("import:@tinytools/hono-tools:start");
 /**
- * @module @tiny-tools/hono
+ * @module @tinytools/hono-tools
  *
  * A lightweight enhancement layer for Hono web applications running on Deno.
  * Provides type-safe client functions, scoped styles, and enhanced JSX event handlers.
@@ -8,7 +8,7 @@ performance.mark("import:@tiny-tools/hono:start");
  * @example Basic Usage with ClientTools
  * ```ts
  * import { Hono } from "hono";
- * import { tiny, ClientTools, css, extendTools } from "@tiny-tools/hono";
+ * import { tiny, ClientTools, css } from "@tinytools/hono-tools";
  *
  * const buttonStyle = css`
  *   background: blue;
@@ -26,7 +26,7 @@ performance.mark("import:@tiny-tools/hono:start");
  *
  * const app = new Hono()
  *   .use(...tiny.middleware.all())
- *   .use(extendTools(tools));
+ *   .use(tiny.middleware.sharedImports(tools));
  *
  * app.get("/", (c) => {
  *   const { fn, styled } = c.var.tools;
@@ -45,7 +45,6 @@ export {
   addRouteLayout,
   type BaseTools,
   type ClientToolsOptions,
-  extendTools,
   getTools,
   type InferTools,
   type LocalRoutesOptions,
@@ -60,7 +59,15 @@ export {
 } from "./honoFactory.tsx";
 
 // ClientTools (unified) exports
-export { type ActivatedClientTools, ClientTools } from "./clientTools.ts";
+export {
+  type ActivatedClientTools,
+  ClientTools,
+  Handlers,
+  type HandlersOptions,
+  imports,
+  Styles,
+  type StylesOptions,
+} from "./clientTools.ts";
 
 // Registry exports (used by build process)
 export { handlers } from "./clientFunctions.ts";

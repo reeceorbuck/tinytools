@@ -12,7 +12,7 @@
 
 import { assert, assertEquals, assertExists, assertThrows } from "@std/assert";
 import { Hono } from "hono";
-import { extendTools, tiny } from "../honoFactory.tsx";
+import { tiny } from "../honoFactory.tsx";
 import {
   ClientTools,
   GENERATED_HANDLER_HASH_LENGTH,
@@ -74,30 +74,30 @@ function assertValidHandlerString(value: unknown, name: string) {
 // deno-lint-ignore no-explicit-any
 function createApp(tools: ClientTools<any, any>) {
   return new Hono()
-    .use(...tiny.middleware.clientTools())
-    .use(extendTools(tools));
+    .use(...tiny.middleware.core())
+    .use(tiny.middleware.sharedImports(tools));
 }
 
-Deno.test("Runtime - tiny.middleware.clientTools can override hash lengths together", () => {
+Deno.test("Runtime - tiny.middleware.core can override hash lengths together", () => {
   try {
-    tiny.middleware.clientTools({ generatedFilenameHashLength: 3 });
+    tiny.middleware.core({ generatedFilenameHashLength: 3 });
     assertEquals(generateHandlerHash("tiny-tools-hash").length, 3);
     assertEquals(generateStyleHash("tiny-tools-hash").length, 3);
 
-    tiny.middleware.clientTools({ generatedFilenameHashLength: 99 });
+    tiny.middleware.core({ generatedFilenameHashLength: 99 });
     assertEquals(generateHandlerHash("tiny-tools-hash").length, 8);
     assertEquals(generateStyleHash("tiny-tools-hash").length, 8);
   } finally {
-    tiny.middleware.clientTools({
+    tiny.middleware.core({
       generatedHandlerHashLength: GENERATED_HANDLER_HASH_LENGTH,
       generatedStyleHashLength: GENERATED_STYLE_HASH_LENGTH,
     });
   }
 });
 
-Deno.test("Runtime - tiny.middleware.clientTools supports separate handler/style hash lengths", () => {
+Deno.test("Runtime - tiny.middleware.core supports separate handler/style hash lengths", () => {
   try {
-    tiny.middleware.clientTools({
+    tiny.middleware.core({
       generatedHandlerHashLength: 6,
       generatedStyleHashLength: 4,
     });
@@ -127,7 +127,7 @@ Deno.test("Runtime - tiny.middleware.clientTools supports separate handler/style
     assertEquals(handlerHash.length, 6);
     assertEquals(styleHash.length, 4);
   } finally {
-    tiny.middleware.clientTools({
+    tiny.middleware.core({
       generatedHandlerHashLength: GENERATED_HANDLER_HASH_LENGTH,
       generatedStyleHashLength: GENERATED_STYLE_HASH_LENGTH,
     });
@@ -146,7 +146,7 @@ Deno.test("Runtime - startup cache hydration avoids reset for same style hash le
     'import { ClientTools } from "../package/clientTools.ts";',
     'import { css } from "../package/scopedStyles.ts";',
     "",
-    "tiny.middleware.clientTools({ generatedStyleHashLength: 4 });",
+    "tiny.middleware.core({ generatedStyleHashLength: 4 });",
     "",
     "new ClientTools(import.meta.url, {",
     "  functions: {",
@@ -271,7 +271,7 @@ Deno.test("Runtime - multiple handlers all produce valid strings", () => {
 });
 
 // ============================================================================
-// Test Suite: ClientTools.extend() - Runtime behavior
+// Test Suite: extendWithImports() - Runtime behavior
 // ============================================================================
 
 Deno.test("Runtime - extend() parent handlers return valid handler strings", () => {
@@ -294,7 +294,7 @@ Deno.test("Runtime - extend() parent handlers return valid handler strings", () 
   const app = createApp(parentTools);
 
   app.get("/test", async (c) => {
-    const { fn } = await c.var.tools.extend(componentTools);
+    const { fn } = await c.var.tools.extendWithImports(componentTools);
 
     // Both parent and local handlers should be valid handler strings
     assertValidHandlerString(fn.parentHandler, "parentHandler");
@@ -306,7 +306,7 @@ Deno.test("Runtime - extend() parent handlers return valid handler strings", () 
   assertExists(app);
 });
 
-Deno.test("Runtime - extend() multiple parent handlers all return valid strings", () => {
+Deno.test("Runtime - extendWithImports() multiple parent handlers all return valid strings", () => {
   const parentTools = new ClientTools(import.meta.url, {
     functions: {
       handlerA() {
@@ -332,7 +332,7 @@ Deno.test("Runtime - extend() multiple parent handlers all return valid strings"
   const app = createApp(parentTools);
 
   app.get("/test", async (c) => {
-    const { fn } = await c.var.tools.extend(componentTools);
+    const { fn } = await c.var.tools.extendWithImports(componentTools);
 
     assertValidHandlerString(fn.handlerA, "handlerA");
     assertValidHandlerString(fn.handlerB, "handlerB");
@@ -345,7 +345,7 @@ Deno.test("Runtime - extend() multiple parent handlers all return valid strings"
   assertExists(app);
 });
 
-Deno.test("Runtime - extend() nested calls preserve all handler strings", () => {
+Deno.test("Runtime - extendWithImports() nested calls preserve all handler strings", () => {
   const rootTools = new ClientTools(import.meta.url, {
     functions: {
       rootHandler() {
@@ -374,9 +374,9 @@ Deno.test("Runtime - extend() nested calls preserve all handler strings", () => 
 
   app.get("/test", async (c) => {
     // First extension
-    const extended1 = await c.var.tools.extend(middleTools);
+    const extended1 = await c.var.tools.extendWithImports(middleTools);
     // Second (nested) extension
-    const extended2 = await extended1.extend(leafTools);
+    const extended2 = await extended1.extendWithImports(leafTools);
 
     const { fn } = extended2;
 
@@ -411,7 +411,7 @@ Deno.test("Runtime - extend() with only local tools (no parent handlers)", () =>
   const app = createApp(parentTools);
 
   app.get("/test", async (c) => {
-    const { fn } = await c.var.tools.extend(componentTools);
+    const { fn } = await c.var.tools.extendWithImports(componentTools);
 
     assertValidHandlerString(fn.localHandler, "localHandler");
 
@@ -559,7 +559,7 @@ Deno.test("Runtime - import() then extend() preserves all handler strings", () =
   const app = createApp(parentTools);
 
   app.get("/test", async (c) => {
-    const { fn } = await c.var.tools.extend(componentTools);
+    const { fn } = await c.var.tools.extendWithImports(componentTools);
 
     // All three sources should produce valid handler strings
     assertValidHandlerString(
@@ -622,7 +622,7 @@ Deno.test("Runtime - extend() parent styles return style class names", () => {
   const app = createApp(parentTools);
 
   app.get("/test", async (c) => {
-    const { styled } = await c.var.tools.extend(componentTools);
+    const { styled } = await c.var.tools.extendWithImports(componentTools);
 
     assertEquals(typeof styled.parentStyle, "string");
     assertEquals(typeof styled.localStyle, "string");
@@ -770,7 +770,7 @@ Deno.test("Runtime - extend() handlers work in JSX attributes", () => {
   const app = createApp(parentTools);
 
   app.get("/test", async (c) => {
-    const { fn } = await c.var.tools.extend(componentTools);
+    const { fn } = await c.var.tools.extendWithImports(componentTools);
 
     // Create JSX elements using both parent and local handlers
     const element = (
@@ -887,7 +887,7 @@ Deno.test("Runtime - extend() with empty component tools", () => {
   const app = createApp(parentTools);
 
   app.get("/test", async (c) => {
-    const { fn } = await c.var.tools.extend(emptyTools);
+    const { fn } = await c.var.tools.extendWithImports(emptyTools);
 
     // Parent handler should still work
     assertValidHandlerString(fn.parentHandler, "parentHandler");
@@ -918,7 +918,7 @@ Deno.test("Runtime - extend() with same handler name in local overrides parent",
   const app = createApp(parentTools);
 
   app.get("/test", async (c) => {
-    const { fn } = await c.var.tools.extend(componentTools);
+    const { fn } = await c.var.tools.extendWithImports(componentTools);
 
     // Should get the local version (local overrides parent)
     assertValidHandlerString(fn.sharedName, "sharedName");
@@ -991,7 +991,7 @@ Deno.test("Runtime - extend() produces valid handler strings", () => {
   const app = createApp(parentTools);
 
   app.get("/test", async (c) => {
-    const { fn } = await c.var.tools.extend(singleRouteTools);
+    const { fn } = await c.var.tools.extendWithImports(singleRouteTools);
 
     assertValidHandlerString(fn.parentHandler, "parentHandler");
     assertValidHandlerString(fn.routeHandler, "routeHandler");

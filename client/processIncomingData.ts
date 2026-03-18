@@ -1,5 +1,5 @@
 /**
- * Process Incoming Data client script for @tiny-tools/hono
+ * Process Incoming Data client script for @tinytools/hono-tools
  *
  * Handles streaming HTML responses and processes update fragments.
  */

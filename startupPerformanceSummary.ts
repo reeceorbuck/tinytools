@@ -125,15 +125,15 @@ export function logStartupPerformanceSummary() {
   const middlewareMs = getDelta("import:hono:done", "import:middleware:done");
   const tinyToolsMs = getDelta(
     "import:middleware:done",
-    "import:@tiny-tools/hono:done",
+    "import:@tinytools/hono-tools:done",
   );
 
   // Time from startup:begin to main.tsx:start is ESM resolution of dependencies
   const esmResolutionMs = mainTsxStartOffset;
 
-  // Time from @tiny-tools/hono:done to importsComplete is app modules
+  // Time from @tinytools/hono-tools:done to importsComplete is app modules
   const appModulesMs = getDelta(
-    "import:@tiny-tools/hono:done",
+    "import:@tinytools/hono-tools:done",
     "startup:importsComplete",
   );
 
@@ -152,7 +152,7 @@ export function logStartupPerformanceSummary() {
     },
     { name: "hono", ms: honoMs },
     { name: "middleware (compress, canAccessRoute + auth)", ms: middlewareMs },
-    { name: "@tiny-tools/hono", ms: tinyToolsMs },
+    { name: "@tinytools/hono-tools", ms: tinyToolsMs },
     { name: "app modules", ms: appModulesMs },
   ];
 

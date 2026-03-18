@@ -1,6 +1,6 @@
-performance.mark("import:@tiny-tools/hono/build:start");
+performance.mark("import:@tinytools/hono-tools/build:start");
 /**
- * Build module for @tiny-tools/hono
+ * Build module for @tinytools/hono-tools
  *
  * Provides build functionality for client functions and scoped styles.
  * This module uses esbuild to transpile TypeScript handlers to JavaScript.
@@ -133,7 +133,7 @@ export interface BuildOptions {
  *
  * @example
  * ```ts
- * import { buildScriptFiles } from "@tiny-tools/hono/build";
+ * import { buildScriptFiles } from "@tinytools/hono-tools/build";
  *
  * // Build with default options
  * await buildScriptFiles();

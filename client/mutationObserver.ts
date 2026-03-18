@@ -1,5 +1,5 @@
 /**
- * Mutation Observer client script for @tiny-tools/hono
+ * Mutation Observer client script for @tinytools/hono-tools
  *
  * Provides mutation observer functionality for handling dynamic DOM updates.
  * Currently disabled by default - can be enabled for automatic handler cleanup.

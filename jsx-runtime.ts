@@ -1,5 +1,5 @@
 /**
- * JSX Runtime for @tiny-tools/hono
+ * JSX Runtime for @tinytools/hono-tools
  *
  * Extends Hono's JSX runtime with type-safe event handlers that require
  * client functions to be used. This prevents accidentally passing regular
@@ -29,8 +29,8 @@ import type { ClientTools } from "./clientTools.ts";
 declare const ClientFunctionBrand: unique symbol;
 
 /**
- * Brand symbol for "activated" client functions that have been registered via extendTools middleware.
- * Functions must be passed through extendTools() to become usable in JSX event handlers.
+ * Brand symbol for "activated" client functions that have been registered via shared tools middleware.
+ * Functions must be passed through tiny.middleware.sharedImports() to become usable in JSX event handlers.
  */
 declare const ActivatedClientFunctionBrand: unique symbol;
 
@@ -58,7 +58,7 @@ interface ERROR_ClientFunction_not_activated___Access_from_c_var_tools_clientFun
  * functions with a brand. This prevents accidentally passing regular functions
  * as event handlers in JSX, which would fail silently at runtime.
  *
- * **IMPORTANT**: Client functions are "inactive" until registered via extendTools() middleware.
+ * **IMPORTANT**: Client functions are "inactive" until registered via tiny.middleware.sharedImports() middleware.
  * In JSX, you must use the activated version from `c.var.tools.fn`,
  * NOT directly from the factory.
  *
@@ -78,7 +78,7 @@ interface ERROR_ClientFunction_not_activated___Access_from_c_var_tools_clientFun
  * });
  *
  * // Use with middleware
- * app.use(extendTools(tools));
+ * app.use(tiny.middleware.sharedImports(tools));
  *
  * app.get("/", (c) => {
  *   const { fn } = c.var.tools;
@@ -95,7 +95,7 @@ export type ClientFunction<
 };
 
 /**
- * An "activated" ClientFunction that has been registered via extendTools() middleware.
+ * An "activated" ClientFunction that has been registered via tiny.middleware.sharedImports() middleware.
  * Only activated functions can be used as JSX event handlers.
  *
  * If you see an error about this type, check:
@@ -122,7 +122,7 @@ export type BrandAsClientFunction<T extends (...args: any[]) => any> =
 
 /**
  * Helper type to "activate" a ClientFunction, making it usable in JSX handlers.
- * Used internally by extendTools when exposing fn via c.var.
+ * Used internally by shared tools middleware when exposing fn via c.var.
  * Also handles raw function types by treating them as activatable.
  */
 // deno-lint-ignore no-explicit-any
