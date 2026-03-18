@@ -5,6 +5,7 @@
  */
 
 import { processIncomingData } from "./processIncomingData.ts";
+import { beginRouteSnapshot } from "./routeCache.ts";
 
 export async function performFetchAndUpdate(
   destinationUrl: URL,
@@ -58,7 +59,13 @@ export async function performFetchAndUpdate(
     );
     return;
   }
-  processIncomingData(response);
+  if (!formData) {
+    beginRouteSnapshot(fromUrl.pathname);
+  }
+
+  processIncomingData(response, {
+    cacheCurrentPath: !formData ? fromUrl.pathname : undefined,
+  });
 }
 
 export default performFetchAndUpdate;

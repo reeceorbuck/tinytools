@@ -4,17 +4,45 @@
  * Processes incoming HTML fragments and applies partial updates to the DOM.
  */
 
+import {
+  buildCachedTemplateUpdateBatches,
+  LOCAL_TEMPLATE_SOURCE_ATTR,
+  snapshotRouteFromLiveDom,
+} from "./routeCache.ts";
+
+export interface ProcessIncomingHtmlOptions {
+  cacheCurrentPath?: string;
+  updateCachedTemplates?: boolean;
+}
+
 export function processIncomingHtml(
-  fragment: DocumentFragment,
-  scope: Element | Document = document,
+  fragment: DocumentFragment | Element,
+  scope: ParentNode = document,
+  options: ProcessIncomingHtmlOptions = {},
 ) {
   console.log("incoming fragment: ", fragment);
   const children = Array.from(fragment.children);
+  const cachedTemplateUpdates =
+    scope === document && options.updateCachedTemplates
+      ? buildCachedTemplateUpdateBatches(children)
+      : [];
+
+  if (scope === document && options.cacheCurrentPath) {
+    snapshotRouteFromLiveDom(options.cacheCurrentPath, children, scope);
+  }
+
   children.forEach((partial) => {
     const existing = partial.id ? scope.querySelector(`#${partial.id}`) : null;
     const name = partial.getAttribute("name");
     console.log("Processing partial with id: ", partial.id, " name: ", name);
     if (!existing) {
+      if (scope !== document) {
+        console.log(
+          `No scoped element with id ${partial.id}, skipping scoped update.`,
+        );
+        return;
+      }
+
       if (partial.id || partial.tagName === "PARTIAL") {
         console.log(
           `No existing element with id ${partial.id}, so appending to body?`,
@@ -61,6 +89,14 @@ export function processIncomingHtml(
           console.log(
             `Replacing child with id ${partial.id} and tag ${partial.tagName}, child length: ${partial.children.length}`,
           );
+          const templateSource = partial.getAttribute(
+            LOCAL_TEMPLATE_SOURCE_ATTR,
+          );
+          if (templateSource) {
+            existing.setAttribute(LOCAL_TEMPLATE_SOURCE_ATTR, templateSource);
+          } else {
+            existing.removeAttribute(LOCAL_TEMPLATE_SOURCE_ATTR);
+          }
           while (existing.firstChild) {
             existing.firstChild.remove();
           }
@@ -78,6 +114,7 @@ export function processIncomingHtml(
           console.log(
             `Blast replacing child with id ${partial.id} and tag ${partial.tagName}, child length: ${partial.children.length}`,
           );
+          existing.removeAttribute(LOCAL_TEMPLATE_SOURCE_ATTR);
           existing.replaceWith(...Array.from(partial.children));
         } else {
           console.error("Cannot blast non-partial element");
@@ -135,6 +172,7 @@ export function processIncomingHtml(
                   processIncomingHtml(
                     childPartial,
                     existingChild.parentElement!,
+                    options,
                   );
                 } else {
                   existingChild.replaceWith(insertNode);
@@ -190,4 +228,10 @@ export function processIncomingHtml(
       }
     }
   });
+
+  if (scope === document) {
+    cachedTemplateUpdates.forEach(({ template, fragment }) => {
+      processIncomingHtml(fragment, template.content);
+    });
+  }
 }

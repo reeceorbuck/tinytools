@@ -5,6 +5,11 @@
  */
 
 import { processIncomingHtml } from "./processIncomingHtml.ts";
+import {
+  getOrderedLocalRouteTemplates,
+  isRuntimeCachedRouteTemplate,
+  markLocalTemplateContent,
+} from "./routeCache.ts";
 
 type QueryCondition = {
   key: string;
@@ -115,18 +120,18 @@ function matchesQueryPattern(
 export function processLocalSuspenseTemplates(
   destinationUrl: URL,
   formData: FormData | null,
+  currentPathname?: string,
+  requestMethod = formData ? "post" : "get",
 ) {
-  const method = formData ? "post" : "get";
+  const method = requestMethod.toLowerCase();
   let block = false;
 
-  const noParamHref = destinationUrl.origin + destinationUrl.pathname;
+  const targetPathname = destinationUrl.pathname;
   console.log(
-    "Processing local suspense templates for noParamHref URL:",
-    noParamHref,
+    "Processing local suspense templates for pathname:",
+    targetPathname,
   );
-  const templates = document.querySelectorAll<HTMLTemplateElement>(
-    "template[path]",
-  );
+  const templates = getOrderedLocalRouteTemplates();
   for (const template of templates) {
     const rawPattern = template.getAttribute("path");
     if (!rawPattern) continue;
@@ -136,7 +141,7 @@ export function processLocalSuspenseTemplates(
 
     // Check pathname pattern
     const urlPattern = new URLPattern({ pathname: rawPattern });
-    const execResult = urlPattern.exec(noParamHref);
+    const execResult = urlPattern.exec({ pathname: targetPathname });
 
     if (!execResult) continue; // pathname not a match
 
@@ -151,6 +156,8 @@ export function processLocalSuspenseTemplates(
       }
     }
     console.log("Query pattern matched");
+    const blockNav = template.hasAttribute("data-nav-block");
+    const cacheCurrentPath = method === "get" ? currentPathname : undefined;
     const pathParams = execResult.pathname.groups as Record<string, string>;
     const queryParams = destinationUrl.searchParams;
     const params: Record<string, string> = {
@@ -210,9 +217,14 @@ export function processLocalSuspenseTemplates(
       node = cloneWalker.nextNode();
     }
     fragment.appendChild(content);
-    processIncomingHtml(fragment);
+    markLocalTemplateContent(
+      fragment,
+      isRuntimeCachedRouteTemplate(template) ? "runtime" : "authored",
+    );
+    processIncomingHtml(fragment, document, {
+      cacheCurrentPath,
+    });
 
-    const blockNav = template.hasAttribute("data-nav-block");
     if (blockNav) {
       console.warn("Blocking navigation for this local route.");
       block = true;

@@ -7,6 +7,23 @@
 import { processLocalSuspenseTemplates } from "./localRoutes.ts";
 import performFetchAndUpdate from "./performFetchAndUpdate.ts";
 
+function getNavigationMethod(e: NavigateEvent): "get" | "post" {
+  if (e.sourceElement instanceof HTMLFormElement) {
+    return (e.sourceElement.method || "get").toLowerCase() === "post"
+      ? "post"
+      : "get";
+  }
+
+  if (e.sourceElement && "form" in e.sourceElement) {
+    const form = (e.sourceElement as HTMLInputElement | HTMLButtonElement).form;
+    if (form) {
+      return (form.method || "get").toLowerCase() === "post" ? "post" : "get";
+    }
+  }
+
+  return e.formData ? "post" : "get";
+}
+
 globalThis.navigation.addEventListener(
   "navigate",
   async (e) => {
@@ -165,6 +182,8 @@ globalThis.navigation.addEventListener(
         async handler() {
           try {
             console.log("In navigation handler for fetchUrl: ", fetchUrl.href);
+            const navigationMethod = getNavigationMethod(e);
+            const localRouteUrl = navigationMethod === "get" ? toUrl : fetchUrl;
             if (e.info?.onlyUpdateUrl) {
               console.log(
                 "Navigation event onlyUpdateUrl, no fetch performed.",
@@ -174,8 +193,10 @@ globalThis.navigation.addEventListener(
 
             try {
               const block = processLocalSuspenseTemplates(
-                fetchUrl,
+                localRouteUrl,
                 e.formData ?? null,
+                fromUrl.pathname,
+                navigationMethod,
               );
               if (block) {
                 console.log(

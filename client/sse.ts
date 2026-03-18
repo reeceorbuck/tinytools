@@ -60,6 +60,9 @@ sse.onmessage = (event) => {
       new Response(stream, {
         headers: { "Content-Type": "text/html" },
       }),
+      {
+        updateCachedTemplates: true,
+      },
     ).then(() => {
       console.log("SSE Response processing completed");
     }).catch((err) => {

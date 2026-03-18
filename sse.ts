@@ -11,6 +11,39 @@ export interface StreamData {
   }>;
 }
 
+export function getTrackedStreamPaths(
+  streamData: Pick<StreamData, "paths">,
+): string[] {
+  return [...streamData.paths.keys()];
+}
+
+export function streamHasMatchingPath(
+  streamData: Pick<StreamData, "paths">,
+  matcher: (path: string) => boolean,
+): boolean {
+  return getTrackedStreamPaths(streamData).some(matcher);
+}
+
+export function streamHasExactPath(
+  streamData: Pick<StreamData, "paths">,
+  path: string,
+): boolean {
+  return streamHasMatchingPath(
+    streamData,
+    (trackedPath) => trackedPath === path,
+  );
+}
+
+export function streamHasPathPrefix(
+  streamData: Pick<StreamData, "paths">,
+  prefix: string,
+): boolean {
+  return streamHasMatchingPath(
+    streamData,
+    (trackedPath) => trackedPath.startsWith(prefix),
+  );
+}
+
 export const activeStreams: Map<SSEStreamingApi, StreamData> = new Map();
 const streamsById: Map<string, SSEStreamingApi | string> = new Map();
 

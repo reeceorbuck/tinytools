@@ -160,7 +160,6 @@ customElements.define(
           for (const element of targetElements) {
             (globalThis.handlers as HandlerProxy)[handlerName].call(
               element,
-              element,
               event,
             );
           }

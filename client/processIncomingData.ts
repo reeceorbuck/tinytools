@@ -6,6 +6,11 @@
 
 import { processIncomingHtml } from "./processIncomingHtml.ts";
 
+export interface ProcessIncomingDataOptions {
+  cacheCurrentPath?: string;
+  updateCachedTemplates?: boolean;
+}
+
 /**
  * Activates scripts within a fragment by replacing them with clones.
  * Scripts added via setHTMLUnsafe don't execute because they're not parser-inserted.
@@ -25,7 +30,10 @@ function activateScripts(container: DocumentFragment | Element) {
   });
 }
 
-export async function processIncomingData(response: Response) {
+export async function processIncomingData(
+  response: Response,
+  options: ProcessIncomingDataOptions = {},
+) {
   const contentType = response.headers.get("Content-Type") || "";
   console.log(`Response Content-Type: ${contentType}`);
 
@@ -130,7 +138,7 @@ export async function processIncomingData(response: Response) {
         // Activate scripts by replacing them with clones (setHTMLUnsafe doesn't execute scripts)
         activateScripts(fragment);
 
-        processIncomingHtml(fragment);
+        processIncomingHtml(fragment, document, options);
       }
     } else if (
       buffer.startsWith("<!DOCTYPE html><update>") ||
