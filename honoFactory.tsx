@@ -32,6 +32,7 @@ import { jsxRenderer } from "hono/jsx-renderer";
 import { AssetTags } from "@tinytools/hono-tools/components";
 import type { JSX } from "hono/jsx/jsx-runtime";
 import { clientFiles } from "./client/dist/manifest.ts";
+import { trackConnectedClients } from "./sse.ts";
 
 /** URL prefix for package-provided client scripts */
 export const TINYTOOLS_CLIENT_PREFIX = "/_tinytools";
@@ -775,6 +776,28 @@ function createFeatureMiddleware(featureName: string): MiddlewareHandler {
   };
 }
 
+function createSseFeatureMiddleware(): MiddlewareHandler {
+  return async (c, next) => {
+    const features = c.get("tinyToolsFeatures") as Set<string> | undefined;
+    if (features) {
+      features.add("sse");
+    }
+    await trackConnectedClients(c, next);
+  };
+}
+
+function isImmutablePublicAssetPath(path: string): boolean {
+  const normalizedPath = path.replaceAll("\\", "/");
+  const relativePath = normalizedPath.startsWith("public/")
+    ? normalizedPath.slice("public/".length)
+    : normalizedPath.startsWith("/")
+    ? normalizedPath.slice(1)
+    : normalizedPath;
+
+  return relativePath.startsWith("handlers/") ||
+    relativePath.startsWith("styles/");
+}
+
 /**
  * Create the core middleware array.
  * Sets up static file serving, context storage, tools tracking, and JSX rendering.
@@ -804,12 +827,12 @@ function createCoreMiddleware(
       onFound: (path, c) => {
         // Handler files (public/handlers/*.js) and style files (public/styles/*.css)
         // have content-hashed filenames, so they're immutable and can be cached forever
-        if (path.startsWith("/handlers/") || path.startsWith("/styles/")) {
+        if (isImmutablePublicAssetPath(path)) {
           c.header("Cache-Control", "public, max-age=31536000, immutable");
         }
       },
       onNotFound: (path, _c) => {
-        if (path.startsWith("/handlers/") || path.startsWith("/styles/")) {
+        if (isImmutablePublicAssetPath(path)) {
           console.error(`Handler or style file not found: ${path}`);
         }
       },
@@ -989,7 +1012,8 @@ export const tiny = {
     /**
      * Enable Server-Sent Events for live updates from the server.
      *
-     * Adds client script: sse.js
+     * Adds client script: sse.js and request middleware that tracks SSE client
+     * identity and recent route paths.
      *
      * @param _options - Reserved for future use
      *
@@ -1001,7 +1025,7 @@ export const tiny = {
      * ```
      */
     sseTools(_options?: SseToolsOptions): MiddlewareHandler {
-      return createFeatureMiddleware("sse");
+      return createSseFeatureMiddleware();
     },
 
     /**
@@ -1096,7 +1120,7 @@ export const tiny = {
       return [
         ...createCoreMiddleware(options),
         createFeatureMiddleware("navigation"),
-        createFeatureMiddleware("sse"),
+        createSseFeatureMiddleware(),
         createFeatureMiddleware("localRoutes"),
         createFeatureMiddleware("webComponents"),
       ];

@@ -100,6 +100,17 @@ export {
   sendUpdateStream,
   type UpdateStreamApi,
 } from "./sendUpdates.tsx";
+export {
+  activeStreams,
+  addStream,
+  getStreamDataById,
+  removeStream,
+  setInactiveStream,
+  type StreamData,
+  streamEvents,
+  trackConnectedClients,
+  updateStreamPath,
+} from "./sse.ts";
 
 // Re-export JSX namespace for consumers
 export type { JSX } from "./jsx-runtime.ts";

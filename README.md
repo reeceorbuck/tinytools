@@ -152,7 +152,8 @@ static file serving, JSX renderer, tools init). Spread into `.use()`.
 **`tiny.middleware.navApiTools()`** - Enables client-side navigation (Navigation
 API + event handlers).
 
-**`tiny.middleware.sseTools()`** - Enables Server-Sent Events support.
+**`tiny.middleware.sseTools()`** - Enables Server-Sent Events support and tracks
+each connected client's `sseId` plus recent route paths.
 
 **`tiny.middleware.localRoutes()`** - Enables client-side local route matching.
 
