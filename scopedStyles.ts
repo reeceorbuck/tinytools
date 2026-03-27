@@ -7,7 +7,11 @@
  * @module
  */
 
-import { cache, generateStyleHash } from "./clientTools.ts";
+import {
+  cache,
+  generateStyleHash,
+  normalizeSourceFileUrl,
+} from "./clientTools.ts";
 
 export const SCOPE_BOUNDARY_CLASS = "sb";
 const GLOBAL_SCOPE_BOUNDARY_TOKEN = "global";
@@ -54,6 +58,10 @@ export interface ScopedStyleDefinition {
 export type ScopedStyleInput = string | ScopedStyleDefinition;
 
 const defaultScopeConfig: ScopedStyleScopeConfig = { mode: "boundary" };
+
+export function normalizeCssWhitespace(cssContent: string): string {
+  return cssContent.replace(/\s+/g, " ").trim();
+}
 
 function createScopedStyleDefinition(
   cssContent: string,
@@ -226,9 +234,11 @@ export function css(
   strings: TemplateStringsArray,
   ...values: unknown[]
 ): string {
-  return strings.reduce((acc, str, i) => {
+  const cssContent = strings.reduce((acc, str, i) => {
     return acc + str + (values[i] ?? "");
   }, "");
+
+  return normalizeCssWhitespace(cssContent);
 }
 
 /**
@@ -245,6 +255,7 @@ export class ScopedStyleImpl {
   layer: ScopedStyleLayer;
   private occurrenceIndex = 0;
   private hashInput: string = "";
+  private cleanupReferenceFilename: string = "";
 
   constructor(
     styleName: string,
@@ -254,6 +265,7 @@ export class ScopedStyleImpl {
     scope: ScopedStyleScopeConfig = defaultScopeConfig,
     layer?: ScopedStyleLayer,
   ) {
+    const normalizedSourceFileUrl = normalizeSourceFileUrl(sourceFileUrl);
     const normalizedScope = normalizeScopeConfig(scope);
     const resolvedLayer = layer ??
       (isGlobal
@@ -264,23 +276,26 @@ export class ScopedStyleImpl {
         ? "limited"
         : "normal");
     const hashInput = isGlobal
-      ? `${cssContent}::${sourceFileUrl ?? ""}::layer:${resolvedLayer}`
+      ? `${cssContent}::${
+        normalizedSourceFileUrl ?? ""
+      }::layer:${resolvedLayer}`
       : `${cssContent}::${serializeScopeConfig(normalizedScope)}::${
-        sourceFileUrl ?? ""
+        normalizedSourceFileUrl ?? ""
       }::layer:${resolvedLayer}`;
 
-    const mtimeChanged = false; // Deferred to ensureBuilt() at request time
-
     // Get the occurrence index for this name in this file (0 for first, 1 for second, etc.)
-    const occurrenceIndex = sourceFileUrl
-      ? cache.getNextOccurrenceIndex(sourceFileUrl, styleName, "style")
+    const occurrenceIndex = normalizedSourceFileUrl
+      ? cache.getNextOccurrenceIndex(
+        normalizedSourceFileUrl,
+        styleName,
+        "style",
+      )
       : 0;
 
-    // Try to use a cached filename directly (no file stat needed).
     let cachedFilename: string | undefined;
-    if (sourceFileUrl && !mtimeChanged) {
+    if (normalizedSourceFileUrl) {
       cachedFilename = cache.getCachedStyle(
-        sourceFileUrl,
+        normalizedSourceFileUrl,
         styleName,
         occurrenceIndex,
       );
@@ -295,35 +310,50 @@ export class ScopedStyleImpl {
         styleName,
       );
       resolvedFilename = `${styleName}_${generateStyleHash(hashInput)}`;
+    }
 
-      if (sourceFileUrl) {
-        cache.files[sourceFileUrl] ??= {
-          mtimeMs: 0,
-          externalImports: [],
-          handlers: {},
-          styles: {},
-        };
+    if (normalizedSourceFileUrl) {
+      cache.files[normalizedSourceFileUrl] ??= {
+        mtimeMs: 0,
+        externalImports: [],
+        handlers: {},
+        styles: {},
+      };
 
-        cache.setCachedStyle(
-          sourceFileUrl,
-          styleName,
-          occurrenceIndex,
-          resolvedFilename,
-        );
-      }
+      cache.setCachedStyle(
+        normalizedSourceFileUrl,
+        styleName,
+        occurrenceIndex,
+        resolvedFilename,
+      );
     }
 
     this.styleName = styleName;
     this.cssContent = cssContent;
     this.filename = resolvedFilename;
-    this.sourceFileUrl = sourceFileUrl;
+    this.sourceFileUrl = normalizedSourceFileUrl;
     this.isGlobal = isGlobal;
     this.scope = normalizedScope;
     this.layer = resolvedLayer;
     this.occurrenceIndex = occurrenceIndex;
     this.hashInput = hashInput;
+    this.cleanupReferenceFilename = cachedFilename ?? resolvedFilename;
 
     scopedStylesRegistry.set(this.filename, this);
+  }
+
+  get cleanupFilenameForCurrentBuild(): string {
+    return this.cleanupReferenceFilename;
+  }
+
+  get staleFilenameForCleanup(): string | undefined {
+    return this.cleanupReferenceFilename !== this.filename
+      ? this.cleanupReferenceFilename
+      : undefined;
+  }
+
+  markCurrentFilenameAsClean(): void {
+    this.cleanupReferenceFilename = this.filename;
   }
 
   buildCssLayerContent(): string {

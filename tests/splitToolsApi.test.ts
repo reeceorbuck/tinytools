@@ -2,6 +2,20 @@ import { assertEquals } from "@std/assert";
 import { Handlers, imports, Styles } from "../clientTools.ts";
 import { css } from "../scopedStyles.ts";
 
+Deno.test("split tools api - css tag trims formatting whitespace", () => {
+  const inlineStyle = css`
+    --isSelected: if(
+      style(--selectedMode: original): 1;
+      else: 0;
+    );
+  `;
+
+  assertEquals(
+    inlineStyle,
+    "--isSelected: if( style(--selectedMode: original): 1; else: 0; );",
+  );
+});
+
 Deno.test({
   name: "split tools api - styles engage through imports helper",
   sanitizeOps: false,

@@ -16,10 +16,12 @@ import {
   type ActivateScopedStyles,
   changedStyleKeys,
   mergeClassNames,
+  normalizeCssWhitespace,
   normalizeScopedStyleInput,
   SCOPE_BOUNDARY_CLASS,
   ScopedStyleImpl,
   type ScopedStyleInput,
+  scopedStylesRegistry,
   styleBundleRegistry,
 } from "./scopedStyles.ts";
 import { tryGetContext } from "hono/context-storage";
@@ -32,11 +34,18 @@ import { changedHandlerKeys, ClientFunctionImpl } from "./clientFunctions.ts";
 // Cache Management (combined for both functions and styles)
 // ============================================================================
 
+/**
+ * Bump this when the hash algorithm changes to auto-invalidate caches.
+ * History: 1 = Java-style 32-bit, 2 = FNV-1a 64-bit
+ */
+const HASH_ALGORITHM_VERSION = 2;
+
 type ClientToolsCacheV1 = {
   version: 3;
   hashConfig: {
     handlerHashLength: number;
     styleHashLength: number;
+    hashAlgorithm?: number;
   };
   files: Record<
     string,
@@ -195,6 +204,7 @@ function getCurrentHashConfig(): ClientToolsCacheV1["hashConfig"] {
   return {
     handlerHashLength: generatedHandlerHashLength,
     styleHashLength: generatedStyleHashLength,
+    hashAlgorithm: HASH_ALGORITHM_VERSION,
   };
 }
 
@@ -208,12 +218,16 @@ export function generateHash(
   str: string,
   kind: "handler" | "style" = "style",
 ): string {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) - hash) + str.charCodeAt(i);
-    hash |= 0;
+  const input = new TextEncoder().encode(str);
+  let hash = 0xcbf29ce484222325n;
+  const prime = 0x100000001b3n;
+
+  for (const byte of input) {
+    hash ^= BigInt(byte);
+    hash = (hash * prime) & 0xffffffffffffffffn;
   }
-  const fullHash = Math.abs(hash).toString(16).padStart(8, "0");
+
+  const fullHash = hash.toString(16).padStart(16, "0");
   return fullHash.slice(0, getHashLength(kind));
 }
 
@@ -223,6 +237,29 @@ export function generateHandlerHash(str: string): string {
 
 export function generateStyleHash(str: string): string {
   return generateHash(str, "style");
+}
+
+export function normalizeSourceFileUrl(
+  sourceFileUrl: string | URL | undefined,
+): string | undefined {
+  if (!sourceFileUrl) return undefined;
+
+  const raw = typeof sourceFileUrl === "string"
+    ? sourceFileUrl
+    : sourceFileUrl.toString();
+
+  try {
+    const url = new URL(raw);
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return raw.replace(/[?#].*$/, "");
+  }
+}
+
+function getFilenameHashFragment(filename: string): string {
+  return filename.split("_").at(-1) ?? filename;
 }
 
 // ==========================================================================
@@ -269,17 +306,19 @@ class ClientToolsCacheManager {
           styleHashLength: clampGeneratedFilenameHashLength(
             loaded.hashConfig.styleHashLength,
           ),
+          hashAlgorithm: loaded.hashConfig.hashAlgorithm,
         };
 
         generatedHandlerHashLength = loadedHashConfig.handlerHashLength;
         generatedStyleHashLength = loadedHashConfig.styleHashLength;
-        this.hashConfig = loadedHashConfig;
         const current = getCurrentHashConfig();
 
         if (
           loadedHashConfig.handlerHashLength === current.handlerHashLength &&
-          loadedHashConfig.styleHashLength === current.styleHashLength
+          loadedHashConfig.styleHashLength === current.styleHashLength &&
+          (loaded.hashConfig.hashAlgorithm ?? 0) === HASH_ALGORITHM_VERSION
         ) {
+          this.hashConfig = loadedHashConfig;
           this.files = loaded.files;
           this.normalizeLoadedFiles();
         }
@@ -325,6 +364,12 @@ class ClientToolsCacheManager {
     this.filesWithMtimeChange.clear();
     this.nameOccurrences.clear();
     this.markDirty();
+  }
+
+  /** Start a fresh mtime-tracking pass for a build/request cycle. */
+  beginChangeDetectionPass(): void {
+    this.sourceFileMtimeMemo.clear();
+    this.filesWithMtimeChange.clear();
   }
 
   /**
@@ -474,6 +519,8 @@ class ClientToolsCacheManager {
 
 /** Shared cache instance for all client tools */
 export const cache = new ClientToolsCacheManager();
+
+export const registeredClientTools = new Set<ClientToolsClass<any, any, any>>();
 
 // deno-lint-ignore no-explicit-any
 type AnyFunction = (...args: any[]) => any;
@@ -799,6 +846,14 @@ class ClientToolsClass<
   private _scopedStyles = new Map<string, ScopedStyleImpl>();
   /** Track which style names were defined directly (not imported) */
   private _ownStyleNames = new Set<string>();
+  /** Previous bundle filename derived from cached constituent style hashes. */
+  private _staleOwnBundleFilename?: string;
+  /** Tracks which imported ClientTools instance owns each imported style name */
+  // deno-lint-ignore no-explicit-any
+  private _importedStyleOwners = new Map<
+    string,
+    ClientToolsClass<any, any, any>
+  >();
   /** Stores ScopedStyleImpl instances for global styles (not exposed on styled) */
   private _globalStyles = new Map<string, ScopedStyleImpl>();
   /** Tracks imported ClientTools instances for cascading ensureBuilt() */
@@ -812,9 +867,11 @@ class ClientToolsClass<
     // deno-lint-ignore no-explicit-any
     options?: ClientToolsOptions<any, any, any, any>,
   ) {
-    this.sourceFileUrl = typeof sourceFileUrl === "string"
-      ? sourceFileUrl
-      : sourceFileUrl.toString();
+    this.sourceFileUrl = normalizeSourceFileUrl(sourceFileUrl) ??
+      (typeof sourceFileUrl === "string"
+        ? sourceFileUrl
+        : sourceFileUrl.toString());
+    registeredClientTools.add(this);
 
     if (options) {
       // Process imports first so imported functions/styles are available
@@ -880,8 +937,11 @@ class ClientToolsClass<
 
     if (ownStyles.length === 0) return;
 
-    const sortedFilenames = ownStyles
-      .map(([, s]) => s.filename)
+    const sortedStyleHashes = ownStyles
+      .map(([, s]) => getFilenameHashFragment(s.filename))
+      .sort();
+    const sortedCleanupStyleHashes = ownStyles
+      .map(([, s]) => getFilenameHashFragment(s.cleanupFilenameForCurrentBuild))
       .sort();
 
     // Use source filename as prefix for readability
@@ -889,8 +949,14 @@ class ClientToolsClass<
     const baseName = urlPath.split("/").pop()?.replace(/\.[^.]+$/, "") ??
       "styles";
     const bundleFilename = `${baseName}_${
-      generateStyleHash(sortedFilenames.join(","))
+      generateStyleHash(sortedStyleHashes.join(","))
     }`;
+    const staleBundleFilename = `${baseName}_${
+      generateStyleHash(sortedCleanupStyleHashes.join(","))
+    }`;
+    this._staleOwnBundleFilename = staleBundleFilename !== bundleFilename
+      ? staleBundleFilename
+      : undefined;
 
     // Register the bundle
     styleBundleRegistry.set(bundleFilename, ownStyles.map(([, s]) => s));
@@ -902,6 +968,43 @@ class ClientToolsClass<
   }
 
   /**
+   * Recompute bundle filenames and imported style asset mappings after any
+   * constituent style filename changes.
+   * @internal
+   */
+  refreshStyleAssetMappings(): {
+    oldBundleFilename?: string;
+    newBundleFilename?: string;
+  } {
+    const firstOwnStyleName = this._ownStyleNames.values().next().value as
+      | string
+      | undefined;
+    const oldBundleFilename = firstOwnStyleName
+      ? this.styleFilenames.get(firstOwnStyleName)
+      : undefined;
+
+    if (this._ownStyleNames.size > 0) {
+      this._finalizeStyleBundle();
+    }
+
+    for (const [styleName, owner] of this._importedStyleOwners) {
+      const importedFilename = owner._styleFilenames.get(styleName);
+      const importedStyle = this._scopedStyles.get(styleName);
+      if (importedFilename) {
+        this.styleFilenames.set(styleName, importedFilename);
+      } else if (importedStyle) {
+        this.styleFilenames.set(styleName, importedStyle.filename);
+      }
+    }
+
+    const newBundleFilename = firstOwnStyleName
+      ? this.styleFilenames.get(firstOwnStyleName)
+      : undefined;
+
+    return { oldBundleFilename, newBundleFilename };
+  }
+
+  /**
    * Deferred validation and build for all handlers and styles in this instance.
    * Called at request time by tiny.middleware.sharedImports(). Skips entirely in --prod mode.
    * Subsequent calls return the same promise (idempotent).
@@ -909,13 +1012,22 @@ class ClientToolsClass<
   async ensureBuilt(): Promise<void> {
     if (cache.trustCache) return;
     if (this._ensureBuiltPromise) return this._ensureBuiltPromise;
-    this._ensureBuiltPromise = this._doEnsureBuilt();
-    return this._ensureBuiltPromise;
+    const buildPromise = this._doEnsureBuilt();
+    this._ensureBuiltPromise = buildPromise;
+    try {
+      await buildPromise;
+    } finally {
+      if (this._ensureBuiltPromise === buildPromise) {
+        this._ensureBuiltPromise = null;
+      }
+    }
   }
 
   private async _doEnsureBuilt(): Promise<void> {
     const handlerDir = "./public/handlers";
     const stylesDir = "./public/styles";
+
+    cache.beginChangeDetectionPass();
 
     // Ensure imported tools are built first (their bundles need to exist)
     await Promise.all(this._importedTools.map((t) => t.ensureBuilt()));
@@ -956,17 +1068,9 @@ class ClientToolsClass<
 
     // If any own style changed, re-finalize the bundle
     if (anyStyleChanged && this._ownStyleNames.size > 0) {
-      // Capture old bundle filename before re-finalizing
-      const oldBundleFilename = this._ownStyleNames.size > 0
-        ? this.styleFilenames.get([...this._ownStyleNames][0])
-        : undefined;
+      const { oldBundleFilename, newBundleFilename } = this
+        .refreshStyleAssetMappings();
 
-      this._finalizeStyleBundle();
-
-      // Delete old bundle CSS if the filename changed
-      const newBundleFilename = this.styleFilenames.get(
-        [...this._ownStyleNames][0],
-      );
       if (
         oldBundleFilename && newBundleFilename &&
         oldBundleFilename !== newBundleFilename
@@ -980,12 +1084,7 @@ class ClientToolsClass<
 
     // Update styleFilenames for any imported styles whose filename changed
     if (anyStyleChanged) {
-      for (const [styleName, impl] of this._scopedStyles) {
-        if (!this._ownStyleNames.has(styleName)) {
-          // Imported style — update to its current filename
-          this.styleFilenames.set(styleName, impl.filename);
-        }
-      }
+      this.refreshStyleAssetMappings();
     }
 
     // Build style bundle CSS files
@@ -1003,6 +1102,19 @@ class ClientToolsClass<
             ownStyles.map(([, s]) => s),
           );
         }
+
+        if (
+          this._staleOwnBundleFilename &&
+          this._staleOwnBundleFilename !== bundleFilename
+        ) {
+          await Deno.remove(`${stylesDir}/${this._staleOwnBundleFilename}.css`)
+            .catch(() => {});
+          this._staleOwnBundleFilename = undefined;
+        }
+
+        for (const [, style] of ownStyles) {
+          style.markCurrentFilenameAsClean();
+        }
       }
     }
 
@@ -1016,6 +1128,13 @@ class ClientToolsClass<
           () => {},
         );
       }
+      const staleFilename = impl.staleFilenameForCleanup;
+      if (staleFilename && staleFilename !== impl.filename) {
+        await Deno.remove(`${stylesDir}/${staleFilename}.css`).catch(
+          () => {},
+        );
+      }
+      impl.markCurrentFilenameAsClean();
     }
   }
 
@@ -1087,8 +1206,7 @@ class ClientToolsClass<
       const { cssContent, scope, layer } = normalizeScopedStyleInput(
         styleInput,
       );
-      // Normalize the CSS - remove excess whitespace
-      const normalizedCss = cssContent.replace(/\s+/g, " ").trim();
+      const normalizedCss = normalizeCssWhitespace(cssContent);
 
       const instance = new ScopedStyleImpl(
         styleName,
@@ -1162,6 +1280,7 @@ class ClientToolsClass<
           styleName,
           externalStyleFilenames.get(styleName) ?? instance.filename,
         );
+        this._importedStyleOwners.set(styleName, externalTools);
         this._scopedStyles.set(styleName, instance);
         // Note: NOT added to _ownStyleNames — imported styles are excluded from this bundle
       }

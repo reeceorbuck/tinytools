@@ -8,6 +8,11 @@ import { processIncomingHtml } from "./processIncomingHtml.ts";
 
 export interface ProcessIncomingDataOptions {
   cacheCurrentPath?: string;
+  activeRoutePath?: string;
+  activeRouteRegistrations?: Array<{
+    pathname: string;
+    redirectTo?: string;
+  }>;
   updateCachedTemplates?: boolean;
 }
 

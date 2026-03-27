@@ -6,9 +6,11 @@
 
 import { processIncomingHtml } from "./processIncomingHtml.ts";
 import {
+  getCachedRouteTemplate,
   getOrderedLocalRouteTemplates,
   isRuntimeCachedRouteTemplate,
   markLocalTemplateContent,
+  SPA_REDIRECT_ATTR,
 } from "./routeCache.ts";
 
 type QueryCondition = {
@@ -156,7 +158,37 @@ export function processLocalSuspenseTemplates(
       }
     }
     console.log("Query pattern matched");
-    const blockNav = template.hasAttribute("data-nav-block");
+    let templateToRender = template;
+    const redirectTo = template.getAttribute(SPA_REDIRECT_ATTR);
+    const redirectPathname = redirectTo
+      ? new URL(redirectTo, destinationUrl.href).pathname
+      : undefined;
+    if (redirectTo) {
+      const redirectedTemplate = redirectPathname
+        ? getCachedRouteTemplate(redirectPathname)
+        : null;
+      if (
+        redirectedTemplate &&
+        isRuntimeCachedRouteTemplate(redirectedTemplate) &&
+        redirectedTemplate.content.childElementCount > 0
+      ) {
+        console.log(
+          "Using canonical runtime template via redirect alias:",
+          redirectPathname,
+        );
+        templateToRender = redirectedTemplate;
+      }
+    }
+
+    const isRuntimeTemplate = isRuntimeCachedRouteTemplate(templateToRender);
+    if (isRuntimeTemplate && templateToRender.content.children.length === 0) {
+      console.log(
+        "Skipping empty runtime template for active route:",
+        targetPathname,
+      );
+      continue;
+    }
+    const blockNav = templateToRender.hasAttribute("data-nav-block");
     const cacheCurrentPath = method === "get" ? currentPathname : undefined;
     const pathParams = execResult.pathname.groups as Record<string, string>;
     const queryParams = destinationUrl.searchParams;
@@ -172,12 +204,12 @@ export function processLocalSuspenseTemplates(
         : {},
     };
     console.log("Processing LOCAL route for path:", params);
-    console.log("using template:", template);
+    console.log("using template:", templateToRender);
 
     const fragment = document.createDocumentFragment();
 
-    const content = template.content.cloneNode(true);
-    console.log("Original template content:", template.content);
+    const content = templateToRender.content.cloneNode(true);
+    console.log("Original template content:", templateToRender.content);
     console.log("Cloned template content:", content);
 
     const cloneWalker = document.createTreeWalker(
@@ -219,11 +251,48 @@ export function processLocalSuspenseTemplates(
     fragment.appendChild(content);
     markLocalTemplateContent(
       fragment,
-      isRuntimeCachedRouteTemplate(template) ? "runtime" : "authored",
+      isRuntimeTemplate ? "runtime" : "authored",
     );
     processIncomingHtml(fragment, document, {
       cacheCurrentPath,
+      activeRouteRegistrations: method === "get" && targetPathname
+        ? [
+          {
+            pathname: targetPathname,
+            redirectTo: redirectTo ?? undefined,
+          },
+          redirectPathname && redirectPathname !== targetPathname
+            ? {
+              pathname: redirectPathname,
+            }
+            : null,
+        ].filter((entry): entry is { pathname: string; redirectTo?: string } =>
+          entry !== null
+        )
+        : undefined,
+      activeRoutePath: method === "get" ? targetPathname : undefined,
     });
+
+    if (redirectTo) {
+      const redirectUrl = new URL(redirectTo, destinationUrl.href);
+      const destinationPathWithSearch = destinationUrl.pathname +
+        destinationUrl.search + destinationUrl.hash;
+      const redirectPathWithSearch = redirectUrl.pathname + redirectUrl.search +
+        redirectUrl.hash;
+
+      if (redirectPathWithSearch !== destinationPathWithSearch) {
+        console.log(
+          "Applying cached route redirect from runtime template:",
+          redirectPathWithSearch,
+        );
+        globalThis.navigation.navigate(redirectPathWithSearch, {
+          history: "replace",
+          info: {
+            onlyUpdateUrl: true,
+          },
+        });
+      }
+    }
 
     if (blockNav) {
       console.warn("Blocking navigation for this local route.");

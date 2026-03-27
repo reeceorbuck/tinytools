@@ -32,7 +32,7 @@ const importsBySourceFileUrl = new Map<string, Map<string, string>>();
 
 /** Get or create the import registry for a source file URL */
 export function getImportRegistry(sourceFileUrl?: string): Map<string, string> {
-  const key = sourceFileUrl ?? "__global__";
+  const key = normalizeSourceFileUrl(sourceFileUrl) ?? "__global__";
   const existing = importsBySourceFileUrl.get(key);
   if (existing) return existing;
   const created = new Map<string, string>();
@@ -47,7 +47,7 @@ export function resetImportRegistries(): void {
 
 /** Create a unique key for a handler that includes its source file */
 export function handlerKey(sourceFileUrl: string, fnName: string): string {
-  return `${sourceFileUrl}::${fnName}`;
+  return `${normalizeSourceFileUrl(sourceFileUrl) ?? sourceFileUrl}::${fnName}`;
 }
 
 /** Track handlers whose filenames changed this run - keyed by "sourceFileUrl::fnName" */
@@ -60,7 +60,11 @@ export const filesWithChangedHandlers = new Set<string>();
 // ClientFunctionImpl
 // ============================================================================
 
-import { cache, generateHandlerHash } from "./clientTools.ts";
+import {
+  cache,
+  generateHandlerHash,
+  normalizeSourceFileUrl,
+} from "./clientTools.ts";
 
 /**
  * Internal implementation of a client function.
@@ -85,17 +89,17 @@ export class ClientFunctionImpl<
       throw new Error("ClientFunction requires a function");
     }
 
+    const normalizedSourceFileUrl = normalizeSourceFileUrl(sourceFileUrl);
+
     // Get the occurrence index for this name in this file (0 for first, 1 for second, etc.)
-    const occurrenceIndex = sourceFileUrl
-      ? cache.getNextOccurrenceIndex(sourceFileUrl, fnName, "handler")
+    const occurrenceIndex = normalizedSourceFileUrl
+      ? cache.getNextOccurrenceIndex(normalizedSourceFileUrl, fnName, "handler")
       : 0;
 
-    // Try to use a cached filename directly (no file stat needed).
-    // Change detection is deferred to ensureBuilt() at request time.
     let cachedFilename: string | undefined;
-    if (sourceFileUrl) {
+    if (normalizedSourceFileUrl) {
       cachedFilename = cache.getCachedHandler(
-        sourceFileUrl,
+        normalizedSourceFileUrl,
         fnName,
         occurrenceIndex,
       );
@@ -109,30 +113,33 @@ export class ClientFunctionImpl<
         "Generating filename for ClientFunction by hashing: ",
         fnName,
       );
-      const str = fn.toString() + "::" + (sourceFileUrl ?? "");
-      resolvedFilename = `${fnName}_${generateHandlerHash(str)}`;
+      resolvedFilename = `${fnName}_${
+        generateHandlerHash(
+          fn.toString() + "::" + (normalizedSourceFileUrl ?? ""),
+        )
+      }`;
+    }
 
-      if (sourceFileUrl) {
-        cache.files[sourceFileUrl] ??= {
-          mtimeMs: 0,
-          externalImports: [],
-          handlers: {},
-          styles: {},
-        };
+    if (normalizedSourceFileUrl) {
+      cache.files[normalizedSourceFileUrl] ??= {
+        mtimeMs: 0,
+        externalImports: [],
+        handlers: {},
+        styles: {},
+      };
 
-        cache.setCachedHandler(
-          sourceFileUrl,
-          fnName,
-          occurrenceIndex,
-          resolvedFilename,
-        );
-      }
+      cache.setCachedHandler(
+        normalizedSourceFileUrl,
+        fnName,
+        occurrenceIndex,
+        resolvedFilename,
+      );
     }
     Object.defineProperty(fn, "name", { value: fnName });
     this.fnName = fnName;
     this.fn = fn;
     this.filename = resolvedFilename;
-    this.sourceFileUrl = sourceFileUrl;
+    this.sourceFileUrl = normalizedSourceFileUrl;
     this.occurrenceIndex = occurrenceIndex;
     // deno-lint-ignore no-explicit-any
     (this as any)[fnName] =
@@ -144,9 +151,10 @@ export class ClientFunctionImpl<
   }
 
   import(targetSourceFileUrl: string | URL) {
-    const targetKey = typeof targetSourceFileUrl === "string"
-      ? targetSourceFileUrl
-      : targetSourceFileUrl.toString();
+    const targetKey = normalizeSourceFileUrl(targetSourceFileUrl) ??
+      (typeof targetSourceFileUrl === "string"
+        ? targetSourceFileUrl
+        : targetSourceFileUrl.toString());
 
     const registry = getImportRegistry(targetKey);
     registry.set(this.fnName, this.filename);

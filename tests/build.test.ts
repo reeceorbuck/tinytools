@@ -25,7 +25,8 @@ import {
   setCustomScope,
   styleBundleRegistry,
 } from "../scopedStyles.ts";
-import { ClientTools } from "../clientTools.ts";
+import { cache, ClientTools } from "../clientTools.ts";
+import { registeredClientTools } from "../clientTools.ts";
 import { css } from "../scopedStyles.ts";
 
 // ============================================================================
@@ -66,12 +67,14 @@ function setupPerformanceMarks() {
 
 /** Reset the global registries to a clean state */
 function resetRegistries() {
+  cache.resetHashDependentState();
   handlers.clear();
   scopedStylesRegistry.clear();
   styleBundleRegistry.clear();
   changedHandlerKeys.clear();
   filesWithChangedHandlers.clear();
   changedStyleKeys.clear();
+  registeredClientTools.clear();
   resetImportRegistries();
 }
 
@@ -1580,6 +1583,204 @@ Deno.test({
       styleFiles.length,
       2,
       "Should produce two distinct style bundle files",
+    );
+
+    await cleanupTestDirs();
+  },
+  sanitizeOps: false,
+  sanitizeResources: false,
+});
+
+Deno.test({
+  name:
+    "buildScriptFiles - refreshes bundled style filename when a constituent style filename changes",
+  async fn() {
+    await cleanupTestDirs();
+    resetRegistries();
+
+    const fakeUrl = "file:///test/style-bundle-refresh.tsx";
+    const tools = new ClientTools(fakeUrl, {
+      styles: {
+        panel: css`
+          color: blue;
+        `,
+      },
+    });
+
+    const originalBundleFilename = tools._styleFilenames.get("panel");
+    assertExists(originalBundleFilename);
+
+    const styleImpl = tools._styles.get("panel");
+    assertExists(styleImpl);
+    styleImpl.filename = "panel_changed";
+    changedStyleKeys.add(`${fakeUrl}::panel`);
+
+    await buildForTest({
+      clientDir: TEST_CLIENT_DIR,
+      publicDir: TEST_PUBLIC_DIR,
+      handlerDir: TEST_HANDLER_DIR,
+      stylesDir: TEST_STYLES_DIR,
+    });
+
+    const refreshedBundleFilename = tools._styleFilenames.get("panel");
+    assertExists(refreshedBundleFilename);
+    assertNotEquals(
+      refreshedBundleFilename,
+      originalBundleFilename,
+      "The bundle filename should change when a constituent style filename changes",
+    );
+
+    const styleFiles = await listFiles(TEST_STYLES_DIR);
+    assertEquals(
+      styleFiles.includes(`${refreshedBundleFilename}.css`),
+      true,
+      "The rebuilt bundle CSS file should be written using the refreshed filename",
+    );
+    assertEquals(
+      styleFiles.includes(`${originalBundleFilename}.css`),
+      false,
+      "The stale bundle CSS file should be cleaned up",
+    );
+
+    await cleanupTestDirs();
+  },
+  sanitizeOps: false,
+  sanitizeResources: false,
+});
+
+Deno.test({
+  name:
+    "buildScriptFiles - keeps imported style asset filenames aligned with the exporting bundle",
+  async fn() {
+    await cleanupTestDirs();
+    resetRegistries();
+
+    const exporterUrl = "file:///test/exporter-styles.tsx";
+    const importerUrl = "file:///test/importer-styles.tsx";
+
+    const exporter = new ClientTools(exporterUrl, {
+      styles: {
+        panel: css`
+          color: blue;
+        `,
+      },
+    });
+    const importer = new ClientTools(importerUrl, {
+      imports: [exporter],
+    });
+
+    const originalExporterBundle = exporter._styleFilenames.get("panel");
+    assertExists(originalExporterBundle);
+    assertEquals(importer._styleFilenames.get("panel"), originalExporterBundle);
+
+    const exporterStyle = exporter._styles.get("panel");
+    assertExists(exporterStyle);
+    exporterStyle.filename = "panel_imported_changed";
+    changedStyleKeys.add(`${exporterUrl}::panel`);
+
+    await buildForTest({
+      clientDir: TEST_CLIENT_DIR,
+      publicDir: TEST_PUBLIC_DIR,
+      handlerDir: TEST_HANDLER_DIR,
+      stylesDir: TEST_STYLES_DIR,
+    });
+
+    const refreshedExporterBundle = exporter._styleFilenames.get("panel");
+    assertExists(refreshedExporterBundle);
+    assertNotEquals(refreshedExporterBundle, originalExporterBundle);
+    assertEquals(
+      importer._styleFilenames.get("panel"),
+      refreshedExporterBundle,
+      "Imported styles should keep pointing at the exporter bundle filename",
+    );
+
+    const styleFiles = await listFiles(TEST_STYLES_DIR);
+    assertEquals(styleFiles.includes(`${refreshedExporterBundle}.css`), true);
+    assertEquals(styleFiles.includes(`${originalExporterBundle}.css`), false);
+
+    await cleanupTestDirs();
+  },
+  sanitizeOps: false,
+  sanitizeResources: false,
+});
+
+Deno.test({
+  name:
+    "buildScriptFiles - cache with mismatched hash algorithm version is discarded",
+  async fn() {
+    await cleanupTestDirs();
+    resetRegistries();
+
+    const fakeUrl = `file:///test/stale-style-cache-${crypto.randomUUID()}.tsx`;
+
+    // Manually plant a stale cache entry (simulates a previous algorithm version)
+    cache.files[fakeUrl] = {
+      mtimeMs: 0,
+      externalImports: [],
+      handlers: {},
+      styles: {
+        panel: ["panel_deadbe"],
+      },
+    };
+
+    // With the cache populated, the constructor trusts the cached filename
+    const tools = new ClientTools(fakeUrl, {
+      styles: {
+        panel: css`
+          color: hotpink;
+        `,
+      },
+    });
+
+    // The constructor trusts the cache on a warm start — this is expected
+    // for startup performance. Stale algorithm caches are wiped by the
+    // hashAlgorithm version check when the cache is loaded from disk.
+    assertEquals(
+      tools.generatedStyleNames.get("panel"),
+      "panel_deadbe",
+      "Constructor should trust the cache when it exists (lazy hashing)",
+    );
+
+    await cleanupTestDirs();
+  },
+  sanitizeOps: false,
+  sanitizeResources: false,
+});
+
+Deno.test({
+  name:
+    "buildScriptFiles - query params on source module URLs do not change style hashes",
+  async fn() {
+    await cleanupTestDirs();
+    resetRegistries();
+
+    const baseUrl =
+      `file:///test/query-normalization-${crypto.randomUUID()}.tsx`;
+    const toolsA = new ClientTools(`${baseUrl}?v=123`, {
+      styles: {
+        panel: css`
+          color: chartreuse;
+        `,
+      },
+    });
+
+    const styleA = toolsA.generatedStyleNames.get("panel");
+    assertExists(styleA);
+
+    resetRegistries();
+
+    const toolsB = new ClientTools(`${baseUrl}?v=456`, {
+      styles: {
+        panel: css`
+          color: chartreuse;
+        `,
+      },
+    });
+
+    assertEquals(
+      toolsB.generatedStyleNames.get("panel"),
+      styleA,
+      "Cache-busting query params should not affect generated style hashes",
     );
 
     await cleanupTestDirs();

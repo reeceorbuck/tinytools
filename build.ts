@@ -10,6 +10,7 @@ performance.mark("import:@tinytools/hono-tools/build:start");
 
 import * as esbuild from "esbuild";
 performance.mark("import:esbuild:done");
+import { cache, registeredClientTools } from "./clientTools.ts";
 import { changedHandlerKeys, handlers } from "./clientFunctions.ts";
 performance.mark("import:clientFunctions:done");
 import {
@@ -156,6 +157,8 @@ export async function buildScriptFiles(options: BuildOptions = {}) {
   performance.mark("startup:buildScriptFilesStart");
   performance.mark("buildScriptFiles:begin");
 
+  cache.beginChangeDetectionPass();
+
   // Revalidate all handlers and styles. Since constructors no longer stat
   // source files, we do a full pass here to detect changes and update filenames.
   performance.mark("buildScriptFiles:revalidateStart");
@@ -164,6 +167,17 @@ export async function buildScriptFiles(options: BuildOptions = {}) {
   }
   for (const style of scopedStylesRegistry.values()) {
     style.revalidate();
+  }
+
+  for (const tools of registeredClientTools) {
+    const { oldBundleFilename, newBundleFilename } = tools
+      .refreshStyleAssetMappings();
+    if (
+      oldBundleFilename && newBundleFilename &&
+      oldBundleFilename !== newBundleFilename
+    ) {
+      styleBundleRegistry.delete(oldBundleFilename);
+    }
   }
   performance.mark("buildScriptFiles:revalidateEnd");
 

@@ -296,4 +296,19 @@ export const trackConnectedClients = createMiddleware(async (c, next) => {
   }
 
   await next();
+
+  console.log("Finished processing request for path: ", c.req.path);
+  const redirectedPath = c.res.headers.get("X-spa-redirect");
+  if (redirectedPath) {
+    console.log(
+      "Request has X-spa-redirect header, redirectedPath: ",
+      redirectedPath,
+    );
+    const redirectedPaths = updateStreamPath(
+      sseId,
+      redirectedPath,
+      c.req.path,
+    );
+    console.log("Updated paths after redirect: ", redirectedPaths);
+  }
 });

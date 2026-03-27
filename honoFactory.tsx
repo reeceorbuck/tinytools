@@ -8,6 +8,7 @@
  */
 
 import type { Context, MiddlewareHandler } from "hono";
+import { HTTPException } from "hono/http-exception";
 import type { Child } from "hono/jsx";
 import {
   contextStorage,
@@ -798,6 +799,12 @@ function isImmutablePublicAssetPath(path: string): boolean {
     relativePath.startsWith("styles/");
 }
 
+function isLikelyAssetRequestPath(path: string): boolean {
+  const normalizedPath = path.split("?")[0]?.split("#")[0] ?? "";
+  const lastSegment = normalizedPath.split("/").at(-1) ?? "";
+  return /\.[a-z0-9]{1,8}$/i.test(lastSegment);
+}
+
 /**
  * Create the core middleware array.
  * Sets up static file serving, context storage, tools tracking, and JSX rendering.
@@ -831,9 +838,13 @@ function createCoreMiddleware(
           c.header("Cache-Control", "public, max-age=31536000, immutable");
         }
       },
-      onNotFound: (path, _c) => {
+      onNotFound: (path, c) => {
         if (isImmutablePublicAssetPath(path)) {
           console.error(`Handler or style file not found: ${path}`);
+        }
+
+        if (isLikelyAssetRequestPath(c.req.path)) {
+          throw new HTTPException(404);
         }
       },
     }),

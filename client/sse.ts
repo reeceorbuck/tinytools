@@ -103,3 +103,7 @@ globalThis.addEventListener("visibilitychange", () => {
     console.log("SSE ReadyState: ", sse.readyState);
   }
 });
+
+globalThis.addEventListener("beforeunload", () => {
+  sse.close();
+});

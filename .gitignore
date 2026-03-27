@@ -2,3 +2,4 @@
 dist/
 .test-build-output/
 .test-client-src/
+public/

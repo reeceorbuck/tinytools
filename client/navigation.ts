@@ -7,6 +7,14 @@
 import { processLocalSuspenseTemplates } from "./localRoutes.ts";
 import performFetchAndUpdate from "./performFetchAndUpdate.ts";
 
+function normalizePathname(pathname: string) {
+  if (pathname === "/") {
+    return pathname;
+  }
+
+  return pathname.replace(/\/+$/, "");
+}
+
 function getNavigationMethod(e: NavigateEvent): "get" | "post" {
   if (e.sourceElement instanceof HTMLFormElement) {
     return (e.sourceElement.method || "get").toLowerCase() === "post"
@@ -45,6 +53,18 @@ globalThis.navigation.addEventListener(
           "Navigation no intercept",
         );
         // This return means there will be a full page navigation, instead of intercepting
+        return;
+      }
+
+      const isSameDocumentHashNavigation = normalizePathname(toUrl.pathname) ===
+          normalizePathname(fromUrl.pathname) &&
+        toUrl.search === fromUrl.search &&
+        toUrl.hash !== "";
+      // && toUrl.hash !== fromUrl.hash;
+      if (isSameDocumentHashNavigation) {
+        console.log(
+          "Navigation hash-only update, skipping SPA intercept for native anchor behavior.",
+        );
         return;
       }
 
@@ -219,7 +239,13 @@ globalThis.navigation.addEventListener(
               `NAV: Fetching from ${fetchUrl.href}, updating url to ${toUrl.href}`,
             );
 
-            return performFetchAndUpdate(fetchUrl, fromUrl, toUrl, e.formData);
+            return performFetchAndUpdate(
+              fetchUrl,
+              fromUrl,
+              toUrl,
+              e.formData,
+              navigationMethod,
+            );
           } catch (err) {
             console.error("Error in navigation handler: ", err);
           }

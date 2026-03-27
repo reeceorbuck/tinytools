@@ -5,13 +5,21 @@
  */
 
 import {
-  buildCachedTemplateUpdateBatches,
+  applyIncomingToCachedTemplates,
+  CACHE_ID_ATTR,
+  captureOutgoingRouteState,
+  ensureElementCacheId,
+  establishActiveRouteTemplateReferences,
   LOCAL_TEMPLATE_SOURCE_ATTR,
-  snapshotRouteFromLiveDom,
 } from "./routeCache.ts";
 
 export interface ProcessIncomingHtmlOptions {
   cacheCurrentPath?: string;
+  activeRoutePath?: string;
+  activeRouteRegistrations?: Array<{
+    pathname: string;
+    redirectTo?: string;
+  }>;
   updateCachedTemplates?: boolean;
 }
 
@@ -22,13 +30,26 @@ export function processIncomingHtml(
 ) {
   console.log("incoming fragment: ", fragment);
   const children = Array.from(fragment.children);
-  const cachedTemplateUpdates =
-    scope === document && options.updateCachedTemplates
-      ? buildCachedTemplateUpdateBatches(children)
-      : [];
+  if (scope === document && options.updateCachedTemplates) {
+    applyIncomingToCachedTemplates(children);
+  }
 
   if (scope === document && options.cacheCurrentPath) {
-    snapshotRouteFromLiveDom(options.cacheCurrentPath, children, scope);
+    captureOutgoingRouteState(options.cacheCurrentPath, scope);
+  }
+
+  if (scope === document) {
+    const registrations = options.activeRouteRegistrations ??
+      (options.activeRoutePath ? [{ pathname: options.activeRoutePath }] : []);
+
+    for (const registration of registrations) {
+      establishActiveRouteTemplateReferences(
+        registration.pathname,
+        children,
+        scope,
+        { redirectTo: registration.redirectTo },
+      );
+    }
   }
 
   children.forEach((partial) => {
@@ -59,6 +80,9 @@ export function processIncomingHtml(
         popup.showModal();
       }
       // This should only be hono suspense templates coming in as they stream, nothing else!
+      if (partial.id) {
+        ensureElementCacheId(partial);
+      }
       document.body.appendChild(partial);
       return;
     }
@@ -89,6 +113,11 @@ export function processIncomingHtml(
           console.log(
             `Replacing child with id ${partial.id} and tag ${partial.tagName}, child length: ${partial.children.length}`,
           );
+          const cacheId = partial.getAttribute(CACHE_ID_ATTR) ||
+            existing.getAttribute(CACHE_ID_ATTR) ||
+            ensureElementCacheId(existing);
+          partial.setAttribute(CACHE_ID_ATTR, cacheId);
+          existing.setAttribute(CACHE_ID_ATTR, cacheId);
           const templateSource = partial.getAttribute(
             LOCAL_TEMPLATE_SOURCE_ATTR,
           );
@@ -105,6 +134,10 @@ export function processIncomingHtml(
           });
         } else {
           console.log(`Replacing child with id ${partial.id}`);
+          const cacheId = partial.getAttribute(CACHE_ID_ATTR) ||
+            existing.getAttribute(CACHE_ID_ATTR) ||
+            ensureElementCacheId(existing);
+          partial.setAttribute(CACHE_ID_ATTR, cacheId);
           existing.replaceWith(partial);
         }
         break;
@@ -228,10 +261,4 @@ export function processIncomingHtml(
       }
     }
   });
-
-  if (scope === document) {
-    cachedTemplateUpdates.forEach(({ template, fragment }) => {
-      processIncomingHtml(fragment, template.content);
-    });
-  }
 }
