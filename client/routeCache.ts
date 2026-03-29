@@ -4,6 +4,37 @@ export const CACHE_ID_ATTR = "data-cache-id";
 export const SPA_REDIRECT_ATTR = "data-spa-redirect";
 export const LOCAL_TEMPLATE_SOURCE_ATTR =
   "data-tinytools-local-template-source";
+const ACTIVE_ROUTE_CACHE_PATH_ATTR =
+  "data-tinytools-active-route-cache-path";
+
+function normalizeCachePath(pathname: string) {
+  if (!pathname) {
+    return pathname;
+  }
+
+  if (pathname === "/") {
+    return pathname;
+  }
+
+  return pathname.replace(/\/+$/, "");
+}
+
+export function setActiveRouteCachePath(pathname: string) {
+  const normalizedPath = normalizeCachePath(pathname);
+  if (!normalizedPath) {
+    return;
+  }
+
+  document.documentElement?.setAttribute(
+    ACTIVE_ROUTE_CACHE_PATH_ATTR,
+    normalizedPath,
+  );
+}
+
+export function getActiveRouteCachePath(fallbackPathname: string) {
+  return document.documentElement?.getAttribute(ACTIVE_ROUTE_CACHE_PATH_ATTR) ??
+    normalizeCachePath(fallbackPathname);
+}
 
 function escapeId(id: string): string {
   if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
@@ -42,6 +73,70 @@ function clearTemplateContent(template: HTMLTemplateElement) {
   while (template.content.firstChild) {
     template.content.firstChild.remove();
   }
+}
+
+function isSuspenseTransientId(id: string) {
+  return /^suspended-\d+$/i.test(id);
+}
+
+function shouldTrackElementForRouteCache(
+  element: Element,
+) {
+  if (!element.id) {
+    return false;
+  }
+
+  if (isSuspenseTransientId(element.id)) {
+    return false;
+  }
+
+  return true;
+}
+
+function getStableAncestorForSuspenseElement(
+  suspenseElement: Element,
+): Element | null {
+  const ancestorWithId = suspenseElement.parentElement?.closest("[id]");
+  if (!(ancestorWithId instanceof Element)) {
+    return null;
+  }
+
+  if (!ancestorWithId.id || isSuspenseTransientId(ancestorWithId.id)) {
+    return null;
+  }
+
+  return ancestorWithId;
+}
+
+function deriveCacheableElementsFromSuspense(
+  incomingElements: readonly Element[],
+  scope: ParentNode,
+) {
+  const seen = new Set<string>();
+  const derived: Element[] = [];
+
+  for (const element of incomingElements) {
+    if (!element.id || !isSuspenseTransientId(element.id)) {
+      continue;
+    }
+
+    const existingSuspenseElement = findElementInScope(scope, element.id);
+    if (!(existingSuspenseElement instanceof Element)) {
+      continue;
+    }
+
+    const stableAncestor = getStableAncestorForSuspenseElement(
+      existingSuspenseElement,
+    );
+    if (!stableAncestor?.id || seen.has(stableAncestor.id)) {
+      continue;
+    }
+
+    seen.add(stableAncestor.id);
+    derived.push(stableAncestor);
+  }
+
+  return derived;
 }
 
 export function createCacheId(prefix = "ttc") {
@@ -143,20 +238,38 @@ export function establishActiveRouteTemplateReferences(
   } else {
     template.removeAttribute(SPA_REDIRECT_ATTR);
   }
-  clearTemplateContent(template);
 
   if (options.redirectTo) {
+    clearTemplateContent(template);
     // Redirect aliases are metadata-only: no parked refs or child HTML.
     ensureRouteCacheContainer().prepend(template);
     return;
   }
 
-  for (const element of incomingElements) {
-    if (!element.id) {
-      continue;
-    }
+  let cacheableElements = incomingElements.filter((element) =>
+    shouldTrackElementForRouteCache(element)
+  );
 
-    const existing = findElementInScope(scope, element.id);
+  if (cacheableElements.length === 0) {
+    cacheableElements = deriveCacheableElementsFromSuspense(
+      incomingElements,
+      scope,
+    );
+  }
+
+  if (cacheableElements.length === 0) {
+    // Streaming suspense chunks often contain only transient suspended-* markers.
+    // Keep existing route refs untouched when no stable mapping can be derived.
+    ensureRouteCacheContainer().prepend(template);
+    return;
+  }
+
+  clearTemplateContent(template);
+
+  for (const element of cacheableElements) {
+    const elementId = element.id;
+
+    const existing = findElementInScope(scope, elementId);
     const cacheId = element.getAttribute(CACHE_ID_ATTR) ||
       (existing instanceof Element
         ? existing.getAttribute(CACHE_ID_ATTR)
@@ -164,7 +277,7 @@ export function establishActiveRouteTemplateReferences(
       ensureElementCacheId(element);
 
     element.setAttribute(CACHE_ID_ATTR, cacheId);
-    upsertRouteCacheReference(template, element.id, cacheId);
+    upsertRouteCacheReference(template, elementId, cacheId);
   }
 
   ensureRouteCacheContainer().prepend(template);

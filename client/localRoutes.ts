@@ -124,8 +124,12 @@ export function processLocalSuspenseTemplates(
   formData: FormData | null,
   currentPathname?: string,
   requestMethod = formData ? "post" : "get",
+  options: {
+    allowRuntimeCache?: boolean;
+  } = {},
 ) {
   const method = requestMethod.toLowerCase();
+  const allowRuntimeCache = options.allowRuntimeCache ?? true;
   let block = false;
 
   const targetPathname = destinationUrl.pathname;
@@ -135,6 +139,10 @@ export function processLocalSuspenseTemplates(
   );
   const templates = getOrderedLocalRouteTemplates();
   for (const template of templates) {
+    if (isRuntimeCachedRouteTemplate(template) && !allowRuntimeCache) {
+      continue;
+    }
+
     const rawPattern = template.getAttribute("path");
     if (!rawPattern) continue;
     const rawMethod = template.getAttribute("method") || "get";
@@ -168,6 +176,7 @@ export function processLocalSuspenseTemplates(
         ? getCachedRouteTemplate(redirectPathname)
         : null;
       if (
+        allowRuntimeCache &&
         redirectedTemplate &&
         isRuntimeCachedRouteTemplate(redirectedTemplate) &&
         redirectedTemplate.content.childElementCount > 0

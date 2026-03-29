@@ -10,6 +10,7 @@ import {
   captureOutgoingRouteState,
   ensureElementCacheId,
   establishActiveRouteTemplateReferences,
+  setActiveRouteCachePath,
   LOCAL_TEMPLATE_SOURCE_ATTR,
 } from "./routeCache.ts";
 
@@ -21,6 +22,7 @@ export interface ProcessIncomingHtmlOptions {
     redirectTo?: string;
   }>;
   updateCachedTemplates?: boolean;
+  bypassRouteCache?: boolean;
 }
 
 export function processIncomingHtml(
@@ -30,16 +32,26 @@ export function processIncomingHtml(
 ) {
   console.log("incoming fragment: ", fragment);
   const children = Array.from(fragment.children);
-  if (scope === document && options.updateCachedTemplates) {
+  if (
+    scope === document &&
+    options.updateCachedTemplates &&
+    !options.bypassRouteCache
+  ) {
     applyIncomingToCachedTemplates(children);
   }
 
-  if (scope === document && options.cacheCurrentPath) {
+  if (scope === document && options.cacheCurrentPath && !options.bypassRouteCache) {
     captureOutgoingRouteState(options.cacheCurrentPath, scope);
   }
 
   if (scope === document) {
-    const registrations = options.activeRouteRegistrations ??
+    if (options.activeRoutePath && !options.bypassRouteCache) {
+      setActiveRouteCachePath(options.activeRoutePath);
+    }
+
+    const registrations = options.bypassRouteCache
+      ? []
+      : options.activeRouteRegistrations ??
       (options.activeRoutePath ? [{ pathname: options.activeRoutePath }] : []);
 
     for (const registration of registrations) {

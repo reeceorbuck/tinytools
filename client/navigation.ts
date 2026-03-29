@@ -6,6 +6,7 @@
 
 import { processLocalSuspenseTemplates } from "./localRoutes.ts";
 import performFetchAndUpdate from "./performFetchAndUpdate.ts";
+import { getActiveRouteCachePath } from "./routeCache.ts";
 
 function normalizePathname(pathname: string) {
   if (pathname === "/") {
@@ -32,9 +33,45 @@ function getNavigationMethod(e: NavigateEvent): "get" | "post" {
   return e.formData ? "post" : "get";
 }
 
+function hasTruthyNoCacheAttr(element: Element | null) {
+  if (!element || !element.hasAttribute("data-no-cache")) {
+    return false;
+  }
+
+  const rawValue = element.getAttribute("data-no-cache");
+  if (rawValue === null || rawValue === "") {
+    return true;
+  }
+
+  return rawValue.toLowerCase() !== "false";
+}
+
+function getNavigationSourceForm(
+  sourceElement: EventTarget | null,
+): HTMLFormElement | null {
+  if (sourceElement instanceof HTMLFormElement) {
+    return sourceElement;
+  }
+
+  if (sourceElement && "form" in sourceElement) {
+    return (sourceElement as HTMLInputElement | HTMLButtonElement).form;
+  }
+
+  return null;
+}
+
+function shouldBypassRouteCache(e: NavigateEvent) {
+  if (e.sourceElement instanceof Element && hasTruthyNoCacheAttr(e.sourceElement)) {
+    return true;
+  }
+
+  const sourceForm = getNavigationSourceForm(e.sourceElement);
+  return hasTruthyNoCacheAttr(sourceForm);
+}
+
 globalThis.navigation.addEventListener(
   "navigate",
-  async (e) => {
+  (e) => {
     try {
       const fromUrl = new URL(globalThis.location.href);
       const toUrl = new URL(e.destination.url);
@@ -70,25 +107,29 @@ globalThis.navigation.addEventListener(
 
       console.log("e.sourceElement: ", e.sourceElement);
 
-      const partialAttr = (e.sourceElement instanceof HTMLFormElement
-        ? e.sourceElement
-        : e.sourceElement && "form" in e.sourceElement
-        ? (e.sourceElement as HTMLInputElement | HTMLButtonElement).form
-        : null)?.getAttribute("data-nav-partial") ??
-        e.sourceElement?.getAttribute("data-nav-partial");
+      const partialAttr = e.sourceElement?.getAttribute("data-nav-partial") ??
+        (e.sourceElement instanceof HTMLFormElement
+          ? e.sourceElement
+          : e.sourceElement && "form" in e.sourceElement
+          ? (e.sourceElement as HTMLInputElement | HTMLButtonElement).form
+          : null)?.getAttribute("data-nav-partial");
       console.log("Found data-nav-partial attribute: ", partialAttr);
 
       if (partialAttr) {
-        // Then actually navigate to the partial url
-        // const partialPath = e.sourceElement.getAttribute("data-nav-partial");
-        // console.log("Navigating to partial path: ", partialPath);
-        // if (!partialPath) {
-        //   throw new Error("data-nav-partial has no value");
-        // }
-        fetchUrl.pathname = partialAttr;
+        const partialUrl = new URL(partialAttr, toUrl.href);
+        if (!partialUrl.search && toUrl.search) {
+          partialUrl.search = toUrl.search;
+        }
+        fetchUrl.pathname = partialUrl.pathname;
+        fetchUrl.search = partialUrl.search;
+        fetchUrl.hash = partialUrl.hash;
         console.log("orginal destination url: ", e.destination.url);
       }
       console.log("New Navigation event: ", e);
+      const bypassRouteCache = shouldBypassRouteCache(e);
+      if (bypassRouteCache) {
+        console.log("Route cache bypass enabled via data-no-cache");
+      }
 
       // if (
       //   e.formData ||
@@ -203,7 +244,10 @@ globalThis.navigation.addEventListener(
           try {
             console.log("In navigation handler for fetchUrl: ", fetchUrl.href);
             const navigationMethod = getNavigationMethod(e);
-            const localRouteUrl = navigationMethod === "get" ? toUrl : fetchUrl;
+            const localRouteUrl = fetchUrl;
+            const cacheCurrentPath = navigationMethod === "get"
+              ? getActiveRouteCachePath(fromUrl.pathname)
+              : undefined;
             if (e.info?.onlyUpdateUrl) {
               console.log(
                 "Navigation event onlyUpdateUrl, no fetch performed.",
@@ -215,8 +259,9 @@ globalThis.navigation.addEventListener(
               const block = processLocalSuspenseTemplates(
                 localRouteUrl,
                 e.formData ?? null,
-                fromUrl.pathname,
+                cacheCurrentPath,
                 navigationMethod,
+                { allowRuntimeCache: !bypassRouteCache },
               );
               if (block) {
                 console.log(
@@ -245,6 +290,7 @@ globalThis.navigation.addEventListener(
               toUrl,
               e.formData,
               navigationMethod,
+              { bypassRouteCache },
             );
           } catch (err) {
             console.error("Error in navigation handler: ", err);

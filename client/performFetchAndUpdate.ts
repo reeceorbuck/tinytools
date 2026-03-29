@@ -5,6 +5,11 @@
  */
 
 import { processIncomingData } from "./processIncomingData.ts";
+import { getActiveRouteCachePath } from "./routeCache.ts";
+
+interface PerformFetchAndUpdateOptions {
+  bypassRouteCache?: boolean;
+}
 
 export async function performFetchAndUpdate(
   destinationUrl: URL,
@@ -12,6 +17,7 @@ export async function performFetchAndUpdate(
   toUrl: URL,
   formData?: FormData | null,
   requestMethod: "get" | "post" = formData ? "post" : "get",
+  options: PerformFetchAndUpdateOptions = {},
 ) {
   const method = requestMethod.toLowerCase() === "post" ? "post" : "get";
   console.log(
@@ -32,7 +38,7 @@ export async function performFetchAndUpdate(
   }
 
   const spaRedirect = response.headers.get("X-spa-redirect");
-  let activeRoutePathname = toUrl.pathname;
+  let activeRoutePathname = destinationUrl.pathname;
   let canonicalRoutePath = "";
   if (spaRedirect) {
     console.log("Found X-spa-redirect header, navigating to: ", spaRedirect);
@@ -70,15 +76,15 @@ export async function performFetchAndUpdate(
 
   const activeRouteRegistrations = method === "get"
     ? [
-      canonicalRoutePath && canonicalRoutePath !== toUrl.pathname
+      canonicalRoutePath && canonicalRoutePath !== destinationUrl.pathname
         ? {
-          pathname: toUrl.pathname,
+          pathname: destinationUrl.pathname,
           redirectTo: canonicalRoutePath,
         }
         : {
-          pathname: toUrl.pathname,
+          pathname: destinationUrl.pathname,
         },
-      canonicalRoutePath && canonicalRoutePath !== toUrl.pathname
+      canonicalRoutePath && canonicalRoutePath !== destinationUrl.pathname
         ? {
           pathname: activeRoutePathname,
         }
@@ -89,9 +95,16 @@ export async function performFetchAndUpdate(
     : undefined;
 
   processIncomingData(response, {
-    cacheCurrentPath: method === "get" ? fromUrl.pathname : undefined,
-    activeRoutePath: method === "get" ? activeRoutePathname : undefined,
-    activeRouteRegistrations,
+    cacheCurrentPath: method === "get" && !options.bypassRouteCache
+      ? getActiveRouteCachePath(fromUrl.pathname)
+      : undefined,
+    activeRoutePath: method === "get" && !options.bypassRouteCache
+      ? activeRoutePathname
+      : undefined,
+    activeRouteRegistrations: options.bypassRouteCache
+      ? undefined
+      : activeRouteRegistrations,
+    bypassRouteCache: options.bypassRouteCache,
   });
 }
 
