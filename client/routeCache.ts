@@ -4,8 +4,7 @@ export const CACHE_ID_ATTR = "data-cache-id";
 export const SPA_REDIRECT_ATTR = "data-spa-redirect";
 export const LOCAL_TEMPLATE_SOURCE_ATTR =
   "data-tinytools-local-template-source";
-const ACTIVE_ROUTE_CACHE_PATH_ATTR =
-  "data-tinytools-active-route-cache-path";
+const ACTIVE_ROUTE_CACHE_PATH_ATTR = "data-tinytools-active-route-cache-path";
 
 function normalizeCachePath(pathname: string) {
   if (!pathname) {

@@ -10,8 +10,8 @@ import {
   captureOutgoingRouteState,
   ensureElementCacheId,
   establishActiveRouteTemplateReferences,
-  setActiveRouteCachePath,
   LOCAL_TEMPLATE_SOURCE_ATTR,
+  setActiveRouteCachePath,
 } from "./routeCache.ts";
 
 export interface ProcessIncomingHtmlOptions {
@@ -40,7 +40,9 @@ export function processIncomingHtml(
     applyIncomingToCachedTemplates(children);
   }
 
-  if (scope === document && options.cacheCurrentPath && !options.bypassRouteCache) {
+  if (
+    scope === document && options.cacheCurrentPath && !options.bypassRouteCache
+  ) {
     captureOutgoingRouteState(options.cacheCurrentPath, scope);
   }
 
@@ -52,7 +54,9 @@ export function processIncomingHtml(
     const registrations = options.bypassRouteCache
       ? []
       : options.activeRouteRegistrations ??
-      (options.activeRoutePath ? [{ pathname: options.activeRoutePath }] : []);
+        (options.activeRoutePath
+          ? [{ pathname: options.activeRoutePath }]
+          : []);
 
     for (const registration of registrations) {
       establishActiveRouteTemplateReferences(

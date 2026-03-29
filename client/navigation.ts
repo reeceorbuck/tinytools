@@ -61,7 +61,9 @@ function getNavigationSourceForm(
 }
 
 function shouldBypassRouteCache(e: NavigateEvent) {
-  if (e.sourceElement instanceof Element && hasTruthyNoCacheAttr(e.sourceElement)) {
+  if (
+    e.sourceElement instanceof Element && hasTruthyNoCacheAttr(e.sourceElement)
+  ) {
     return true;
   }
 
