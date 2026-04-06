@@ -277,7 +277,7 @@ function getCallerFileUrl(): string | undefined {
   if (!stack) return undefined;
 
   for (const line of stack.split("\n")) {
-    const match = line.match(/(file:\/\/\/.+?):\d+:\d+/);
+    const match = line.match(/(file:\/\/.+?):\d+:\d+/);
     if (!match) continue;
     const url = match[1];
     // Skip frames originating from this module
@@ -1003,7 +1003,7 @@ class ClientToolsClass<
         ? (typeof resolvedSourceFileUrl === "string"
           ? resolvedSourceFileUrl
           : resolvedSourceFileUrl.toString())
-        : "unknown");
+        : "auto-detect-unavailable");
     registeredClientTools.add(this);
 
     if (resolvedOptions) {
