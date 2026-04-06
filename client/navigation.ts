@@ -128,9 +128,22 @@ globalThis.navigation.addEventListener(
         console.log("orginal destination url: ", e.destination.url);
       }
       console.log("New Navigation event: ", e);
-      const bypassRouteCache = shouldBypassRouteCache(e);
+
+      // When a partial nav does not change the current URL path (e.g. a search
+      // that only adds query params), the fetched results should never be stored
+      // in the local route cache — they represent transient partial content, not
+      // the full state of the destination route.
+      const isPartialNavWithoutPathChange = !!partialAttr &&
+        normalizePathname(toUrl.pathname) === normalizePathname(fromUrl.pathname);
+
+      const bypassRouteCache = shouldBypassRouteCache(e) ||
+        isPartialNavWithoutPathChange;
       if (bypassRouteCache) {
-        console.log("Route cache bypass enabled via data-no-cache");
+        console.log(
+          isPartialNavWithoutPathChange
+            ? "Route cache bypass enabled: partial nav without path change"
+            : "Route cache bypass enabled via data-no-cache",
+        );
       }
 
       // if (
@@ -247,7 +260,8 @@ globalThis.navigation.addEventListener(
             console.log("In navigation handler for fetchUrl: ", fetchUrl.href);
             const navigationMethod = getNavigationMethod(e);
             const localRouteUrl = fetchUrl;
-            const cacheCurrentPath = navigationMethod === "get"
+            const cacheCurrentPath = navigationMethod === "get" &&
+              !bypassRouteCache
               ? getActiveRouteCachePath(fromUrl.pathname)
               : undefined;
             if (e.info?.onlyUpdateUrl) {
