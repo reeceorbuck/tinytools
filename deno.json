@@ -15,9 +15,9 @@
     "test": "deno test --check --allow-env --allow-read=./.test-build-output --allow-read=./.test-client-src --allow-read=./client/dist --allow-write=./.test-build-output --allow-write=./.test-client-src --allow-write=./public/styles --allow-write=./public/handlers --allow-run tests/"
   },
   "imports": {
-    "@std/assert": "./.vendor/std-assert/mod.ts",
+    "@std/assert": "jsr:@std/assert@^1.0.19",
     "esbuild": "npm:esbuild@^0.27.4",
-    "hono": "npm:hono@^4.12.8"
+    "hono": "jsr:@hono/hono@^4.12.8"
   },
   "compilerOptions": {
     "jsx": "precompile",

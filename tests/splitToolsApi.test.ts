@@ -133,3 +133,111 @@ Deno.test({
     assertEquals(styled.badge.includes("badge_"), true);
   },
 });
+
+// ============================================================================
+// Tests for auto-detected source file URL (no import.meta.url required)
+// ============================================================================
+
+Deno.test({
+  name:
+    "split tools api - Styles auto-detects source file URL without import.meta.url",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  async fn() {
+    const styles = new Styles({
+      autoPanel: css`
+        color: green;
+      `,
+    });
+
+    const { styled } = await imports(styles);
+    assertEquals(styled.autoPanel.includes("autoPanel_"), true);
+  },
+});
+
+Deno.test({
+  name:
+    "split tools api - Handlers auto-detects source file URL without import.meta.url",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  async fn() {
+    const handlers = new Handlers({
+      autoHandler: function () {
+        return "auto";
+      },
+    });
+
+    const { fn } = await imports(handlers);
+    assertEquals(String(fn.autoHandler).includes("handlers."), true);
+  },
+});
+
+Deno.test({
+  name:
+    "split tools api - Handlers with imports auto-detects source file URL",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  async fn() {
+    const sharedHandlers = new Handlers({
+      autoSharedHandler: function () {
+        return "shared";
+      },
+    });
+
+    const localHandlers = new Handlers({
+      autoLocalHandler: function () {
+        return "local";
+      },
+    }, {
+      imports: [sharedHandlers],
+    });
+
+    const { fn } = await imports(localHandlers);
+    assertEquals(String(fn.autoSharedHandler).includes("handlers."), true);
+    assertEquals(String(fn.autoLocalHandler).includes("handlers."), true);
+  },
+});
+
+Deno.test(
+  "split tools api - Styles with global option auto-detects source file URL",
+  () => {
+    const styles = new Styles({
+      autoReset: css`
+      body {
+        margin: 0;
+      }
+    `,
+    }, { global: true });
+
+    const globalCss = styles.globalStyles[0]?.buildCssContent() ?? "";
+    assertEquals(styles.globalStyles.length, 1);
+    assertEquals(globalCss.includes("@layer global"), true);
+    assertEquals(globalCss.includes("@scope"), false);
+  },
+);
+
+Deno.test({
+  name:
+    "split tools api - Styles with imports auto-detects source file URL",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  async fn() {
+    const baseStyles = new Styles({
+      autoBase: css`
+        color: red;
+      `,
+    });
+
+    const barrelStyles = new Styles({
+      autoButton: css`
+        color: white;
+      `,
+    }, {
+      imports: [baseStyles],
+    });
+
+    const { styled } = await imports(barrelStyles);
+    assertEquals(styled.autoButton.includes("autoButton_"), true);
+    assertEquals(styled.autoBase.includes("autoBase_"), true);
+  },
+});

@@ -69,7 +69,7 @@ interface ERROR_ClientFunction_not_activated___Access_from_c_var_tools_clientFun
  * @example
  * ```ts
  * // Define tools
- * const tools = new ClientTools(import.meta.url, {
+ * const tools = new ClientTools({
  *   functions: {
  *     handleClick() {
  *       console.log("clicked");

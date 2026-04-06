@@ -15,7 +15,7 @@ performance.mark("import:@tinytools/hono-tools:start");
  *   color: white;
  * `;
  *
- * const tools = new ClientTools(import.meta.url, {
+ * const tools = new ClientTools({
  *   functions: {
  *     handleClick(e: MouseEvent) {
  *       console.log("Clicked!", e);

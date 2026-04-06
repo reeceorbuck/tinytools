@@ -301,6 +301,76 @@ Deno.test("Runtime - multiple handlers all produce valid strings", () => {
 });
 
 // ============================================================================
+// Test Suite: Auto-detected source file URL (no import.meta.url)
+// ============================================================================
+
+Deno.test("Runtime - ClientTools without import.meta.url produces valid handler strings", () => {
+  const tools = new ClientTools({
+    functions: {
+      autoDetectedHandler(this: HTMLElement, e: MouseEvent) {
+        console.log("auto-detected", e);
+      },
+    },
+  });
+
+  const app = createApp(tools);
+
+  app.get("/test", (c) => {
+    const { fn } = c.var.tools;
+    assertValidHandlerString(fn.autoDetectedHandler, "autoDetectedHandler");
+    return c.text("OK");
+  });
+
+  assertExists(app);
+});
+
+Deno.test("Runtime - ClientTools without import.meta.url produces style class names", () => {
+  const autoStyle = css`
+    color: teal;
+  `;
+  const tools = new ClientTools({
+    styles: { autoStyle },
+  });
+
+  const app = createApp(tools);
+
+  app.get("/test", (c) => {
+    const { styled } = c.var.tools;
+    assertEquals(typeof styled.autoStyle, "string");
+    assertExists(styled.autoStyle, "Style class name should be defined");
+    return c.text("OK");
+  });
+
+  assertExists(app);
+});
+
+Deno.test("Runtime - ClientTools without import.meta.url works with both functions and styles", () => {
+  const combinedStyle = css`
+    background: purple;
+  `;
+  const tools = new ClientTools({
+    functions: {
+      autoCombinedHandler() {
+        console.log("combined");
+      },
+    },
+    styles: { combinedStyle },
+  });
+
+  const app = createApp(tools);
+
+  app.get("/test", (c) => {
+    const { fn, styled } = c.var.tools;
+    assertValidHandlerString(fn.autoCombinedHandler, "autoCombinedHandler");
+    assertEquals(typeof styled.combinedStyle, "string");
+    assertExists(styled.combinedStyle, "Style class name should be defined");
+    return c.text("OK");
+  });
+
+  assertExists(app);
+});
+
+// ============================================================================
 // Test Suite: extendWithImports() - Runtime behavior
 // ============================================================================
 

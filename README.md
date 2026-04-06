@@ -57,7 +57,7 @@ const buttonStyle = css`
   }
 `;
 
-const tools = new ClientTools(import.meta.url, {
+const tools = new ClientTools({
   functions: {
     handleClick(this: HTMLButtonElement, e: MouseEvent) {
       console.log("Clicked!", e);
@@ -171,7 +171,7 @@ components.
 import { Hono } from "hono";
 import { ClientTools, tiny } from "@tinytools/hono-tools";
 
-const tools = new ClientTools(import.meta.url, {
+const tools = new ClientTools({
   functions: {
     handleClick() {
       console.log("clicked");
@@ -207,7 +207,7 @@ handlers and styles in a single middleware call.
 import { Hono } from "hono";
 import { ClientTools, tiny } from "@tinytools/hono-tools";
 
-const globalTools = new ClientTools(import.meta.url, {
+const globalTools = new ClientTools({
   functions: {
     globalHandler() {
       console.log("global");
@@ -240,7 +240,7 @@ import { ClientTools, tiny, withAncestors } from "@tinytools/hono-tools";
 import type { globalTools } from "./main.tsx";
 import type { parentTools } from "./parent.tsx";
 
-const localTools = new ClientTools(import.meta.url, {
+const localTools = new ClientTools({
   functions: {
     localHandler() {
       console.log("local");
@@ -278,7 +278,7 @@ const myStyle = css`
 `;
 
 // ✅ Correct: declared at module level
-const tools = new ClientTools(import.meta.url, {
+const tools = new ClientTools({
   functions: {
     handlerName(this: HTMLElement, e: Event) {
       // Handler code runs in the browser
@@ -288,7 +288,7 @@ const tools = new ClientTools(import.meta.url, {
 });
 
 // Import handlers and styles from other files
-const combined = new ClientTools(import.meta.url, {
+const combined = new ClientTools({
   imports: [externalTools],
   functions: {
     localHandler() {
@@ -325,7 +325,7 @@ There are two different patterns to follow:
 ```ts
 import { ClientTools } from "@tinytools/hono-tools";
 
-const externalTools = new ClientTools(import.meta.url, {
+const externalTools = new ClientTools({
   functions: {
     externalFunction(msg: string) {
       console.log("external", msg);
@@ -336,7 +336,7 @@ const externalTools = new ClientTools(import.meta.url, {
 // Module-level reference for composition inside another client function
 const { externalFunction } = externalTools.getFunctionReferences;
 
-export const localTools = new ClientTools(import.meta.url, {
+export const localTools = new ClientTools({
   // Required when localTools calls functions from externalTools
   imports: [externalTools],
   functions: {
@@ -358,7 +358,7 @@ const sharedHandler = function (this: HTMLElement, e: MouseEvent) {
   console.log("shared", this, e);
 };
 
-export const tools = new ClientTools(import.meta.url, {
+export const tools = new ClientTools({
   functions: {
     sharedHandler,
     nestedHandler: function (this: HTMLElement, e: MouseEvent) {
@@ -388,7 +388,7 @@ middleware. Returns a tools object with both parent and local tools.
 
 ```ts
 // ✅ Declare at module level - registered once at startup
-const singleRouteTools = new ClientTools(import.meta.url, {
+const singleRouteTools = new ClientTools({
   functions: {
     specialHandler() {
       console.log("special");
@@ -424,7 +424,7 @@ const buttonStyle = css`
 `;
 
 // ✅ Declare at module level
-const componentTools = new ClientTools(import.meta.url, {
+const componentTools = new ClientTools({
   functions: {
     buttonClick() {
       console.log("clicked");
@@ -551,7 +551,7 @@ const { fn } = c.var.tools;
 <button onClick={fn.handleClick}>Click</button>;
 
 // ❌ Error - functions from tools are not activated until used via middleware
-const tools = new ClientTools(import.meta.url, {
+const tools = new ClientTools({
   functions: { fn() {} },
 });
 <button onClick={tools.fn}>Click</button>; // Type error!
