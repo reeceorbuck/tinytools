@@ -20,7 +20,14 @@ import {
 import { Hono } from "hono";
 import { getClientFileName } from "../client/dist/manifest.ts";
 import { tiny } from "../honoFactory.tsx";
-import { GENERATED_HANDLER_HASH_LENGTH, GENERATED_STYLE_HASH_LENGTH, generateHandlerHash, generateStyleHash, Handlers, Styles } from "../clientTools.ts";
+import {
+  GENERATED_HANDLER_HASH_LENGTH,
+  GENERATED_STYLE_HASH_LENGTH,
+  generateHandlerHash,
+  generateStyleHash,
+  Handlers,
+  Styles,
+} from "../clientTools.ts";
 import { css } from "../scopedStyles.ts";
 import type { JSX } from "../jsx-runtime.ts";
 
@@ -104,15 +111,15 @@ Deno.test("Runtime - tiny.middleware.core supports separate handler/style hash l
     });
 
     const handlers = new Handlers("file:///tests/hash-length-separate.ts", {
-        saveHandler() {
-          console.log("save");
-        },
-      });
+      saveHandler() {
+        console.log("save");
+      },
+    });
     const tools = new Styles("file:///tests/hash-length-separate.ts", {
-        panel: css`
-          color: red;
-        `,
-      });
+      panel: css`
+        color: red;
+      `,
+    });
 
     const handlerFilename = handlers._handlerFilenames.get("saveHandler") ?? "";
     const styleClassName = tools.generatedStyleNames.get("panel") ?? "";
@@ -149,7 +156,7 @@ Deno.test("Runtime - startup cache hydration avoids reset for same style hash le
     "",
     "new Handlers(import.meta.url, {",
     "    cacheHydrationTestHandler() {",
-    '      console.log(\"cache-hydration-test\");',
+    '      console.log("cache-hydration-test");',
     "    },",
     "});",
     "new Styles(import.meta.url, {",
@@ -242,10 +249,10 @@ Deno.test("Runtime - AssetTags renders versioned package client asset URLs", asy
 
 Deno.test("Runtime - defineFunction produces valid handler string", () => {
   const tools = new Handlers(import.meta.url, {
-      testHandler(this: HTMLElement, e: MouseEvent) {
-        console.log("clicked", e);
-      },
-    });
+    testHandler(this: HTMLElement, e: MouseEvent) {
+      console.log("clicked", e);
+    },
+  });
 
   const app = createApp(tools);
 
@@ -260,16 +267,16 @@ Deno.test("Runtime - defineFunction produces valid handler string", () => {
 
 Deno.test("Runtime - multiple handlers all produce valid strings", () => {
   const tools = new Handlers(import.meta.url, {
-      handlerA() {
-        console.log("A");
-      },
-      handlerB() {
-        console.log("B");
-      },
-      handlerC() {
-        console.log("C");
-      },
-    });
+    handlerA() {
+      console.log("A");
+    },
+    handlerB() {
+      console.log("B");
+    },
+    handlerC() {
+      console.log("C");
+    },
+  });
 
   const app = createApp(tools);
 
@@ -292,16 +299,16 @@ Deno.test("Runtime - multiple handlers all produce valid strings", () => {
 
 Deno.test("Runtime - extend() parent handlers return valid handler strings", () => {
   const parentTools = new Handlers(import.meta.url, {
-      parentHandler(this: HTMLElement, e: MouseEvent) {
-        console.log("Parent handler", e);
-      },
-    });
+    parentHandler(this: HTMLElement, e: MouseEvent) {
+      console.log("Parent handler", e);
+    },
+  });
 
   const componentTools = new Handlers(import.meta.url, {
-      localHandler(this: HTMLElement, e: MouseEvent) {
-        console.log("Local handler", e);
-      },
-    });
+    localHandler(this: HTMLElement, e: MouseEvent) {
+      console.log("Local handler", e);
+    },
+  });
 
   const app = createApp(parentTools);
 
@@ -320,22 +327,22 @@ Deno.test("Runtime - extend() parent handlers return valid handler strings", () 
 
 Deno.test("Runtime - extendWithImports() multiple parent handlers all return valid strings", () => {
   const parentTools = new Handlers(import.meta.url, {
-      handlerA() {
-        console.log("A");
-      },
-      handlerB() {
-        console.log("B");
-      },
-      handlerC() {
-        console.log("C");
-      },
-    });
+    handlerA() {
+      console.log("A");
+    },
+    handlerB() {
+      console.log("B");
+    },
+    handlerC() {
+      console.log("C");
+    },
+  });
 
   const componentTools = new Handlers(import.meta.url, {
-      localOnly() {
-        console.log("local");
-      },
-    });
+    localOnly() {
+      console.log("local");
+    },
+  });
 
   const app = createApp(parentTools);
 
@@ -355,22 +362,22 @@ Deno.test("Runtime - extendWithImports() multiple parent handlers all return val
 
 Deno.test("Runtime - extendWithImports() nested calls preserve all handler strings", () => {
   const rootTools = new Handlers(import.meta.url, {
-      rootHandler() {
-        console.log("root");
-      },
-    });
+    rootHandler() {
+      console.log("root");
+    },
+  });
 
   const middleTools = new Handlers(import.meta.url, {
-      middleHandler() {
-        console.log("middle");
-      },
-    });
+    middleHandler() {
+      console.log("middle");
+    },
+  });
 
   const leafTools = new Handlers(import.meta.url, {
-      leafHandler() {
-        console.log("leaf");
-      },
-    });
+    leafHandler() {
+      console.log("leaf");
+    },
+  });
 
   const app = createApp(rootTools);
 
@@ -401,10 +408,10 @@ Deno.test("Runtime - extend() with only local tools (no parent handlers)", () =>
   const parentTools = new Styles(import.meta.url, { parentStyle });
 
   const componentTools = new Handlers(import.meta.url, {
-      localHandler() {
-        console.log("local");
-      },
-    });
+    localHandler() {
+      console.log("local");
+    },
+  });
 
   const app = createApp(parentTools);
 
@@ -425,16 +432,16 @@ Deno.test("Runtime - extend() with only local tools (no parent handlers)", () =>
 
 Deno.test("Runtime - import() imported handlers return valid strings", () => {
   const externalTools = new Handlers(import.meta.url, {
-      externalHandler() {
-        console.log("external");
-      },
-    });
+    externalHandler() {
+      console.log("external");
+    },
+  });
 
   const mainTools = new Handlers(import.meta.url, {
-      localHandler() {
-        console.log("local");
-      },
-    }, { imports: [externalTools] });
+    localHandler() {
+      console.log("local");
+    },
+  }, { imports: [externalTools] });
 
   const app = createApp(mainTools);
 
@@ -455,22 +462,22 @@ Deno.test("Runtime - import() imported handlers return valid strings", () => {
 
 Deno.test("Runtime - import() multiple external tools", () => {
   const externalA = new Handlers(import.meta.url, {
-      handlerFromA() {
-        console.log("A");
-      },
-    });
+    handlerFromA() {
+      console.log("A");
+    },
+  });
 
   const externalB = new Handlers(import.meta.url, {
-      handlerFromB() {
-        console.log("B");
-      },
-    });
+    handlerFromB() {
+      console.log("B");
+    },
+  });
 
   const mainTools = new Handlers(import.meta.url, {
-      mainHandler() {
-        console.log("main");
-      },
-    }, { imports: [externalA, externalB] });
+    mainHandler() {
+      console.log("main");
+    },
+  }, { imports: [externalA, externalB] });
 
   const app = createApp(mainTools);
 
@@ -489,18 +496,18 @@ Deno.test("Runtime - import() multiple external tools", () => {
 
 Deno.test("Runtime - import() throws on duplicate function names", () => {
   const externalTools = new Handlers(import.meta.url, {
-      duplicateName() {
-        console.log("external");
-      },
-    });
+    duplicateName() {
+      console.log("external");
+    },
+  });
 
   assertThrows(
     () => {
       new Handlers(import.meta.url, {
-          duplicateName() {
-            console.log("local");
-          },
-        }, { imports: [externalTools] });
+        duplicateName() {
+          console.log("local");
+        },
+      }, { imports: [externalTools] });
     },
     Error,
     "duplicateName",
@@ -513,22 +520,22 @@ Deno.test("Runtime - import() throws on duplicate function names", () => {
 
 Deno.test("Runtime - import() then extend() preserves all handler strings", () => {
   const externalTools = new Handlers(import.meta.url, {
-      externalHandler() {
-        console.log("external");
-      },
-    });
+    externalHandler() {
+      console.log("external");
+    },
+  });
 
   const parentTools = new Handlers(import.meta.url, {
-      parentHandler() {
-        console.log("parent");
-      },
-    }, { imports: [externalTools] });
+    parentHandler() {
+      console.log("parent");
+    },
+  }, { imports: [externalTools] });
 
   const componentTools = new Handlers(import.meta.url, {
-      componentHandler() {
-        console.log("component");
-      },
-    });
+    componentHandler() {
+      console.log("component");
+    },
+  });
 
   const app = createApp(parentTools);
 
@@ -665,10 +672,10 @@ Deno.test("Runtime - ClientTools rejects reserved styled key mergeClasses", () =
   assertThrows(
     () =>
       new Styles(import.meta.url, {
-          mergeClasses: css`
-            color: blue;
-          `,
-        }),
+        mergeClasses: css`
+          color: blue;
+        `,
+      }),
     Error,
     "Cannot define style 'mergeClasses'",
   );
@@ -680,10 +687,10 @@ Deno.test("Runtime - ClientTools rejects reserved styled key mergeClasses", () =
 
 Deno.test("Runtime - handler strings work in JSX onClick attribute", () => {
   const tools = new Handlers(import.meta.url, {
-      handleClick(this: HTMLElement, e: MouseEvent) {
-        console.log("clicked", e);
-      },
-    });
+    handleClick(this: HTMLElement, e: MouseEvent) {
+      console.log("clicked", e);
+    },
+  });
 
   const app = createApp(tools);
 
@@ -710,16 +717,16 @@ Deno.test("Runtime - handler strings work in JSX onClick attribute", () => {
 
 Deno.test("Runtime - extend() handlers work in JSX attributes", () => {
   const parentTools = new Handlers(import.meta.url, {
-      parentClick(this: HTMLElement, e: MouseEvent) {
-        console.log("parent clicked", e);
-      },
-    });
+    parentClick(this: HTMLElement, e: MouseEvent) {
+      console.log("parent clicked", e);
+    },
+  });
 
   const componentTools = new Handlers(import.meta.url, {
-      localClick(this: HTMLElement, e: MouseEvent) {
-        console.log("local clicked", e);
-      },
-    });
+    localClick(this: HTMLElement, e: MouseEvent) {
+      console.log("local clicked", e);
+    },
+  });
 
   const app = createApp(parentTools);
 
@@ -757,16 +764,16 @@ Deno.test("Runtime - extend() handlers work in JSX attributes", () => {
 Deno.test("Runtime - same handler definition produces consistent filename", () => {
   // Create two tools with the same handler definition
   const tools1 = new Handlers(import.meta.url, {
-      consistentHandler() {
-        console.log("consistent");
-      },
-    });
+    consistentHandler() {
+      console.log("consistent");
+    },
+  });
 
   const tools2 = new Handlers(import.meta.url, {
-      consistentHandler() {
-        console.log("consistent");
-      },
-    });
+    consistentHandler() {
+      console.log("consistent");
+    },
+  });
 
   // Access to populate values (in real usage this happens during request)
   // For this test, we access directly from the tools
@@ -789,13 +796,13 @@ Deno.test("Runtime - same handler definition produces consistent filename", () =
 
 Deno.test("Runtime - different handler names produce different filenames", () => {
   const tools = new Handlers(import.meta.url, {
-      handlerOne() {
-        console.log("one");
-      },
-      handlerTwo() {
-        console.log("two");
-      },
-    });
+    handlerOne() {
+      console.log("one");
+    },
+    handlerTwo() {
+      console.log("two");
+    },
+  });
 
   // Different handler names should produce different handler strings
   assertEquals(
@@ -822,10 +829,10 @@ Deno.test("Runtime - different handler names produce different filenames", () =>
 
 Deno.test("Runtime - extend() with empty component tools", () => {
   const parentTools = new Handlers(import.meta.url, {
-      parentHandler() {
-        console.log("parent");
-      },
-    });
+    parentHandler() {
+      console.log("parent");
+    },
+  });
 
   // Component tools with no handlers or styles
   const emptyTools = new Styles(import.meta.url, {});
@@ -846,16 +853,16 @@ Deno.test("Runtime - extend() with empty component tools", () => {
 
 Deno.test("Runtime - extend() with same handler name in local overrides parent", () => {
   const parentTools = new Handlers(import.meta.url, {
-      sharedName() {
-        console.log("parent");
-      },
-    });
+    sharedName() {
+      console.log("parent");
+    },
+  });
 
   const componentTools = new Handlers(import.meta.url, {
-      sharedName() {
-        console.log("local");
-      },
-    });
+    sharedName() {
+      console.log("local");
+    },
+  });
 
   const app = createApp(parentTools);
 
@@ -880,10 +887,10 @@ Deno.test("Runtime - extend() with same handler name in local overrides parent",
 
 Deno.test("Runtime - accessing non-existent handler returns undefined", () => {
   const tools = new Handlers(import.meta.url, {
-      existingHandler() {
-        console.log("exists");
-      },
-    });
+    existingHandler() {
+      console.log("exists");
+    },
+  });
 
   const app = createApp(tools);
 
@@ -913,16 +920,16 @@ Deno.test("Runtime - accessing non-existent handler returns undefined", () => {
 
 Deno.test("Runtime - extend() produces valid handler strings", () => {
   const parentTools = new Handlers(import.meta.url, {
-      parentHandler() {
-        console.log("parent");
-      },
-    });
+    parentHandler() {
+      console.log("parent");
+    },
+  });
 
   const singleRouteTools = new Handlers(import.meta.url, {
-      routeHandler() {
-        console.log("route");
-      },
-    });
+    routeHandler() {
+      console.log("route");
+    },
+  });
 
   const app = createApp(parentTools);
 

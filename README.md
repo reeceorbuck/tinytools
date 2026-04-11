@@ -130,9 +130,9 @@ export default app;
 > `[data-scope-boundary~="global"]`. The `~=` operator ensures exact token
 > matching, so `global` does not match partial values like `my-global-theme`.
 
-> **⚠️ Important:** Always declare `Handlers` and `Styles` instances at **module level**
-> (outside of route handlers). This ensures handlers and styles are registered
-> once at startup and included in the build. Creating them inside a
+> **⚠️ Important:** Always declare `Handlers` and `Styles` instances at **module
+> level** (outside of route handlers). This ensures handlers and styles are
+> registered once at startup and included in the build. Creating them inside a
 > route handler would re-register them on every request, causing performance
 > issues and build inconsistencies.
 
@@ -160,8 +160,8 @@ each connected client's `sseId` plus recent route paths.
 **`tiny.middleware.webComponents()`** - Enables lifecycle and window-event web
 components.
 
-**`tiny.middleware.globalStyles(...styles)`** - Ensures
-`globalStyles` assets are included on every request.
+**`tiny.middleware.globalStyles(...styles)`** - Ensures `globalStyles` assets
+are included on every request.
 
 **`tiny.middleware.layout(renderFn)`** - Adds a layout wrapper for sub-routes.
 
@@ -259,12 +259,12 @@ export const childRoute = new Hono<
 Separate factories for creating type-safe client-side event handlers and scoped
 CSS styles.
 
-> **\u26a0\ufe0f Always declare at module level** - `Handlers` and `Styles` instances must
-> be created outside of route handlers so they are registered once at startup
-> and included in the build process.
+> **\u26a0\ufe0f Always declare at module level** - `Handlers` and `Styles`
+> instances must be created outside of route handlers so they are registered
+> once at startup and included in the build process.
 
 ```ts
-import { tiny, css } from "@tinytools/hono-tools";
+import { css, tiny } from "@tinytools/hono-tools";
 
 const myStyle = css`
   color: blue;
@@ -305,12 +305,11 @@ Why this is required:
 
 There are two different patterns to follow:
 
-- **Across separate instances**: use
-  `otherTools.getFunctionReferences`, and ensure the calling instance includes
-  the referenced tools in `imports: [...]`.
-- **Within the same `Handlers` instance**: if one handler calls another,
-  declare the referenced function at module scope (outside the constructor) and
-  then assign it into the handlers, instead of only declaring it inline.
+- **Across separate instances**: use `otherTools.getFunctionReferences`, and
+  ensure the calling instance includes the referenced tools in `imports: [...]`.
+- **Within the same `Handlers` instance**: if one handler calls another, declare
+  the referenced function at module scope (outside the constructor) and then
+  assign it into the handlers, instead of only declaring it inline.
 
 ##### Across separate instances (including different files)
 
@@ -367,9 +366,9 @@ app.get("/", async (c) => {
 Extend tools within a route handler for single-route tools that don't need
 middleware. Returns a tools object with both parent and local tools.
 
-> **Note:** The `Handlers`/`Styles` instance must still be declared at module level,
-> outside the route handler. Only the `extendWithImports()` call happens inside
-> the handler.
+> **Note:** The `Handlers`/`Styles` instance must still be declared at module
+> level, outside the route handler. Only the `extendWithImports()` call happens
+> inside the handler.
 
 ```ts
 // ✅ Declare at module level - registered once at startup
@@ -396,8 +395,9 @@ app.get("/special", async (c) => {
 Access tools from within async components (outside of route handlers). This uses
 Hono's context storage to retrieve the current request's tools.
 
-> **Note:** The `Handlers`/`Styles` instance must still be declared at module level.
-> `getTools()` is for accessing tools inside components, not for declaring them.
+> **Note:** The `Handlers`/`Styles` instance must still be declared at module
+> level. `getTools()` is for accessing tools inside components, not for
+> declaring them.
 
 ```tsx
 import { css, getTools, tiny } from "@tinytools/hono-tools";
@@ -419,7 +419,8 @@ const componentStyles = new tiny.Styles(import.meta.url, { buttonStyle });
 function MyButton({ label }: { label: string }) {
   // Access tools from context - works in async components
   const { fn, styled } = getTools().extendWithImports(
-    componentHandlers, componentStyles,
+    componentHandlers,
+    componentStyles,
   );
 
   return (
