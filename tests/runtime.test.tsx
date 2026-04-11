@@ -21,13 +21,13 @@ import { Hono } from "hono";
 import { getClientFileName } from "../client/dist/manifest.ts";
 import { tiny } from "../honoFactory.tsx";
 import {
+  type ClientTools,
   GENERATED_HANDLER_HASH_LENGTH,
   GENERATED_STYLE_HASH_LENGTH,
   generateHandlerHash,
   generateStyleHash,
   Handlers,
   Styles,
-  type ClientTools,
 } from "../clientTools.ts";
 import { css } from "../scopedStyles.ts";
 import type { JSX } from "../jsx-runtime.ts";

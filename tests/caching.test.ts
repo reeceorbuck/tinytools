@@ -52,7 +52,7 @@ async function withPublicFiles<T>(
         currentDir.length >= publicDir.length
       ) {
         const removed = await Deno.remove(currentDir).then(() => true).catch(
-          () => false
+          () => false,
         );
         if (!removed || currentDir === publicDir) {
           break;

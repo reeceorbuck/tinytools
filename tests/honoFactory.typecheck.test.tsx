@@ -26,8 +26,12 @@ type AnyActivatedClientFunction = ActivatedClientFunction<
 // Test Fixtures - Mock tools for testing
 // ============================================================================
 
-const testStyle = css`color: red;`;
-const anotherStyle = css`color: blue;`;
+const testStyle = css`
+  color: red;
+`;
+const anotherStyle = css`
+  color: blue;
+`;
 
 /** Creates mock Handlers with test handlers */
 const mockHandlers = new Handlers(import.meta.url, {
