@@ -258,6 +258,35 @@ export function normalizeSourceFileUrl(
   }
 }
 
+/**
+ * URL of this module, used to filter out library frames from stack traces.
+ * @internal
+ */
+const CLIENTTOOLS_MODULE_URL = import.meta.url;
+
+/**
+ * Auto-detect the caller's file URL by walking the V8 stack trace.
+ * Skips frames from this module (clientTools.ts) so the first external
+ * frame is the user's code.
+ *
+ * @returns The file:// URL of the caller, or undefined if it cannot be determined.
+ * @internal
+ */
+function getCallerFileUrl(): string | undefined {
+  const stack = new Error().stack;
+  if (!stack) return undefined;
+
+  for (const line of stack.split("\n")) {
+    const match = line.match(/(file:\/\/.+?):\d+:\d+/);
+    if (!match) continue;
+    const url = match[1];
+    // Skip frames originating from this module
+    if (url === CLIENTTOOLS_MODULE_URL) continue;
+    return url;
+  }
+  return undefined;
+}
+
 function getFilenameHashFragment(filename: string): string {
   return filename.split("_").at(-1) ?? filename;
 }
@@ -697,11 +726,33 @@ type UnionOfStyles<T extends ClientToolsClass<any, any, any>[]> =
  * This pattern allows `new ClientTools(url, options)` to properly infer types.
  */
 interface ClientToolsConstructor {
-  /** Create an empty ClientTools instance */
+  /** Create an empty ClientTools instance (auto-detects source file URL) */
+  // deno-lint-ignore ban-types
+  new (): ClientToolsClass<{}, {}, {}>;
+
+  /** Create an empty ClientTools instance with explicit source file URL */
   // deno-lint-ignore ban-types
   new (sourceFileUrl: string | URL): ClientToolsClass<{}, {}, {}>;
 
-  /** Create a ClientTools instance with options - types are inferred from the options */
+  /** Create a ClientTools instance with options (auto-detects source file URL) */
+  new <
+    // deno-lint-ignore ban-types
+    TFunctions extends Record<string, AnyFunction> = {},
+    // deno-lint-ignore ban-types
+    TStyles extends Record<string, ScopedStyleInput> = {},
+    // deno-lint-ignore ban-types
+    TGlobalStyles extends Record<string, ScopedStyleInput> = {},
+    // deno-lint-ignore no-explicit-any
+    TImports extends ClientToolsClass<any, any, any>[] = [],
+  >(
+    options: ClientToolsOptions<TFunctions, TStyles, TGlobalStyles, TImports>,
+  ): ClientToolsClass<
+    TFunctions & UnionOfFunctions<TImports>,
+    TStyles & UnionOfStyles<TImports>,
+    TGlobalStyles
+  >;
+
+  /** Create a ClientTools instance with explicit source file URL and options */
   new <
     // deno-lint-ignore ban-types
     TFunctions extends Record<string, AnyFunction> = {},
@@ -722,12 +773,35 @@ interface ClientToolsConstructor {
 }
 
 interface HandlersConstructor {
+  /** Create Handlers with auto-detected source file URL */
+  // deno-lint-ignore ban-types
+  new <TFunctions extends Record<string, AnyFunction> = {}>(
+    functions: TFunctions,
+  ): ClientToolsClass<TFunctions, {}, {}>;
+
+  /** Create Handlers with auto-detected source file URL and options */
+  new <
+    // deno-lint-ignore ban-types
+    TFunctions extends Record<string, AnyFunction> = {},
+    // deno-lint-ignore no-explicit-any
+    TImports extends AnyClientToolsInstance[] = [],
+  >(
+    functions: TFunctions,
+    options: HandlersOptions<TImports>,
+  ): ClientToolsClass<
+    TFunctions & UnionOfFunctions<TImports>,
+    UnionOfStyles<TImports>,
+    {}
+  >;
+
+  /** Create Handlers with explicit source file URL */
   // deno-lint-ignore ban-types
   new <TFunctions extends Record<string, AnyFunction> = {}>(
     sourceFileUrl: string | URL,
     functions: TFunctions,
   ): ClientToolsClass<TFunctions, {}, {}>;
 
+  /** Create Handlers with explicit source file URL and options */
   new <
     // deno-lint-ignore ban-types
     TFunctions extends Record<string, AnyFunction> = {},
@@ -745,6 +819,45 @@ interface HandlersConstructor {
 }
 
 interface StylesConstructor {
+  /** Create Styles with auto-detected source file URL */
+  new <
+    // deno-lint-ignore ban-types
+    TStyles extends Record<string, ScopedStyleInput> = {},
+  >(
+    styles: ForbidReservedStyledKeys<TStyles>,
+  ): ClientToolsClass<{}, TStyles, {}>;
+
+  /** Create Styles with auto-detected source file URL and options */
+  new <
+    // deno-lint-ignore ban-types
+    TStyles extends Record<string, ScopedStyleInput> = {},
+    // deno-lint-ignore no-explicit-any
+    TImports extends AnyClientToolsInstance[] = [],
+  >(
+    styles: ForbidReservedStyledKeys<TStyles>,
+    options: { global: true; imports?: TImports },
+  ): ClientToolsClass<
+    UnionOfFunctions<TImports>,
+    UnionOfStyles<TImports>,
+    TStyles
+  >;
+
+  /** Create Styles with auto-detected source file URL and non-global options */
+  new <
+    // deno-lint-ignore ban-types
+    TStyles extends Record<string, ScopedStyleInput> = {},
+    // deno-lint-ignore no-explicit-any
+    TImports extends AnyClientToolsInstance[] = [],
+  >(
+    styles: ForbidReservedStyledKeys<TStyles>,
+    options: StylesOptions<TImports>,
+  ): ClientToolsClass<
+    UnionOfFunctions<TImports>,
+    TStyles & UnionOfStyles<TImports>,
+    {}
+  >;
+
+  /** Create Styles with explicit source file URL */
   new <
     // deno-lint-ignore ban-types
     TStyles extends Record<string, ScopedStyleInput> = {},
@@ -753,6 +866,7 @@ interface StylesConstructor {
     styles: ForbidReservedStyledKeys<TStyles>,
   ): ClientToolsClass<{}, TStyles, {}>;
 
+  /** Create Styles with explicit source file URL and global option */
   new <
     // deno-lint-ignore ban-types
     TStyles extends Record<string, ScopedStyleInput> = {},
@@ -768,6 +882,7 @@ interface StylesConstructor {
     TStyles
   >;
 
+  /** Create Styles with explicit source file URL and non-global options */
   new <
     // deno-lint-ignore ban-types
     TStyles extends Record<string, ScopedStyleInput> = {},
@@ -798,7 +913,7 @@ interface StylesConstructor {
  *   color: white;
  * `;
  *
- * const tools = new ClientTools(import.meta.url, {
+ * const tools = new ClientTools({
  *   functions: {
  *     handleClick(e: MouseEvent) {
  *       console.log("Clicked", e);
@@ -863,37 +978,55 @@ class ClientToolsClass<
   private _ensureBuiltPromise: Promise<void> | null = null;
 
   constructor(
-    sourceFileUrl: string | URL,
+    sourceFileUrlOrOptions?: string | URL | ClientToolsOptions<any, any, any, any>,
     // deno-lint-ignore no-explicit-any
     options?: ClientToolsOptions<any, any, any, any>,
   ) {
-    this.sourceFileUrl = normalizeSourceFileUrl(sourceFileUrl) ??
-      (typeof sourceFileUrl === "string"
-        ? sourceFileUrl
-        : sourceFileUrl.toString());
+    let resolvedSourceFileUrl: string | URL | undefined;
+    let resolvedOptions: ClientToolsOptions<any, any, any, any> | undefined;
+
+    if (
+      typeof sourceFileUrlOrOptions === "string" ||
+      sourceFileUrlOrOptions instanceof URL
+    ) {
+      // Called as: new ClientTools(sourceFileUrl) or new ClientTools(sourceFileUrl, options)
+      resolvedSourceFileUrl = sourceFileUrlOrOptions;
+      resolvedOptions = options;
+    } else {
+      // Called as: new ClientTools() or new ClientTools(options)
+      resolvedSourceFileUrl = getCallerFileUrl();
+      resolvedOptions = sourceFileUrlOrOptions;
+    }
+
+    this.sourceFileUrl = normalizeSourceFileUrl(resolvedSourceFileUrl) ??
+      (resolvedSourceFileUrl
+        ? (typeof resolvedSourceFileUrl === "string"
+          ? resolvedSourceFileUrl
+          : resolvedSourceFileUrl.toString())
+        : "auto-detect-unavailable");
     registeredClientTools.add(this);
 
-    if (options) {
+    if (resolvedOptions) {
       // Process imports first so imported functions/styles are available
-      if (options.imports) {
-        for (const externalTools of options.imports) {
+      if (resolvedOptions.imports) {
+        for (const externalTools of resolvedOptions.imports) {
           this._processImport(externalTools);
         }
       }
 
       // Process functions
-      if (options.functions) {
-        this._processFunctions(options.functions);
+      if (resolvedOptions.functions) {
+        this._processFunctions(resolvedOptions.functions);
       }
 
       // Process styles
-      if (options.styles) {
-        this._processStyles(options.styles, false);
+      if (resolvedOptions.styles) {
+        this._processStyles(resolvedOptions.styles, false);
       }
 
       // Process global styles
-      if (options.globalStyles) {
-        this._processStyles(options.globalStyles, true);
+      if (resolvedOptions.globalStyles) {
+        this._processStyles(resolvedOptions.globalStyles, true);
       }
     }
 
@@ -1356,7 +1489,7 @@ class ClientToolsClass<
    *
    * @example
    * ```ts
-   * const tools = new ClientTools(import.meta.url, {
+   * const tools = new ClientTools({
    *   globalStyles: { globalStyles: css`body { font-family: sans-serif; }` },
    * });
    *
@@ -1528,31 +1661,62 @@ export const ClientTools: ClientToolsConstructor =
 
 class HandlersClass extends ClientToolsClass<{}, {}, {}> {
   constructor(
-    sourceFileUrl: string | URL,
-    functions: Record<string, AnyFunction>,
+    sourceFileUrlOrFunctions: string | URL | Record<string, AnyFunction>,
+    functionsOrOptions?: Record<string, AnyFunction> | HandlersOptions<any>,
     // deno-lint-ignore no-explicit-any
     options?: HandlersOptions<any>,
   ) {
-    super(sourceFileUrl, {
-      functions,
-      imports: options?.imports,
-    });
+    if (
+      typeof sourceFileUrlOrFunctions === "string" ||
+      sourceFileUrlOrFunctions instanceof URL
+    ) {
+      // Called as: new Handlers(sourceFileUrl, functions, options?)
+      const functions = functionsOrOptions as Record<string, AnyFunction>;
+      super(sourceFileUrlOrFunctions, {
+        functions,
+        imports: options?.imports,
+      });
+    } else {
+      // Called as: new Handlers(functions, options?)
+      const functions = sourceFileUrlOrFunctions;
+      const opts = functionsOrOptions as HandlersOptions<any> | undefined;
+      super({
+        functions,
+        imports: opts?.imports,
+      });
+    }
   }
 }
 
 class StylesClass extends ClientToolsClass<{}, {}, {}> {
   constructor(
-    sourceFileUrl: string | URL,
-    styles: Record<string, ScopedStyleInput>,
+    sourceFileUrlOrStyles: string | URL | Record<string, ScopedStyleInput>,
+    stylesOrOptions?: Record<string, ScopedStyleInput> | StylesOptions<any>,
     // deno-lint-ignore no-explicit-any
     options?: StylesOptions<any>,
   ) {
-    super(
-      sourceFileUrl,
-      options?.global
-        ? { globalStyles: styles, imports: options.imports }
-        : { styles, imports: options?.imports },
-    );
+    if (
+      typeof sourceFileUrlOrStyles === "string" ||
+      sourceFileUrlOrStyles instanceof URL
+    ) {
+      // Called as: new Styles(sourceFileUrl, styles, options?)
+      const styles = stylesOrOptions as Record<string, ScopedStyleInput>;
+      super(
+        sourceFileUrlOrStyles,
+        options?.global
+          ? { globalStyles: styles, imports: options.imports }
+          : { styles, imports: options?.imports },
+      );
+    } else {
+      // Called as: new Styles(styles, options?)
+      const styles = sourceFileUrlOrStyles;
+      const opts = stylesOrOptions as StylesOptions<any> | undefined;
+      super(
+        opts?.global
+          ? { globalStyles: styles, imports: opts.imports }
+          : { styles, imports: opts?.imports },
+      );
+    }
   }
 }
 

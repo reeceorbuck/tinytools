@@ -54,7 +54,7 @@ middleware and defining a `ClientTools` instance at module scope.
 import { Hono } from "hono";
 import { ClientTools, css, tiny } from "@tinytools/hono-tools";
 
-const pageTools = new ClientTools(import.meta.url, {
+const pageTools = new ClientTools({
   functions: {
     clickHandler(this: HTMLButtonElement, event: MouseEvent) {
       console.log("clicked", event);
@@ -108,7 +108,7 @@ once with middleware and read from `c.var.tools`:
 import { Hono } from "hono";
 import { ClientTools, tiny } from "@tinytools/hono-tools";
 
-const appTools = new ClientTools(import.meta.url, {
+const appTools = new ClientTools({
   functions: {
     save(this: HTMLButtonElement) {
       this.disabled = true;

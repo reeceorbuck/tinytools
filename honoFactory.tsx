@@ -286,7 +286,7 @@ export function getTools<
  *
  * @example Root route (no ancestors):
  * ```ts
- * const localTools = new ClientTools(import.meta.url, {
+ * const localTools = new ClientTools({
  *   functions: {
  *     handleClick() { console.log("clicked"); },
  *   },
@@ -315,7 +315,7 @@ export function getTools<
  * import type { globalTools } from "./main.tsx";
  * import type { localTools as parentTools } from "./parent.tsx";
  *
- * const localTools = new ClientTools(import.meta.url, {
+ * const localTools = new ClientTools({
  *   functions: {
  *     localHandler() {},
  *   },
@@ -381,7 +381,7 @@ function createSharedImportsMiddleware(
  *
  * @example
  * ```ts
- * const tools = new ClientTools(import.meta.url, {
+ * const tools = new ClientTools({
  *   globalStyles: { globalStyles: css`body { font-family: sans-serif; }` },
  * });
  *

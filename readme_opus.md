@@ -41,7 +41,7 @@ import { Hono } from "hono";
 import { ClientTools, css, tiny } from "@tinytools/hono-tools";
 
 // Define your client-side handlers and styles at module level
-const tools = new ClientTools(import.meta.url, {
+const tools = new ClientTools({
   functions: {
     clickHandler(this: HTMLButtonElement, _ev: MouseEvent) {
       this.textContent = "Clicked!";
@@ -103,7 +103,7 @@ The central building block. Declare at module level so handlers and styles are
 registered once at startup.
 
 ```ts
-const tools = new ClientTools(import.meta.url, {
+const tools = new ClientTools({
   functions: {/* client-side event handlers */},
   styles: {/* scoped CSS styles */},
   imports: [/* other ClientTools instances to compose */],
@@ -168,7 +168,7 @@ or a design system:
 
 ```ts
 // shared.ts
-export const sharedTools = new ClientTools(import.meta.url, {
+export const sharedTools = new ClientTools({
   functions: {
     closeDialog(this: HTMLDialogElement) {
       this.close();
@@ -179,7 +179,7 @@ export const sharedTools = new ClientTools(import.meta.url, {
 // page.ts
 import { sharedTools } from "./shared.ts";
 
-const pageTools = new ClientTools(import.meta.url, {
+const pageTools = new ClientTools({
   imports: [sharedTools],
   functions: {
     submitForm(this: HTMLFormElement, e: SubmitEvent) {
@@ -198,7 +198,7 @@ other handler bodies:
 ```ts
 const { closeDialog } = sharedTools.getFunctionReferences;
 
-const pageTools = new ClientTools(import.meta.url, {
+const pageTools = new ClientTools({
   imports: [sharedTools],
   functions: {
     submitAndClose(this: HTMLFormElement, e: SubmitEvent) {

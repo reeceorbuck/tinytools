@@ -225,7 +225,7 @@ export type ActivateScopedStyles<T> =
  *   color: blue;
  * `;
  *
- * const tools = new ClientTools(import.meta.url, {
+ * const tools = new ClientTools({
  *   styles: { myStyle },
  * });
  * ```
