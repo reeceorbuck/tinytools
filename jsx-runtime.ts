@@ -8,7 +8,41 @@
  * @module
  */
 
-/// <reference path="./navigation-api-types.d.ts" />
+// Navigation API types (local definitions for JSR compatibility)
+interface NavigateEvent extends Event {
+  readonly navigationType: string;
+  readonly destination: NavigationDestination;
+  readonly canIntercept: boolean;
+  readonly userInitiated: boolean;
+  readonly hashChange: boolean;
+  readonly signal: AbortSignal;
+  readonly formData: FormData | null;
+  readonly downloadRequest: string | null;
+  readonly info: unknown;
+  readonly hasUAVisualTransition: boolean;
+  readonly sourceElement: Element | null;
+  intercept(options?: { handler?: () => Promise<void> }): void;
+  scroll(): void;
+}
+
+interface NavigationDestination {
+  readonly url: string;
+  readonly key: string | null;
+  readonly id: string | null;
+  readonly index: number;
+  readonly sameDocument: boolean;
+  getState(): unknown;
+}
+
+interface NavigationCurrentEntryChangeEvent extends Event {
+  readonly navigationType?: string;
+  readonly from: { url: string | null; key: string; id: string };
+}
+
+interface CommandEvent extends Event {
+  source: HTMLButtonElement;
+  command: string;
+}
 
 export {
   Fragment,
@@ -477,9 +511,4 @@ export namespace JSX {
     };
 }
 
-declare global {
-  interface CommandEvent extends Event {
-    source: HTMLButtonElement;
-    command: string;
-  }
-}
+

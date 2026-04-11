@@ -119,7 +119,3 @@ export { titled } from "./titled.ts";
 
 // Re-export JSX namespace for consumers
 export type { JSX } from "./jsx-runtime.ts";
-
-declare global {
-  var navigation: Navigation;
-}

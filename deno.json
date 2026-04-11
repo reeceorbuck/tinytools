@@ -44,7 +44,7 @@
       "sendUpdates.tsx",
       "sse.ts",
       "startupPerformanceSummary.ts",
-      "navigation-api-types.d.ts",
+
       "components/**/*.ts",
       "components/**/*.tsx",
       "client/**/*.ts",

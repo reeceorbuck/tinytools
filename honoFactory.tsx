@@ -507,7 +507,7 @@ export function addRouteLayout<
   ) => JSX.Element | Promise<JSX.Element>,
 ): MiddlewareHandler {
   // deno-lint-ignore no-explicit-any
-  return jsxRenderer(async ({ children, Layout, title }, c: any) => {
+  return jsxRenderer(async ({ children, Layout, title }: any, c: any) => {
     const sourceUrl = !!c.req.header("source-url");
     if (!sourceUrl) {
       c.set(ROUTE_LAYOUT_APPLIED_KEY, true);
@@ -551,21 +551,6 @@ export function addRouteLayout<
 export type withAncestors<TAncestors extends AnyClientTools[]> = {
   Variables: { tools: CombinedTools<TAncestors> };
 };
-
-// ============================================================================
-// ContextRenderer declaration
-// ============================================================================
-
-declare module "hono" {
-  interface ContextRenderer {
-    (
-      content: string | Promise<string>,
-      props?: {
-        title?: string;
-      },
-    ): Response;
-  }
-}
 
 // ============================================================================
 // tiny - Opt-in middleware API for Hono apps
@@ -853,7 +838,7 @@ function createCoreMiddleware(
     createToolsMiddleware(),
     // JSX renderer with AssetTags (features are read from context by AssetTags)
     jsxRenderer(async (
-      { children, title },
+      { children, title }: any,
       c,
     ) => {
       console.log(
