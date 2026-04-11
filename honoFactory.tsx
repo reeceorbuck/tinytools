@@ -30,7 +30,7 @@ import type { ActivateClientFunctions } from "./jsx-runtime.ts";
 import { type ActivateScopedStyles, css } from "./scopedStyles.ts";
 import { serveStatic } from "hono/deno";
 import { jsxRenderer } from "hono/jsx-renderer";
-import { AssetTags } from "@tinytools/hono-tools/components";
+import { AssetTags } from "./components/AssetTags.tsx";
 import type { JSX } from "hono/jsx/jsx-runtime";
 import { clientFiles } from "./client/dist/manifest.ts";
 import { trackConnectedClients } from "./sse.ts";
