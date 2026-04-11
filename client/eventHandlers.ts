@@ -14,7 +14,9 @@ export type HandlerProxy = {
 
 const basePath = "/handlers";
 
-(globalThis as unknown as { handlers: HandlerProxy }).handlers = new Proxy<HandlerProxy>({} as HandlerProxy, {
+(globalThis as unknown as { handlers: HandlerProxy }).handlers = new Proxy<
+  HandlerProxy
+>({} as HandlerProxy, {
   get(target, prop, receiver) {
     if (prop in target) {
       return Reflect.get(target, prop, receiver);

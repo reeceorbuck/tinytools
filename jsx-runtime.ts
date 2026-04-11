@@ -510,5 +510,3 @@ export namespace JSX {
         };
     };
 }
-
-
