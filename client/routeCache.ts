@@ -207,8 +207,7 @@ export function isEmptyRuntimeTemplate(template: HTMLTemplateElement) {
   }
   // A template with only empty partial references is effectively empty
   return Array.from(children).every(
-    (child) =>
-      child.tagName === "PARTIAL" && child.childNodes.length === 0,
+    (child) => child.tagName === "PARTIAL" && child.childNodes.length === 0,
   );
 }
 
