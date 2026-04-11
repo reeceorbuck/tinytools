@@ -369,14 +369,31 @@ export function captureOutgoingRouteState(
     return;
   }
 
-  // Capture state into ALL runtime cache templates with matching partial refs,
-  // not just the one for the outgoing path. This ensures templates for alias
-  // paths (e.g. dateless variants) also get populated.
+  const normalizedPath = normalizeCachePath(pathname);
+
+  // Only capture into the template for the outgoing path (and any redirect
+  // aliases that point to it). Other route templates may share the same
+  // partial IDs (e.g. "thirdPanelContent") but belong to different routes
+  // and must not be overwritten with the current DOM state.
   const allTemplates = document.querySelectorAll<HTMLTemplateElement>(
     `template[${ROUTE_CACHE_ATTR}="true"]`,
   );
 
   for (const template of allTemplates) {
+    const templatePath = normalizeCachePath(
+      template.getAttribute("path") ?? "",
+    );
+    const redirectTarget = template.getAttribute(SPA_REDIRECT_ATTR);
+    const isOutgoingPath = templatePath === normalizedPath;
+    const isAliasForOutgoing = redirectTarget != null &&
+      normalizeCachePath(
+          redirectTarget.split("?")[0].split("#")[0],
+        ) === normalizedPath;
+
+    if (!isOutgoingPath && !isAliasForOutgoing) {
+      continue;
+    }
+
     captureStateIntoTemplate(template, scope);
     adoptTemplateAndCleanSeed(template);
   }

@@ -146,6 +146,25 @@ export async function processIncomingData(
         activateScripts(fragment);
 
         processIncomingHtml(fragment, document, options);
+
+        // After the first update in a stream, clear route-transition options.
+        // The outgoing state has already been captured and the active route
+        // references established. Subsequent chunks (Suspense resolutions)
+        // must not re-capture — the DOM now holds the *new* route's content
+        // with potentially unresolved suspended placeholders, which would
+        // overwrite the previously-correct outgoing cache.
+        if (
+          options.cacheCurrentPath ||
+          options.activeRoutePath ||
+          options.activeRouteRegistrations
+        ) {
+          options = {
+            ...options,
+            cacheCurrentPath: undefined,
+            activeRoutePath: undefined,
+            activeRouteRegistrations: undefined,
+          };
+        }
       }
     } else if (
       buffer.startsWith("<!DOCTYPE html><update>") ||

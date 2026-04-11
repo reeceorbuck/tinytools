@@ -213,7 +213,7 @@ export function processLocalSuspenseTemplates(
         )
         : {},
     };
-    console.log("Processing LOCAL route for path:", params);
+    console.log("Processing LOCAL route for path with params:", params);
     console.log("using template:", templateToRender);
 
     const fragment = document.createDocumentFragment();

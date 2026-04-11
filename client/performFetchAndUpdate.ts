@@ -7,6 +7,9 @@
 import { processIncomingData } from "./processIncomingData.ts";
 import { getActiveRouteCachePath } from "./routeCache.ts";
 
+/** Tracks in-flight GET requests per pathname so rapid-fire calls abort stale ones. */
+const inflightGetRequests = new Map<string, AbortController>();
+
 interface PerformFetchAndUpdateOptions {
   bypassRouteCache?: boolean;
   navGeneration?: number;
@@ -24,15 +27,39 @@ export async function performFetchAndUpdate(
   console.log(
     `${method.toUpperCase()} Navigation to: ${destinationUrl.href}`,
   );
-  const response = await fetch(destinationUrl, {
-    method,
-    headers: {
-      "partial-nav": "true",
-      "source-url": fromUrl.pathname + fromUrl.search,
-      "destination-url": toUrl.pathname + toUrl.search,
-    },
-    body: method === "post" ? formData ?? undefined : undefined,
-  });
+
+  let signal: AbortSignal | undefined;
+  if (method === "get") {
+    const key = destinationUrl.pathname;
+    const existing = inflightGetRequests.get(key);
+    if (existing) {
+      console.log(`Aborting previous GET to ${key}`);
+      existing.abort();
+    }
+    const controller = new AbortController();
+    inflightGetRequests.set(key, controller);
+    signal = controller.signal;
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(destinationUrl, {
+      method,
+      headers: {
+        "partial-nav": "true",
+        "source-url": fromUrl.pathname + fromUrl.search,
+        "destination-url": toUrl.pathname + toUrl.search,
+      },
+      body: method === "post" ? formData ?? undefined : undefined,
+      signal,
+    });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      console.log(`GET to ${destinationUrl.href} was aborted`);
+      return;
+    }
+    throw err;
+  }
 
   if (!response.ok) {
     throw new Error(`HTTP error! status: ${response.status}`);
@@ -108,6 +135,10 @@ export async function performFetchAndUpdate(
     bypassRouteCache: options.bypassRouteCache,
     navGeneration: options.navGeneration,
   });
+
+  if (method === "get") {
+    inflightGetRequests.delete(destinationUrl.pathname);
+  }
 }
 
 export default performFetchAndUpdate;

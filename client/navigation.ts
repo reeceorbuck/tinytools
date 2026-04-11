@@ -241,8 +241,8 @@ globalThis.navigation.addEventListener(
             } catch (err) {
               console.error("Error in pre-commit handler: ", err);
             }
-            setVariablesFromUrl(fromUrl, toUrl);
           }
+          setVariablesFromUrl(fromUrl, toUrl);
         },
 
         // deno-lint-ignore require-await
@@ -331,13 +331,13 @@ function setVariablesFromUrl(fromUrl: URL, toUrl: URL) {
   toSplitPath.forEach((partPath, i) => {
     // Only update path variables if they have changed
     if (partPath !== fromSplitPath[i]) {
-      document.body.style.setProperty(`--path-${i}`, partPath);
+      document.documentElement.style.setProperty(`--path-${i}`, partPath);
     }
   });
   if (fromSplitPath.length > toSplitPath.length) {
     // Remove extra path parts
     for (let i = toSplitPath.length; i < fromSplitPath.length; i++) {
-      document.body.style.removeProperty(`--path-${i}`);
+      document.documentElement.style.removeProperty(`--path-${i}`);
     }
   }
   const fromParams = fromUrl.searchParams;
@@ -365,7 +365,7 @@ function setVariablesFromUrl(fromUrl: URL, toUrl: URL) {
     rest,
   ]));
   changeMap.forEach(({ to }, key) => {
-    if (!to) document.body.style.removeProperty(`--param-${key}`);
-    else document.body.style.setProperty(`--param-${key}`, to);
+    if (!to) document.documentElement.style.removeProperty(`--param-${key}`);
+    else document.documentElement.style.setProperty(`--param-${key}`, to);
   });
 }

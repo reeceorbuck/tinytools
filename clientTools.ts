@@ -905,6 +905,13 @@ class ClientToolsClass<
   private _processFunctions<T extends Record<string, AnyFunction>>(
     fns: T,
   ): void {
+    // Compute a stable fingerprint of imported function names so that
+    // adding/removing imports produces a different handler hash (and filename),
+    // which busts the browser cache.
+    const importsFingerprint = [...this._clientFunctions.keys()].sort().join(
+      ",",
+    );
+
     for (const [fnName, fn] of Object.entries(fns)) {
       // Check for duplicate from imports
       if (this._clientFunctions.has(fnName)) {
@@ -914,7 +921,12 @@ class ClientToolsClass<
         );
       }
 
-      const instance = new ClientFunctionImpl(fnName, fn, this.sourceFileUrl);
+      const instance = new ClientFunctionImpl(
+        fnName,
+        fn,
+        this.sourceFileUrl,
+        importsFingerprint,
+      );
       // deno-lint-ignore no-explicit-any
       (this as any)[fnName] = (instance as any)[fnName];
       this.handlerFilenames.set(fnName, instance.filename);

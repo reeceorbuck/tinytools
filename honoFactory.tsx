@@ -801,7 +801,9 @@ function isImmutablePublicAssetPath(path: string): boolean {
 
 function isLikelyAssetRequestPath(path: string): boolean {
   const normalizedPath = path.split("?")[0]?.split("#")[0] ?? "";
-  const lastSegment = normalizedPath.split("/").at(-1) ?? "";
+  const segments = normalizedPath.split("/");
+  if (segments.includes("api")) return false;
+  const lastSegment = segments.at(-1) ?? "";
   return /\.[a-z0-9]{1,8}$/i.test(lastSegment);
 }
 
@@ -880,8 +882,16 @@ function createCoreMiddleware(
         );
       }
 
+      const url = new URL(c.req.url);
+      const urlPathVars = url.pathname
+        .split("/")
+        .filter(Boolean)
+        .map((part, i) => `--path-${i}: ${part};`);
+      const urlQueryVars = Array.from(url.searchParams.entries())
+        .map(([key, value]) => `--param-${key}: ${value};`);
+
       return (
-        <html>
+        <html style={[...urlPathVars, ...urlQueryVars].join(" ")}>
           <head>
             <title>{title}</title>
             <meta

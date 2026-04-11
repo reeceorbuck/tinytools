@@ -79,11 +79,20 @@ export class ClientFunctionImpl<
   filename: string;
   sourceFileUrl?: string;
   private occurrenceIndex: number;
+  private importsFingerprint: string;
+
+  private _computeHashInput(): string {
+    const base = this.fn.toString() + "::" + (this.sourceFileUrl ?? "");
+    return this.importsFingerprint
+      ? `${base}::imports[${this.importsFingerprint}]`
+      : base;
+  }
 
   constructor(
     fnName: FName,
     fn: T,
     sourceFileUrl?: string,
+    importsFingerprint = "",
   ) {
     if (typeof fn !== "function") {
       throw new Error("ClientFunction requires a function");
@@ -115,7 +124,8 @@ export class ClientFunctionImpl<
       );
       resolvedFilename = `${fnName}_${
         generateHandlerHash(
-          fn.toString() + "::" + (normalizedSourceFileUrl ?? ""),
+          fn.toString() + "::" + (normalizedSourceFileUrl ?? "") +
+          (importsFingerprint ? `::imports[${importsFingerprint}]` : ""),
         )
       }`;
     }
@@ -141,6 +151,7 @@ export class ClientFunctionImpl<
     this.filename = resolvedFilename;
     this.sourceFileUrl = normalizedSourceFileUrl;
     this.occurrenceIndex = occurrenceIndex;
+    this.importsFingerprint = importsFingerprint;
     // deno-lint-ignore no-explicit-any
     (this as any)[fnName] =
       `handlers.${this.filename}.call(this, event)` as unknown as T;
@@ -227,7 +238,7 @@ export class ClientFunctionImpl<
 
     if (mtimeChanged) {
       // Re-hash and check if filename actually changed
-      const str = this.fn.toString() + "::" + (this.sourceFileUrl ?? "");
+      const str = this._computeHashInput();
       const newFilename = `${this.fnName}_${generateHandlerHash(str)}`;
 
       if (newFilename !== this.filename) {
