@@ -27,6 +27,7 @@ import {
   generateStyleHash,
   Handlers,
   Styles,
+  type ClientTools,
 } from "../clientTools.ts";
 import { css } from "../scopedStyles.ts";
 import type { JSX } from "../jsx-runtime.ts";
@@ -148,9 +149,9 @@ Deno.test("Runtime - startup cache hydration avoids reset for same style hash le
   const modulePath = `${testDir}/cache-hydration-${testId}.ts`;
 
   const moduleCode = [
-    'import { tiny } from "../package/honoFactory.tsx";',
-    'import { Handlers, Styles } from "../package/clientTools.ts";',
-    'import { css } from "../package/scopedStyles.ts";',
+    'import { tiny } from "../honoFactory.tsx";',
+    'import { Handlers, Styles } from "../clientTools.ts";',
+    'import { css } from "../scopedStyles.ts";',
     "",
     "tiny.middleware.core({ generatedStyleHashLength: 4 });",
     "",
@@ -672,6 +673,7 @@ Deno.test("Runtime - ClientTools rejects reserved styled key mergeClasses", () =
   assertThrows(
     () =>
       new Styles(import.meta.url, {
+        // @ts-ignore: testing that mergeClasses is rejected at runtime
         mergeClasses: css`
           color: blue;
         `,

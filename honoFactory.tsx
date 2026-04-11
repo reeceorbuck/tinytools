@@ -2,7 +2,7 @@
  * Hono Factory module for @tinytools/hono-tools
  *
  * Provides setup functions and middleware for enhancing Hono apps with
- * ClientTools (client-side functions and scoped styles).
+ * Handlers and Styles (client-side functions and scoped styles).
  *
  * @module
  */

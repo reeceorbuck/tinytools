@@ -79,6 +79,7 @@ Deno.test("Caching - handler files get aggressive Cache-Control headers", async 
     const app = new Hono().use(...tiny.middleware.core());
     const req = new Request("http://localhost/handlers/testHandler_abc123.js");
     const res = await app.fetch(req);
+    await res.body?.cancel();
 
     assertEquals(res.status, 200);
     assertEquals(
@@ -96,6 +97,7 @@ Deno.test("Caching - style files get aggressive Cache-Control headers", async ()
     const app = new Hono().use(...tiny.middleware.core());
     const req = new Request("http://localhost/styles/myStyle_def456.css");
     const res = await app.fetch(req);
+    await res.body?.cancel();
 
     assertEquals(res.status, 200);
     assertEquals(
@@ -113,6 +115,7 @@ Deno.test("Caching - other files do NOT get aggressive Cache-Control headers", a
     const app = new Hono().use(...tiny.middleware.core());
     const req = new Request("http://localhost/other/file.js");
     const res = await app.fetch(req);
+    await res.body?.cancel();
 
     assertEquals(res.status, 200);
     assertEquals(

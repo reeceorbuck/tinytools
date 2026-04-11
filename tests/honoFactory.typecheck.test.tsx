@@ -26,6 +26,9 @@ type AnyActivatedClientFunction = ActivatedClientFunction<
 // Test Fixtures - Mock tools for testing
 // ============================================================================
 
+const testStyle = css`color: red;`;
+const anotherStyle = css`color: blue;`;
+
 /** Creates mock Handlers with test handlers */
 const mockHandlers = new Handlers(import.meta.url, {
   testHandler(this: HTMLElement, e: MouseEvent) {
@@ -265,7 +268,7 @@ Deno.test("JSX types - onClick requires ActivatedClientFunction", () => {
 // ============================================================================
 
 Deno.test("Handlers - constructor with multiple functions preserves accumulated types", () => {
-  const tools = new Handlers(import.meta.url, {
+  const handlers = new Handlers(import.meta.url, {
     handler1() {
       console.log("1");
     },
@@ -279,7 +282,7 @@ Deno.test("Handlers - constructor with multiple functions preserves accumulated 
 
   const app = new Hono()
     .use(...tiny.middleware.core())
-    .use(tiny.middleware.sharedImports(mockHandlers, mockStyles));
+    .use(tiny.middleware.sharedImports(handlers));
 
   app.get("/test", (c) => {
     const { fn } = c.var.tools;
@@ -312,7 +315,7 @@ const style3 = css`
 `;
 
 Deno.test("Styles - constructor with multiple styles preserves accumulated types", () => {
-  const tools = new Styles(import.meta.url, {
+  const styles = new Styles(import.meta.url, {
     style1,
     style2,
     style3,
@@ -320,7 +323,7 @@ Deno.test("Styles - constructor with multiple styles preserves accumulated types
 
   const app = new Hono()
     .use(...tiny.middleware.core())
-    .use(tiny.middleware.sharedImports(mockHandlers, mockStyles));
+    .use(tiny.middleware.sharedImports(styles));
 
   app.get("/test", (c) => {
     const { styled } = c.var.tools;
@@ -462,19 +465,16 @@ Deno.test("extendWithImports - accepts multiple local tools in one call", () => 
 // ============================================================================
 
 Deno.test("InferTools - correctly infers tool types", () => {
-  // InferTools should extract the activated tools type
-  type ToolsType = InferTools<typeof tools>;
+  // InferTools should extract the activated tools type from a Handlers instance
+  type HandlersType = InferTools<typeof mockHandlers>;
 
   // Verify the type has the expected properties
-  const _typeCheck: ToolsType extends {
+  const _typeCheck: HandlersType extends {
     fn: {
       testHandler: unknown;
       anotherHandler: unknown;
     };
-    styled: {
-      testStyle: unknown;
-      anotherStyle: unknown;
-    };
+    styled: unknown;
   } ? true
     : never = true;
 
