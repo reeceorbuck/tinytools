@@ -8,6 +8,7 @@ import { processIncomingHtml } from "./processIncomingHtml.ts";
 import {
   getCachedRouteTemplate,
   getOrderedLocalRouteTemplates,
+  isEmptyRuntimeTemplate,
   isRuntimeCachedRouteTemplate,
   markLocalTemplateContent,
   SPA_REDIRECT_ATTR,
@@ -190,7 +191,7 @@ export function processLocalSuspenseTemplates(
     }
 
     const isRuntimeTemplate = isRuntimeCachedRouteTemplate(templateToRender);
-    if (isRuntimeTemplate && templateToRender.content.children.length === 0) {
+    if (isRuntimeTemplate && isEmptyRuntimeTemplate(templateToRender)) {
       console.log(
         "Skipping empty runtime template for active route:",
         targetPathname,
@@ -279,7 +280,9 @@ export function processLocalSuspenseTemplates(
           entry !== null
         )
         : undefined,
-      activeRoutePath: method === "get" ? targetPathname : undefined,
+      activeRoutePath: method === "get"
+        ? (redirectPathname || targetPathname)
+        : undefined,
     });
 
     if (redirectTo) {

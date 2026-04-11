@@ -7,6 +7,8 @@
  */
 
 export { AssetTags } from "./AssetTags.tsx";
+export { RouteCache } from "./RouteCache.tsx";
+export type { RouteCacheProps } from "./RouteCache.tsx";
 export { Suspense } from "./Suspense.tsx";
 export { Partial } from "./Partial.tsx";
 export type { PartialMode, PartialProps } from "./Partial.tsx";

@@ -9,6 +9,7 @@ import { getActiveRouteCachePath } from "./routeCache.ts";
 
 interface PerformFetchAndUpdateOptions {
   bypassRouteCache?: boolean;
+  navGeneration?: number;
 }
 
 export async function performFetchAndUpdate(
@@ -105,6 +106,7 @@ export async function performFetchAndUpdate(
       ? undefined
       : activeRouteRegistrations,
     bypassRouteCache: options.bypassRouteCache,
+    navGeneration: options.navGeneration,
   });
 }
 

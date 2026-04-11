@@ -7,9 +7,11 @@
 import {
   applyIncomingToCachedTemplates,
   CACHE_ID_ATTR,
+  cacheStaleIncomingPartials,
   captureOutgoingRouteState,
   ensureElementCacheId,
   establishActiveRouteTemplateReferences,
+  getNavGeneration,
   LOCAL_TEMPLATE_SOURCE_ATTR,
   setActiveRouteCachePath,
 } from "./routeCache.ts";
@@ -23,6 +25,7 @@ export interface ProcessIncomingHtmlOptions {
   }>;
   updateCachedTemplates?: boolean;
   bypassRouteCache?: boolean;
+  navGeneration?: number;
 }
 
 export function processIncomingHtml(
@@ -32,6 +35,23 @@ export function processIncomingHtml(
 ) {
   console.log("incoming fragment: ", fragment);
   const children = Array.from(fragment.children);
+
+  const isStale = typeof options.navGeneration === "number" &&
+    options.navGeneration !== getNavGeneration();
+
+  if (isStale && !options.bypassRouteCache) {
+    const registrations = options.activeRouteRegistrations ??
+      (options.activeRoutePath ? [{ pathname: options.activeRoutePath }] : []);
+    if (registrations.length > 0) {
+      console.log(
+        "Stale navigation response — caching for:",
+        registrations.map((r) => r.pathname).join(", "),
+      );
+      cacheStaleIncomingPartials(registrations, children);
+    }
+    return;
+  }
+
   if (
     scope === document &&
     options.updateCachedTemplates &&

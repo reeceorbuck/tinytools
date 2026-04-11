@@ -1,10 +1,21 @@
-const ROUTE_CACHE_CONTAINER_ID = "__tinytools_route_cache";
+const ROUTE_CACHE_TAG = "route-cache";
+const ROUTE_CACHE_SEED_TAG = "route-cache-seed";
 const ROUTE_CACHE_ATTR = "data-tinytools-route-cache";
 export const CACHE_ID_ATTR = "data-cache-id";
 export const SPA_REDIRECT_ATTR = "data-spa-redirect";
 export const LOCAL_TEMPLATE_SOURCE_ATTR =
   "data-tinytools-local-template-source";
 const ACTIVE_ROUTE_CACHE_PATH_ATTR = "data-tinytools-active-route-cache-path";
+
+let _navGeneration = 0;
+
+export function getNavGeneration() {
+  return _navGeneration;
+}
+
+export function incrementNavGeneration() {
+  return ++_navGeneration;
+}
 
 function normalizeCachePath(pathname: string) {
   if (!pathname) {
@@ -55,17 +66,31 @@ function getRouteCacheContainerParent() {
   return document.body ?? document.documentElement;
 }
 
-function ensureRouteCacheContainer(): HTMLDivElement {
-  const existing = document.getElementById(ROUTE_CACHE_CONTAINER_ID);
-  if (existing instanceof HTMLDivElement) {
+function ensureRouteCacheContainer(): HTMLElement {
+  const existing = document.querySelector<HTMLElement>(
+    `${ROUTE_CACHE_TAG}[data-dynamic]`,
+  );
+  if (existing) {
     return existing;
   }
 
-  const container = document.createElement("div");
-  container.id = ROUTE_CACHE_CONTAINER_ID;
+  const container = document.createElement(ROUTE_CACHE_TAG) as HTMLElement;
+  container.setAttribute("data-dynamic", "");
   container.hidden = true;
   getRouteCacheContainerParent().appendChild(container);
   return container;
+}
+
+function adoptTemplateAndCleanSeed(template: HTMLTemplateElement) {
+  const parent = template.parentElement;
+  ensureRouteCacheContainer().prepend(template);
+  if (
+    parent &&
+    parent.tagName === ROUTE_CACHE_SEED_TAG.toUpperCase() &&
+    parent.children.length === 0
+  ) {
+    parent.remove();
+  }
 }
 
 function clearTemplateContent(template: HTMLTemplateElement) {
@@ -175,6 +200,18 @@ export function isRuntimeCachedRouteTemplate(template: HTMLTemplateElement) {
   return template.getAttribute(ROUTE_CACHE_ATTR) === "true";
 }
 
+export function isEmptyRuntimeTemplate(template: HTMLTemplateElement) {
+  const children = template.content.children;
+  if (children.length === 0) {
+    return true;
+  }
+  // A template with only empty partial references is effectively empty
+  return Array.from(children).every(
+    (child) =>
+      child.tagName === "PARTIAL" && child.childNodes.length === 0,
+  );
+}
+
 export function markLocalTemplateContent(
   fragment: DocumentFragment,
   source: "authored" | "runtime",
@@ -241,7 +278,7 @@ export function establishActiveRouteTemplateReferences(
   if (options.redirectTo) {
     clearTemplateContent(template);
     // Redirect aliases are metadata-only: no parked refs or child HTML.
-    ensureRouteCacheContainer().prepend(template);
+    adoptTemplateAndCleanSeed(template);
     return;
   }
 
@@ -259,7 +296,7 @@ export function establishActiveRouteTemplateReferences(
   if (cacheableElements.length === 0) {
     // Streaming suspense chunks often contain only transient suspended-* markers.
     // Keep existing route refs untouched when no stable mapping can be derived.
-    ensureRouteCacheContainer().prepend(template);
+    adoptTemplateAndCleanSeed(template);
     return;
   }
 
@@ -279,22 +316,13 @@ export function establishActiveRouteTemplateReferences(
     upsertRouteCacheReference(template, elementId, cacheId);
   }
 
-  ensureRouteCacheContainer().prepend(template);
+  adoptTemplateAndCleanSeed(template);
 }
 
-export function captureOutgoingRouteState(
-  pathname: string,
-  scope: ParentNode = document,
+function captureStateIntoTemplate(
+  template: HTMLTemplateElement,
+  scope: ParentNode,
 ) {
-  if (!pathname) {
-    return;
-  }
-
-  const template = getCachedRouteTemplate(pathname);
-  if (!template) {
-    return;
-  }
-
   const isRedirectAliasTemplate = template.hasAttribute(SPA_REDIRECT_ATTR);
 
   const references = Array.from(
@@ -332,8 +360,66 @@ export function captureOutgoingRouteState(
       reference.appendChild(child.cloneNode(true));
     });
   }
+}
 
-  ensureRouteCacheContainer().prepend(template);
+export function captureOutgoingRouteState(
+  pathname: string,
+  scope: ParentNode = document,
+) {
+  if (!pathname) {
+    return;
+  }
+
+  // Capture state into ALL runtime cache templates with matching partial refs,
+  // not just the one for the outgoing path. This ensures templates for alias
+  // paths (e.g. dateless variants) also get populated.
+  const allTemplates = document.querySelectorAll<HTMLTemplateElement>(
+    `template[${ROUTE_CACHE_ATTR}="true"]`,
+  );
+
+  for (const template of allTemplates) {
+    captureStateIntoTemplate(template, scope);
+    adoptTemplateAndCleanSeed(template);
+  }
+}
+
+export function cacheStaleIncomingPartials(
+  registrations: Array<{ pathname: string; redirectTo?: string }>,
+  incomingElements: readonly Element[],
+) {
+  for (const registration of registrations) {
+    const template = getOrCreateCachedRouteTemplate(registration.pathname);
+    if (registration.redirectTo) {
+      template.setAttribute(SPA_REDIRECT_ATTR, registration.redirectTo);
+      clearTemplateContent(template);
+      adoptTemplateAndCleanSeed(template);
+      continue;
+    }
+
+    const cacheableElements = incomingElements.filter((el) =>
+      shouldTrackElementForRouteCache(el)
+    );
+
+    if (cacheableElements.length === 0) {
+      adoptTemplateAndCleanSeed(template);
+      continue;
+    }
+
+    clearTemplateContent(template);
+
+    for (const element of cacheableElements) {
+      const cacheId = element.getAttribute(CACHE_ID_ATTR) || createCacheId();
+      element.setAttribute(CACHE_ID_ATTR, cacheId);
+
+      const reference = createRouteCacheReference(element.id, cacheId);
+      Array.from(element.childNodes).forEach((child) => {
+        reference.appendChild(child.cloneNode(true));
+      });
+      template.content.appendChild(reference);
+    }
+
+    adoptTemplateAndCleanSeed(template);
+  }
 }
 
 export function getOrderedLocalRouteTemplates() {

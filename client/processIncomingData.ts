@@ -15,6 +15,7 @@ export interface ProcessIncomingDataOptions {
   }>;
   updateCachedTemplates?: boolean;
   bypassRouteCache?: boolean;
+  navGeneration?: number;
 }
 
 /**

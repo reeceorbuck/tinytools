@@ -6,7 +6,10 @@
 
 import { processLocalSuspenseTemplates } from "./localRoutes.ts";
 import performFetchAndUpdate from "./performFetchAndUpdate.ts";
-import { getActiveRouteCachePath } from "./routeCache.ts";
+import {
+  getActiveRouteCachePath,
+  incrementNavGeneration,
+} from "./routeCache.ts";
 
 function normalizePathname(pathname: string) {
   if (pathname === "/") {
@@ -238,6 +241,7 @@ globalThis.navigation.addEventListener(
             } catch (err) {
               console.error("Error in pre-commit handler: ", err);
             }
+            setVariablesFromUrl(fromUrl, toUrl);
           }
         },
 
@@ -256,6 +260,8 @@ globalThis.navigation.addEventListener(
               );
               return;
             }
+
+            const navGeneration = incrementNavGeneration();
 
             try {
               const block = processLocalSuspenseTemplates(
@@ -286,13 +292,13 @@ globalThis.navigation.addEventListener(
               `NAV: Fetching from ${fetchUrl.href}, updating url to ${toUrl.href}`,
             );
 
-            return performFetchAndUpdate(
+            return await performFetchAndUpdate(
               fetchUrl,
               fromUrl,
               toUrl,
               e.formData,
               navigationMethod,
-              { bypassRouteCache },
+              { bypassRouteCache, navGeneration },
             );
           } catch (err) {
             console.error("Error in navigation handler: ", err);
@@ -305,3 +311,61 @@ globalThis.navigation.addEventListener(
     }
   },
 );
+
+// MOVED inside precommit handler to run earlier
+// navigation.addEventListener(
+//   "currententrychange",
+//   (e: NavigationCurrentEntryChangeEvent) => {
+//     console.log("Navigation current entry change event fired");
+//     const toUrl = new URL(globalThis.navigation.currentEntry?.url!);
+//     const fromUrl = new URL(e.from.url!);
+
+//     setVariablesFromUrl(fromUrl, toUrl);
+
+//   },
+// );
+
+function setVariablesFromUrl(fromUrl: URL, toUrl: URL) {
+  const fromSplitPath = fromUrl.pathname.split("/").filter(Boolean);
+  const toSplitPath = toUrl.pathname.split("/").filter(Boolean);
+  toSplitPath.forEach((partPath, i) => {
+    // Only update path variables if they have changed
+    if (partPath !== fromSplitPath[i]) {
+      document.body.style.setProperty(`--path-${i}`, partPath);
+    }
+  });
+  if (fromSplitPath.length > toSplitPath.length) {
+    // Remove extra path parts
+    for (let i = toSplitPath.length; i < fromSplitPath.length; i++) {
+      document.body.style.removeProperty(`--path-${i}`);
+    }
+  }
+  const fromParams = fromUrl.searchParams;
+  const paramChanges = toUrl.searchParams.entries().toArray().map(
+    ([key, value]) => {
+      if (fromParams.get(key) === value) return null;
+      return {
+        key,
+        from: fromParams.get(key),
+        to: value || null,
+      };
+    },
+  ).concat(
+    fromParams.entries().toArray().map(([key, value]) => {
+      if (toUrl.searchParams.has(key)) return null;
+      return {
+        key,
+        from: value || null,
+        to: null,
+      };
+    }),
+  ).filter((change) => change !== null);
+  const changeMap = new Map(paramChanges.map(({ key, ...rest }) => [
+    key,
+    rest,
+  ]));
+  changeMap.forEach(({ to }, key) => {
+    if (!to) document.body.style.removeProperty(`--param-${key}`);
+    else document.body.style.setProperty(`--param-${key}`, to);
+  });
+}
