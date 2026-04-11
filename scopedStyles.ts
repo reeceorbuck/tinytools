@@ -215,7 +215,7 @@ export type ActivateScopedStyles<T> =
 
 /**
  * Template literal tag for writing CSS with interpolation support.
- * Use this with ClientTools styles option for a better authoring experience.
+ * Use this with the Styles constructor for a better authoring experience.
  *
  * @example
  * ```tsx
@@ -225,8 +225,8 @@ export type ActivateScopedStyles<T> =
  *   color: blue;
  * `;
  *
- * const tools = new ClientTools(import.meta.url, {
- *   styles: { myStyle },
+ * const styles = new tiny.Styles(import.meta.url, {
+ *   myStyle,
  * });
  * ```
  */

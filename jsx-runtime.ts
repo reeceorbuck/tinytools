@@ -63,22 +63,20 @@ interface ERROR_ClientFunction_not_activated___Access_from_c_var_tools_clientFun
  * NOT directly from the factory.
  *
  * **Common Error Fix:**
- * - ❌ `new ClientTools(url, { functions: {...} }).myHandler` → won't work
+ * - ❌ `new tiny.Handlers(url, {...}).myHandler` → won't work
  * - ✅ `c.var.tools.fn.myHandler` → correct
  *
  * @example
  * ```ts
- * // Define tools
- * const tools = new ClientTools(import.meta.url, {
- *   functions: {
- *     handleClick() {
- *       console.log("clicked");
- *     },
+ * // Define handlers
+ * const handlers = new tiny.Handlers(import.meta.url, {
+ *   handleClick() {
+ *     console.log("clicked");
  *   },
  * });
  *
  * // Use with middleware
- * app.use(tiny.middleware.sharedImports(tools));
+ * app.use(tiny.middleware.sharedImports(handlers));
  *
  * app.get("/", (c) => {
  *   const { fn } = c.var.tools;

@@ -12,6 +12,7 @@
   },
   "tasks": {
     "build:client": "deno run -A buildClientFiles.ts",
+    "prepublish": "deno task build:client && deno publish",
     "test": "deno test --check --allow-env --allow-read=./.test-build-output --allow-read=./.test-client-src --allow-read=./client/dist --allow-write=./.test-build-output --allow-write=./.test-client-src --allow-write=./public/styles --allow-write=./public/handlers --allow-run tests/"
   },
   "imports": {
@@ -36,10 +37,14 @@
       "titled.ts",
       "jsx-runtime.ts",
       "build.ts",
-      "types.ts",
       "clientFunctions.ts",
+      "clientTools.ts",
       "scopedStyles.ts",
-      "honoFactory.ts",
+      "honoFactory.tsx",
+      "sendUpdates.tsx",
+      "sse.ts",
+      "startupPerformanceSummary.ts",
+      "navigation-api-types.d.ts",
       "components/**/*.ts",
       "components/**/*.tsx",
       "client/**/*.ts",

@@ -694,7 +694,7 @@ type UnionOfStyles<T extends ClientToolsClass<any, any, any>[]> =
 
 /**
  * Constructor interface for ClientTools that enables type inference from options.
- * This pattern allows `new ClientTools(url, options)` to properly infer types.
+ * @internal Used only by Handlers and Styles constructors.
  */
 interface ClientToolsConstructor {
   /** Create an empty ClientTools instance */
@@ -786,31 +786,31 @@ interface StylesConstructor {
 
 /**
  * Unified factory for creating both client functions and scoped styles.
- * All options are passed to the constructor for a cleaner API.
+ * Use `new tiny.Handlers(url, fns)` for event handlers and
+ * `new tiny.Styles(url, styles)` for scoped CSS.
  *
  * @example
  * ```ts
  * import { Hono } from "hono";
- * import { tiny, ClientTools, css } from "@tinytools/hono-tools";
+ * import { tiny, css } from "@tinytools/hono-tools";
  *
  * const buttonStyle = css`
  *   background: blue;
  *   color: white;
  * `;
  *
- * const tools = new ClientTools(import.meta.url, {
- *   functions: {
- *     handleClick(e: MouseEvent) {
- *       console.log("Clicked", e);
- *     },
+ * const routeHandlers = new tiny.Handlers(import.meta.url, {
+ *   handleClick(e: MouseEvent) {
+ *     console.log("Clicked", e);
  *   },
- *   styles: { buttonStyle },
  * });
+ *
+ * const routeStyles = new tiny.Styles(import.meta.url, { buttonStyle });
  *
  * // Create app with middleware
  * const app = new Hono()
  *   .use(...tiny.middleware.core())
- *   .use(tiny.middleware.sharedImports(tools));
+ *   .use(tiny.middleware.sharedImports(routeHandlers, routeStyles));
  *
  * // In route handlers
  * app.get("/", (c) => {
@@ -1368,12 +1368,12 @@ class ClientToolsClass<
    *
    * @example
    * ```ts
-   * const tools = new ClientTools(import.meta.url, {
-   *   globalStyles: { globalStyles: css`body { font-family: sans-serif; }` },
-   * });
+   * const globalTools = new tiny.Styles(import.meta.url, {
+   *   globalStyles: css`body { font-family: sans-serif; }`,
+   * }, { global: true });
    *
    * // Pass to middleware:
-   * app.use(tiny.middleware.globalStyles(...tools.globalStyles));
+   * app.use(tiny.middleware.globalStyles(...globalTools.globalStyles));
    * ```
    */
   get globalStyles(): ScopedStyleImpl[] {
@@ -1531,9 +1531,7 @@ class ClientToolsClass<
 }
 
 /**
- * Export ClientTools with the constructor interface for proper type inference.
- * When you write `new ClientTools(url, options)`, TypeScript will infer the types
- * from the options object automatically.
+ * @internal Base class constructor — use `Handlers` or `Styles` instead.
  */
 export const ClientTools: ClientToolsConstructor =
   ClientToolsClass as ClientToolsConstructor;

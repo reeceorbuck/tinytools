@@ -286,14 +286,12 @@ export function getTools<
  *
  * @example Root route (no ancestors):
  * ```ts
- * const localTools = new ClientTools(import.meta.url, {
- *   functions: {
- *     handleClick() { console.log("clicked"); },
- *   },
+ * const localHandlers = new tiny.Handlers(import.meta.url, {
+ *   handleClick() { console.log("clicked"); },
  * });
  *
  * export const route = new Hono()
- *   .use(tiny.middleware.sharedImports(localTools))
+ *   .use(tiny.middleware.sharedImports(localHandlers))
  *   .get("/", (c) => {
  *     const { fn } = c.var.tools;  // Fully typed!
  *     return c.render(<div onClick={fn.handleClick}>Click</div>);
@@ -315,15 +313,13 @@ export function getTools<
  * import type { globalTools } from "./main.tsx";
  * import type { localTools as parentTools } from "./parent.tsx";
  *
- * const localTools = new ClientTools(import.meta.url, {
- *   functions: {
- *     localHandler() {},
- *   },
+ * const localHandlers = new tiny.Handlers(import.meta.url, {
+ *   localHandler() {},
  * });
  *
  * // Only specify ancestors - localTools type is inferred from tiny.middleware.sharedImports!
  * export const route = new Hono<withAncestors<[typeof parentTools, typeof globalTools]>>()
- *   .use(tiny.middleware.sharedImports(localTools))
+ *   .use(tiny.middleware.sharedImports(localHandlers))
  *   .get("/", (c) => {
  *     c.var.tools.fn.localHandler;   // Inferred from tiny.middleware.sharedImports
  *     c.var.tools.fn.parentHandler;  // From ancestors
@@ -381,14 +377,14 @@ function createSharedImportsMiddleware(
  *
  * @example
  * ```ts
- * const tools = new ClientTools(import.meta.url, {
- *   globalStyles: { globalStyles: css`body { font-family: sans-serif; }` },
- * });
+ * const globalTools = new tiny.Styles(import.meta.url, {
+ *   globalStyles: css`body { font-family: sans-serif; }`,
+ * }, { global: true });
  *
  * const app = new Hono()
  *   .use(...tiny.middleware.core())
- *   .use(tiny.middleware.sharedImports(tools))
- *   .use(tiny.middleware.globalStyles(...tools.globalStyles));
+ *   .use(tiny.middleware.sharedImports(globalTools))
+ *   .use(tiny.middleware.globalStyles(...globalTools.globalStyles));
  * ```
  */
 export function addGlobalStyles(
@@ -748,7 +744,7 @@ function servePackageClientFiles(): MiddlewareHandler {
     }
 
     if (resolvedUrl.startsWith("file://")) {
-      const { fromFileUrl } = await import("jsr:@std/path");
+      const { fromFileUrl } = await import("jsr:@std/path@^1");
       const content = await Deno.readTextFile(fromFileUrl(resolvedUrl));
       c.header("Content-Type", "application/javascript; charset=utf-8");
       c.header("Cache-Control", "public, max-age=31536000, immutable");

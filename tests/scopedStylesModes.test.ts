@@ -1,5 +1,5 @@
 import { assertEquals } from "@std/assert";
-import { ClientTools } from "../clientTools.ts";
+import { Handlers, Styles } from "../clientTools.ts";
 import {
   css,
   mergeClassNames,
@@ -10,13 +10,11 @@ import {
 } from "../scopedStyles.ts";
 
 Deno.test("scoped styles - plain css uses boundary default", () => {
-  const tools = new ClientTools("file:///tests/scoped-default.ts", {
-    styles: {
+  const tools = new Styles("file:///tests/scoped-default.ts", {
       panel: css`
         color: red;
       `,
-    },
-  });
+    });
 
   const style = tools._styles.get("panel");
   const content = style?.buildCssContent() ?? "";
@@ -27,13 +25,11 @@ Deno.test("scoped styles - plain css uses boundary default", () => {
 });
 
 Deno.test("scoped styles - setCustomScope.toBoundary uses boundary end", () => {
-  const tools = new ClientTools("file:///tests/scoped-boundary.ts", {
-    styles: {
+  const tools = new Styles("file:///tests/scoped-boundary.ts", {
       panel: setCustomScope.toBoundary(css`
         color: red;
       `),
-    },
-  });
+    });
 
   const style = tools._styles.get("panel");
   const content = style?.buildCssContent() ?? "";
@@ -44,16 +40,14 @@ Deno.test("scoped styles - setCustomScope.toBoundary uses boundary end", () => {
 });
 
 Deno.test("scoped styles - scopedTo uses custom selectors", () => {
-  const tools = new ClientTools("file:///tests/scoped-to.ts", {
-    styles: {
+  const tools = new Styles("file:///tests/scoped-to.ts", {
       panel: scopedTo(
         css`
           color: red;
         `,
         [".break", "[data-stop]"],
       ),
-    },
-  });
+    });
 
   const style = tools._styles.get("panel");
   const content = style?.buildCssContent() ?? "";
@@ -69,19 +63,14 @@ Deno.test("scoped styles - scopedTo uses custom selectors", () => {
 });
 
 Deno.test("scoped styles - scopedTo supports child selectors directly", () => {
-  const tools = new ClientTools(
-    "file:///tests/scoped-to-children-with-selector.ts",
-    {
-      styles: {
+  const tools = new Styles("file:///tests/scoped-to-children-with-selector.ts", {
         panel: scopedTo(
           css`
             color: red;
           `,
           [".break>*", "[data-stop]>*"],
         ),
-      },
-    },
-  );
+      });
 
   const style = tools._styles.get("panel");
   const content = style?.buildCssContent() ?? "";
@@ -99,13 +88,11 @@ Deno.test("scoped styles - scopedTo supports child selectors directly", () => {
 });
 
 Deno.test("scoped styles - global token boundary is exact", () => {
-  const tools = new ClientTools("file:///tests/scoped-global-token.ts", {
-    styles: {
+  const tools = new Styles("file:///tests/scoped-global-token.ts", {
       panel: css`
         color: red;
       `,
-    },
-  });
+    });
 
   const style = tools._styles.get("panel");
   const content = style?.buildCssContent() ?? "";
@@ -114,13 +101,11 @@ Deno.test("scoped styles - global token boundary is exact", () => {
 });
 
 Deno.test("scoped styles - ClientTools.generatedStyleNames exposes generated class string", () => {
-  const tools = new ClientTools("file:///tests/scoped-styled-accessor.ts", {
-    styles: {
+  const tools = new Styles("file:///tests/scoped-styled-accessor.ts", {
       panel: css`
         color: red;
       `,
-    },
-  });
+    });
 
   const className = tools.generatedStyleNames.get("panel") ?? "";
   assertEquals(className.includes("panel_"), true);
@@ -128,13 +113,11 @@ Deno.test("scoped styles - ClientTools.generatedStyleNames exposes generated cla
 });
 
 Deno.test("scoped styles - unscoped uses explicit data boundary tokens", () => {
-  const tools = new ClientTools("file:///tests/scoped-none.ts", {
-    styles: {
+  const tools = new Styles("file:///tests/scoped-none.ts", {
       panel: unscoped(css`
         color: red;
       `),
-    },
-  });
+    });
 
   const style = tools._styles.get("panel");
   const content = style?.buildCssContent() ?? "";
@@ -147,8 +130,7 @@ Deno.test("scoped styles - unscoped uses explicit data boundary tokens", () => {
 });
 
 Deno.test("scoped styles - setCustomScope methods accept custom layer", () => {
-  const tools = new ClientTools("file:///tests/scoped-custom-layer.ts", {
-    styles: {
+  const tools = new Styles("file:///tests/scoped-custom-layer.ts", {
       selectorsLayer: setCustomScope.toSelectors(
         css`
           color: red;
@@ -168,8 +150,7 @@ Deno.test("scoped styles - setCustomScope methods accept custom layer", () => {
         `,
         { layer: "limited" },
       ),
-    },
-  });
+    });
 
   const selectorsCss = tools._styles.get("selectorsLayer")?.buildCssContent() ??
     "";
@@ -184,15 +165,13 @@ Deno.test("scoped styles - setCustomScope methods accept custom layer", () => {
 });
 
 Deno.test("scoped styles - globalStyles default to global layer", () => {
-  const tools = new ClientTools("file:///tests/scoped-global-layer.ts", {
-    globalStyles: {
+  const tools = new Styles("file:///tests/scoped-global-layer.ts", {
       reset: css`
         body {
           margin: 0;
         }
       `,
-    },
-  });
+    }, { global: true });
 
   const globalCss = tools.globalStyles[0]?.buildCssContent() ?? "";
   assertEquals(globalCss.includes("@layer global"), true);

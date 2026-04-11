@@ -5,28 +5,27 @@ performance.mark("import:@tinytools/hono-tools:start");
  * A lightweight enhancement layer for Hono web applications running on Deno.
  * Provides type-safe client functions, scoped styles, and enhanced JSX event handlers.
  *
- * @example Basic Usage with ClientTools
+ * @example Basic Usage with Handlers and Styles
  * ```ts
  * import { Hono } from "hono";
- * import { tiny, ClientTools, css } from "@tinytools/hono-tools";
+ * import { tiny, css } from "@tinytools/hono-tools";
  *
  * const buttonStyle = css`
  *   background: blue;
  *   color: white;
  * `;
  *
- * const tools = new ClientTools(import.meta.url, {
- *   functions: {
- *     handleClick(e: MouseEvent) {
- *       console.log("Clicked!", e);
- *     },
+ * const routeHandlers = new tiny.Handlers(import.meta.url, {
+ *   handleClick(e: MouseEvent) {
+ *     console.log("Clicked!", e);
  *   },
- *   styles: { buttonStyle },
  * });
+ *
+ * const routeStyles = new tiny.Styles(import.meta.url, { buttonStyle });
  *
  * const app = new Hono()
  *   .use(...tiny.middleware.all())
- *   .use(tiny.middleware.sharedImports(tools));
+ *   .use(tiny.middleware.sharedImports(routeHandlers, routeStyles));
  *
  * app.get("/", (c) => {
  *   const { fn, styled } = c.var.tools;
@@ -58,10 +57,9 @@ export {
   withLayoutTools,
 } from "./honoFactory.tsx";
 
-// ClientTools (unified) exports
+// Handlers & Styles exports
 export {
   type ActivatedClientTools,
-  ClientTools,
   Handlers,
   type HandlersOptions,
   imports,

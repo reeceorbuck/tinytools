@@ -1,8 +1,8 @@
 /**
- * Type checking tests for tiny.middleware and sharedImports with ClientTools.
+ * Type checking tests for tiny.middleware and sharedImports with Handlers/Styles.
  *
  * These tests verify that the TypeScript compiler correctly infers and enforces
- * types when creating Hono instances with ClientTools.
+ * types when creating Hono instances with Handlers and Styles.
  *
  * Run with: deno test --check tests/honoFactory.typecheck.test.tsx
  */
@@ -12,7 +12,7 @@
 import { assertEquals, assertExists } from "@std/assert";
 import { Hono } from "hono";
 import { type InferTools, tiny, type withAncestors } from "../honoFactory.tsx";
-import { ClientTools } from "../clientTools.ts";
+import { Handlers, Styles } from "../clientTools.ts";
 import { css } from "../scopedStyles.ts";
 import type { ActivatedClientFunction, JSX } from "../jsx-runtime.ts";
 
@@ -23,53 +23,38 @@ type AnyActivatedClientFunction = ActivatedClientFunction<
 >;
 
 // ============================================================================
-// Test Fixtures - Mock ClientTools for testing
+// Test Fixtures - Mock tools for testing
 // ============================================================================
 
-/** Creates mock ClientTools with test handlers and styles */
-const testStyle = css`
-  color: blue;
-  padding: 10px;
-`;
+/** Creates mock Handlers with test handlers */
+const mockHandlers = new Handlers(import.meta.url, {
+  testHandler(this: HTMLElement, e: MouseEvent) {
+    console.log("Test handler called", e);
+  },
+  anotherHandler(this: HTMLElement, e: KeyboardEvent) {
+    console.log("Another handler called", e);
+  },
+});
 
-const anotherStyle = css`
-  background: red;
-`;
-
-function createMockTools() {
-  return new ClientTools(import.meta.url, {
-    functions: {
-      testHandler(this: HTMLElement, e: MouseEvent) {
-        console.log("Test handler called", e);
-      },
-      anotherHandler(this: HTMLElement, e: KeyboardEvent) {
-        console.log("Another handler called", e);
-      },
-    },
-    styles: {
-      testStyle,
-      anotherStyle,
-    },
-  });
-}
+const mockStyles = new Styles(import.meta.url, {
+  testStyle,
+  anotherStyle,
+});
 
 const childStyle = css`
   border: 1px solid black;
 `;
 
-/** Creates secondary mock ClientTools for child routes */
-function createChildTools() {
-  return new ClientTools(import.meta.url, {
-    functions: {
-      childHandler(this: HTMLElement, e: MouseEvent) {
-        console.log("Child handler called", e);
-      },
-    },
-    styles: {
-      childStyle,
-    },
-  });
-}
+/** Creates secondary mock tools for child routes */
+const childHandlers = new Handlers(import.meta.url, {
+  childHandler(this: HTMLElement, e: MouseEvent) {
+    console.log("Child handler called", e);
+  },
+});
+
+const childStyles = new Styles(import.meta.url, {
+  childStyle,
+});
 
 // ============================================================================
 // Test Suite: tiny.middleware.core and sharedImports basic functionality
@@ -90,11 +75,11 @@ Deno.test("tiny.middleware.globalStyles - creates middleware handler", () => {
 });
 
 Deno.test("Hono with tiny.middleware.core and sharedImports - has correct types", () => {
-  const tools = createMockTools();
+  
 
   const app = new Hono()
     .use(...tiny.middleware.core())
-    .use(tiny.middleware.sharedImports(tools));
+    .use(tiny.middleware.sharedImports(mockHandlers, mockStyles));
 
   // Should have standard Hono methods
   assertExists(app.get);
@@ -107,11 +92,11 @@ Deno.test("Hono with tiny.middleware.core and sharedImports - has correct types"
 // ============================================================================
 
 Deno.test("sharedImports - context has correct fn type in route handler", () => {
-  const tools = createMockTools();
+  
 
   const app = new Hono()
     .use(...tiny.middleware.core())
-    .use(tiny.middleware.sharedImports(tools));
+    .use(tiny.middleware.sharedImports(mockHandlers, mockStyles));
 
   // Register a route to verify context types
   app.get("/test", (c) => {
@@ -133,11 +118,11 @@ Deno.test("sharedImports - context has correct fn type in route handler", () => 
 });
 
 Deno.test("sharedImports - context has correct styled type in route handler", () => {
-  const tools = createMockTools();
+  
 
   const app = new Hono()
     .use(...tiny.middleware.core())
-    .use(tiny.middleware.sharedImports(tools));
+    .use(tiny.middleware.sharedImports(mockHandlers, mockStyles));
 
   app.get("/test", (c) => {
     // Type check: c.var.tools.styled should have testStyle and anotherStyle as strings
@@ -158,11 +143,11 @@ Deno.test("sharedImports - context has correct styled type in route handler", ()
 });
 
 Deno.test("sharedImports - context has both fn and styled via tools", () => {
-  const tools = createMockTools();
+  
 
   const app = new Hono()
     .use(...tiny.middleware.core())
-    .use(tiny.middleware.sharedImports(tools));
+    .use(tiny.middleware.sharedImports(mockHandlers, mockStyles));
 
   app.get("/test", (c) => {
     // Access via tools object
@@ -186,17 +171,17 @@ Deno.test("sharedImports - context has both fn and styled via tools", () => {
 // ============================================================================
 
 Deno.test("withAncestors - child route with ancestor types", () => {
-  const parentTools = createMockTools();
-  const childTools = createChildTools();
+  
+  
 
   // Parent app
   const parentApp = new Hono()
     .use(...tiny.middleware.core())
-    .use(tiny.middleware.sharedImports(parentTools));
+    .use(tiny.middleware.sharedImports(mockHandlers, mockStyles));
 
   // Child route with ancestor type declaration
-  const childRoute = new Hono<withAncestors<[typeof parentTools]>>()
-    .use(tiny.middleware.sharedImports(childTools))
+  const childRoute = new Hono<withAncestors<[typeof mockHandlers]>>()
+    .use(tiny.middleware.sharedImports(childHandlers, childStyles))
     .get("/test", (c) => {
       const { fn } = c.var.tools;
 
@@ -223,11 +208,11 @@ Deno.test("withAncestors - child route with ancestor types", () => {
 // ============================================================================
 
 Deno.test("Type safety - accessing non-existent handler should be type error (compile check)", () => {
-  const tools = createMockTools();
+  
 
   const app = new Hono()
     .use(...tiny.middleware.core())
-    .use(tiny.middleware.sharedImports(tools));
+    .use(tiny.middleware.sharedImports(mockHandlers, mockStyles));
 
   app.get("/typecheck", (c) => {
     const { fn } = c.var.tools;
@@ -246,11 +231,11 @@ Deno.test("Type safety - accessing non-existent handler should be type error (co
 });
 
 Deno.test("Type safety - accessing non-existent style should be type error (compile check)", () => {
-  const tools = createMockTools();
+  
 
   const app = new Hono()
     .use(...tiny.middleware.core())
-    .use(tiny.middleware.sharedImports(tools));
+    .use(tiny.middleware.sharedImports(mockHandlers, mockStyles));
 
   app.get("/typecheck", (c) => {
     const { styled } = c.var.tools;
@@ -273,11 +258,11 @@ Deno.test("Type safety - accessing non-existent style should be type error (comp
 // ============================================================================
 
 Deno.test("JSX types - onClick requires ActivatedClientFunction", () => {
-  const tools = createMockTools();
+  
 
   const app = new Hono()
     .use(...tiny.middleware.core())
-    .use(tiny.middleware.sharedImports(tools));
+    .use(tiny.middleware.sharedImports(mockHandlers, mockStyles));
 
   app.get("/test", (c) => {
     const { fn } = c.var.tools;
@@ -293,12 +278,11 @@ Deno.test("JSX types - onClick requires ActivatedClientFunction", () => {
 });
 
 // ============================================================================
-// Test Suite: ClientTools - constructor options
+// Test Suite: Handlers/Styles - constructor options
 // ============================================================================
 
-Deno.test("ClientTools - constructor with multiple functions preserves accumulated types", () => {
-  const tools = new ClientTools(import.meta.url, {
-    functions: {
+Deno.test("Handlers - constructor with multiple functions preserves accumulated types", () => {
+  const tools = new Handlers(import.meta.url, {
       handler1() {
         console.log("1");
       },
@@ -308,12 +292,11 @@ Deno.test("ClientTools - constructor with multiple functions preserves accumulat
       handler3() {
         console.log("3");
       },
-    },
-  });
+    });
 
   const app = new Hono()
     .use(...tiny.middleware.core())
-    .use(tiny.middleware.sharedImports(tools));
+    .use(tiny.middleware.sharedImports(mockHandlers, mockStyles));
 
   app.get("/test", (c) => {
     const { fn } = c.var.tools;
@@ -345,18 +328,16 @@ const style3 = css`
   color: blue;
 `;
 
-Deno.test("ClientTools - constructor with multiple styles preserves accumulated types", () => {
-  const tools = new ClientTools(import.meta.url, {
-    styles: {
+Deno.test("Styles - constructor with multiple styles preserves accumulated types", () => {
+  const tools = new Styles(import.meta.url, {
       style1,
       style2,
       style3,
-    },
-  });
+    });
 
   const app = new Hono()
     .use(...tiny.middleware.core())
-    .use(tiny.middleware.sharedImports(tools));
+    .use(tiny.middleware.sharedImports(mockHandlers, mockStyles));
 
   app.get("/test", (c) => {
     const { styled } = c.var.tools;
@@ -384,25 +365,24 @@ const anotherStyle2 = css`
   color: red;
 `;
 
-Deno.test("ClientTools - mixed functions and styles in constructor", () => {
-  const tools = new ClientTools(import.meta.url, {
-    functions: {
-      myHandler() {
-        console.log("handler");
-      },
-      anotherHandler() {
-        console.log("another");
-      },
+Deno.test("Handlers and Styles - mixed functions and styles", () => {
+  const localHandlers = new Handlers(import.meta.url, {
+    myHandler() {
+      console.log("handler");
     },
-    styles: {
-      myStyle,
-      anotherStyle: anotherStyle2,
+    anotherHandler() {
+      console.log("another");
     },
+  });
+
+  const localStyles = new Styles(import.meta.url, {
+    myStyle,
+    anotherStyle: anotherStyle2,
   });
 
   const app = new Hono()
     .use(...tiny.middleware.core())
-    .use(tiny.middleware.sharedImports(tools));
+    .use(tiny.middleware.sharedImports(localHandlers, localStyles));
 
   app.get("/test", (c) => {
     const { fn, styled } = c.var.tools;
@@ -429,19 +409,17 @@ Deno.test("ClientTools - mixed functions and styles in constructor", () => {
 // ============================================================================
 
 Deno.test("extend - extends tools within a route handler", () => {
-  const parentTools = createMockTools();
+  
 
   const app = new Hono()
     .use(...tiny.middleware.core())
-    .use(tiny.middleware.sharedImports(parentTools));
+    .use(tiny.middleware.sharedImports(mockHandlers, mockStyles));
 
-  const singleRouteTools = new ClientTools(import.meta.url, {
-    functions: {
+  const singleRouteTools = new Handlers(import.meta.url, {
       routeHandler() {
         console.log("route only");
       },
-    },
-  });
+    });
 
   app.get("/test", async (c) => {
     const { fn } = await c.var.tools.extendWithImports(singleRouteTools);
@@ -462,27 +440,23 @@ Deno.test("extend - extends tools within a route handler", () => {
 });
 
 Deno.test("extendWithImports - accepts multiple local tools in one call", () => {
-  const parentTools = createMockTools();
+  
 
-  const localToolsA = new ClientTools(import.meta.url, {
-    functions: {
+  const localToolsA = new Handlers(import.meta.url, {
       routeHandlerA() {
         console.log("route A");
       },
-    },
-  });
+    });
 
-  const localToolsB = new ClientTools(import.meta.url, {
-    functions: {
+  const localToolsB = new Handlers(import.meta.url, {
       routeHandlerB() {
         console.log("route B");
       },
-    },
-  });
+    });
 
   const app = new Hono()
     .use(...tiny.middleware.core())
-    .use(tiny.middleware.sharedImports(parentTools));
+    .use(tiny.middleware.sharedImports(mockHandlers, mockStyles));
 
   app.get("/test-multi-extend", async (c) => {
     const { fn } = await c.var.tools.extendWithImports(
@@ -509,7 +483,7 @@ Deno.test("extendWithImports - accepts multiple local tools in one call", () => 
 // ============================================================================
 
 Deno.test("InferTools - correctly infers tool types", () => {
-  const tools = createMockTools();
+  
 
   // InferTools should extract the activated tools type
   type ToolsType = InferTools<typeof tools>;
@@ -535,21 +509,17 @@ Deno.test("InferTools - correctly infers tool types", () => {
 // ============================================================================
 
 Deno.test("Multiple sharedImports - combines tools from multiple middleware", () => {
-  const tools1 = new ClientTools(import.meta.url, {
-    functions: {
+  const tools1 = new Handlers(import.meta.url, {
       handler1() {
         console.log("1");
       },
-    },
-  });
+    });
 
-  const tools2 = new ClientTools(import.meta.url, {
-    functions: {
+  const tools2 = new Handlers(import.meta.url, {
       handler2() {
         console.log("2");
       },
-    },
-  });
+    });
 
   const app = new Hono()
     .use(...tiny.middleware.core())
@@ -573,21 +543,17 @@ Deno.test("Multiple sharedImports - combines tools from multiple middleware", ()
 });
 
 Deno.test("sharedImports - combines tools passed in a single middleware call", () => {
-  const handlerTools = new ClientTools(import.meta.url, {
-    functions: {
+  const handlerTools = new Handlers(import.meta.url, {
       handler1() {
         console.log("1");
       },
-    },
-  });
+    });
 
-  const styleTools = new ClientTools(import.meta.url, {
-    styles: {
+  const styleTools = new Styles(import.meta.url, {
       panel: css`
         color: rebeccapurple;
       `,
-    },
-  });
+    });
 
   const app = new Hono()
     .use(...tiny.middleware.core())

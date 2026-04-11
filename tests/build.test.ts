@@ -25,7 +25,7 @@ import {
   setCustomScope,
   styleBundleRegistry,
 } from "../scopedStyles.ts";
-import { cache, ClientTools } from "../clientTools.ts";
+import { cache, Handlers, Styles } from "../clientTools.ts";
 import { registeredClientTools } from "../clientTools.ts";
 import { css } from "../scopedStyles.ts";
 
@@ -141,13 +141,11 @@ Deno.test({
     resetRegistries();
 
     // Register a handler using ClientTools
-    new ClientTools(import.meta.url, {
-      functions: {
+    new Handlers(import.meta.url, {
         testHandler(this: HTMLElement) {
           console.log("test");
         },
-      },
-    });
+      });
 
     // Build
     await buildForTest({
@@ -179,9 +177,7 @@ Deno.test({
     const testStyle = css`
       color: blue;
     `;
-    new ClientTools(import.meta.url, {
-      styles: { testStyle },
-    });
+    new Styles(import.meta.url, { testStyle });
 
     // Build
     await buildForTest({
@@ -213,13 +209,11 @@ Deno.test({
     resetRegistries();
 
     // Register a handler
-    new ClientTools(import.meta.url, {
-      functions: {
+    new Handlers(import.meta.url, {
         unchangedHandler(this: HTMLElement) {
           console.log("unchanged");
         },
-      },
-    });
+      });
 
     // First build
     await buildForTest({
@@ -270,9 +264,7 @@ Deno.test({
     const unchangedStyle = css`
       background: red;
     `;
-    new ClientTools(import.meta.url, {
-      styles: { unchangedStyle },
-    });
+    new Styles(import.meta.url, { unchangedStyle });
 
     // First build
     await buildForTest({
@@ -324,8 +316,7 @@ Deno.test({
 
     // Create multiple handlers in the same "file" (using same import.meta.url)
     // The import registry will track all handlers from the same source file
-    new ClientTools(import.meta.url, {
-      functions: {
+    new Handlers(import.meta.url, {
         sharedHelper() {
           return "shared result";
         },
@@ -334,8 +325,7 @@ Deno.test({
           // The import registry should include sharedHelper
           console.log("consumer");
         },
-      },
-    });
+      });
 
     // Build
     await buildForTest({
@@ -394,13 +384,11 @@ Deno.test({
     );
 
     // Register a different handler
-    new ClientTools(import.meta.url, {
-      functions: {
+    new Handlers(import.meta.url, {
         activeHandler(this: HTMLElement) {
           console.log("active");
         },
-      },
-    });
+      });
 
     // Build
     await buildForTest({
@@ -448,9 +436,7 @@ Deno.test({
     const activeStyle = css`
       color: green;
     `;
-    new ClientTools(import.meta.url, {
-      styles: { activeStyle },
-    });
+    new Styles(import.meta.url, { activeStyle });
 
     // Build
     await buildForTest({
@@ -494,17 +480,15 @@ Deno.test({
     const formStyle = css`
       margin: 20px;
     `;
-    new ClientTools(import.meta.url, {
-      functions: {
+    new Handlers(import.meta.url, {
         clickHandler(this: HTMLElement) {
           console.log("click");
         },
         submitHandler(this: HTMLFormElement) {
           console.log("submit");
         },
-      },
-      styles: { buttonStyle, formStyle },
-    });
+      });
+    new Styles(import.meta.url, { buttonStyle, formStyle });
 
     // Build
     await buildForTest({
@@ -737,13 +721,11 @@ Deno.test({
     assertEquals(await fileExists(TEST_STYLES_DIR), false);
 
     // Register something to build
-    new ClientTools(import.meta.url, {
-      functions: {
+    new Handlers(import.meta.url, {
         dirTestHandler() {
           console.log("test");
         },
-      },
-    });
+      });
 
     // Build
     await buildForTest({
@@ -775,13 +757,11 @@ Deno.test({
     resetRegistries();
 
     // Register a handler
-    new ClientTools(import.meta.url, {
-      functions: {
+    new Handlers(import.meta.url, {
         esModuleHandler(this: HTMLElement, e: Event) {
           console.log("event", e);
         },
-      },
-    });
+      });
 
     // Build
     await buildForTest({
@@ -832,9 +812,7 @@ Deno.test({
       color: purple;
       font-size: 16px;
     `;
-    new ClientTools(import.meta.url, {
-      styles: { scopedStyle },
-    });
+    new Styles(import.meta.url, { scopedStyle });
 
     // Build
     await buildForTest({
@@ -876,8 +854,7 @@ Deno.test({
     await cleanupTestDirs();
     resetRegistries();
 
-    new ClientTools(import.meta.url, {
-      styles: {
+    new Styles(import.meta.url, {
         boundaryA: setCustomScope.toBoundary(css`
           color: purple;
         `),
@@ -890,8 +867,7 @@ Deno.test({
           `,
           [".stop"],
         ),
-      },
-    });
+      });
 
     await buildForTest({
       clientDir: TEST_CLIENT_DIR,
@@ -969,11 +945,9 @@ Deno.test({
     const handlerFn = function (this: HTMLElement) {
       console.log("consistent");
     };
-    new ClientTools(import.meta.url, {
-      functions: {
+    new Handlers(import.meta.url, {
         consistentHandler: handlerFn,
-      },
-    });
+      });
 
     // Build
     await buildForTest({
@@ -991,11 +965,9 @@ Deno.test({
     resetRegistries();
 
     // Register the same handler again
-    new ClientTools(import.meta.url, {
-      functions: {
+    new Handlers(import.meta.url, {
         consistentHandler: handlerFn,
-      },
-    });
+      });
 
     // Build again
     await buildForTest({
@@ -1068,13 +1040,11 @@ Deno.test({
     resetRegistries();
 
     // Don't create the client directory
-    new ClientTools(import.meta.url, {
-      functions: {
+    new Handlers(import.meta.url, {
         noClientDirHandler() {
           console.log("test");
         },
-      },
-    });
+      });
 
     // Build should not throw
     await buildForTest({
@@ -1107,23 +1077,18 @@ Deno.test({
 
     // Create a shared utility using a fake external URL
     const externalUrl = "file:///fake/external/source.ts";
-    const sharedTools = new ClientTools(externalUrl, {
-      functions: {
+    const sharedTools = new Handlers(externalUrl, {
         externalUtility() {
           return "external result";
         },
-      },
-    });
+      });
 
     // Create a consumer in a different file that imports the external tools
-    const _consumerTools = new ClientTools(import.meta.url, {
-      imports: [sharedTools],
-      functions: {
+    const _consumerTools = new Handlers(import.meta.url, {
         consumerFunction(this: HTMLElement) {
           console.log("consuming external");
         },
-      },
-    });
+      }, { imports: [sharedTools] });
 
     // Build
     await buildForTest({
@@ -1159,13 +1124,11 @@ Deno.test({
     resetRegistries();
 
     // First build a handler
-    new ClientTools(import.meta.url, {
-      functions: {
+    new Handlers(import.meta.url, {
         dependentHandler(this: HTMLElement) {
           console.log("version 1");
         },
-      },
-    });
+      });
 
     await buildForTest({
       clientDir: TEST_CLIENT_DIR,
@@ -1185,13 +1148,11 @@ Deno.test({
     // Now reset and rebuild without changes - should skip rebuild
     resetRegistries();
 
-    new ClientTools(import.meta.url, {
-      functions: {
+    new Handlers(import.meta.url, {
         dependentHandler(this: HTMLElement) {
           console.log("version 1");
         },
-      },
-    });
+      });
 
     await buildForTest({
       clientDir: TEST_CLIENT_DIR,
@@ -1221,13 +1182,11 @@ Deno.test({
     // When using a URL that doesn't exist (forcing fresh hash calculation),
     // different code should produce different hashes
     const fakeUrl1 = "file:///test/unique/path1.ts";
-    new ClientTools(fakeUrl1, {
-      functions: {
+    new Handlers(fakeUrl1, {
         hashedHandler(this: HTMLElement) {
           console.log("version 1");
         },
-      },
-    });
+      });
 
     await buildForTest({
       clientDir: TEST_CLIENT_DIR,
@@ -1245,13 +1204,11 @@ Deno.test({
 
     // Use a different fake URL to force fresh hash calculation
     const fakeUrl2 = "file:///test/unique/path2.ts";
-    new ClientTools(fakeUrl2, {
-      functions: {
+    new Handlers(fakeUrl2, {
         hashedHandler(this: HTMLElement) {
           console.log("version 2 - different code");
         },
-      },
-    });
+      });
 
     await buildForTest({
       clientDir: TEST_CLIENT_DIR,
@@ -1288,9 +1245,7 @@ Deno.test({
     const hashedStyle1 = css`
       color: red;
     `;
-    new ClientTools(fakeUrl1, {
-      styles: { hashedStyle: hashedStyle1 },
-    });
+    new Styles(fakeUrl1, { hashedStyle: hashedStyle1 });
 
     await buildForTest({
       clientDir: TEST_CLIENT_DIR,
@@ -1312,9 +1267,7 @@ Deno.test({
       color: blue;
       font-size: 20px;
     `;
-    new ClientTools(fakeUrl2, {
-      styles: { hashedStyle: hashedStyle2 },
-    });
+    new Styles(fakeUrl2, { hashedStyle: hashedStyle2 });
 
     await buildForTest({
       clientDir: TEST_CLIENT_DIR,
@@ -1353,14 +1306,12 @@ Deno.test({
     const onlyStyle = css`
       color: only;
     `;
-    new ClientTools(import.meta.url, {
-      functions: {
+    new Handlers(import.meta.url, {
         onlyHandler() {
           console.log("only");
         },
-      },
-      styles: { onlyStyle },
-    });
+      });
+    new Styles(import.meta.url, { onlyStyle });
 
     await buildForTest({
       clientDir: TEST_CLIENT_DIR,
@@ -1402,13 +1353,11 @@ Deno.test({
     );
 
     // Register a handler
-    new ClientTools(import.meta.url, {
-      functions: {
+    new Handlers(import.meta.url, {
         preserveTestHandler() {
           console.log("test");
         },
-      },
-    });
+      });
 
     await buildForTest({
       clientDir: TEST_CLIENT_DIR,
@@ -1446,9 +1395,7 @@ Deno.test({
     const preserveTestStyle = css`
       color: test;
     `;
-    new ClientTools(import.meta.url, {
-      styles: { preserveTestStyle },
-    });
+    new Styles(import.meta.url, { preserveTestStyle });
 
     await buildForTest({
       clientDir: TEST_CLIENT_DIR,
@@ -1481,21 +1428,17 @@ Deno.test({
     const fakeUrl = "file:///test/duplicate-names/handlers.ts";
 
     // Two instances in the same "file", same handler name, different content
-    const tools1 = new ClientTools(fakeUrl, {
-      functions: {
+    const tools1 = new Handlers(fakeUrl, {
         clickHandler(this: HTMLElement) {
           console.log("first handler");
         },
-      },
-    });
+      });
 
-    const tools2 = new ClientTools(fakeUrl, {
-      functions: {
+    const tools2 = new Handlers(fakeUrl, {
         clickHandler(this: HTMLElement) {
           console.log("second handler - different");
         },
-      },
-    });
+      });
 
     // Both should have distinct filenames
     const filename1 = [...tools1._handlerFilenames.values()][0];
@@ -1553,13 +1496,9 @@ Deno.test({
     `;
 
     // Two instances in the same "file", same style name, different content
-    const tools1 = new ClientTools(fakeUrl, {
-      styles: { buttonStyle: style1 },
-    });
+    const tools1 = new Styles(fakeUrl, { buttonStyle: style1 });
 
-    const tools2 = new ClientTools(fakeUrl, {
-      styles: { buttonStyle: style2 },
-    });
+    const tools2 = new Styles(fakeUrl, { buttonStyle: style2 });
 
     // Both should have distinct individual style filenames
     const styleImpl1 = [...tools1._styles.values()][0];
@@ -1599,13 +1538,11 @@ Deno.test({
     resetRegistries();
 
     const fakeUrl = "file:///test/style-bundle-refresh.tsx";
-    const tools = new ClientTools(fakeUrl, {
-      styles: {
+    const tools = new Styles(fakeUrl, {
         panel: css`
           color: blue;
         `,
-      },
-    });
+      });
 
     const originalBundleFilename = tools._styleFilenames.get("panel");
     assertExists(originalBundleFilename);
@@ -1658,16 +1595,12 @@ Deno.test({
     const exporterUrl = "file:///test/exporter-styles.tsx";
     const importerUrl = "file:///test/importer-styles.tsx";
 
-    const exporter = new ClientTools(exporterUrl, {
-      styles: {
+    const exporter = new Styles(exporterUrl, {
         panel: css`
           color: blue;
         `,
-      },
-    });
-    const importer = new ClientTools(importerUrl, {
-      imports: [exporter],
-    });
+      });
+    const importer = new Styles(importerUrl, {}, { imports: [exporter] });
 
     const originalExporterBundle = exporter._styleFilenames.get("panel");
     assertExists(originalExporterBundle);
@@ -1724,13 +1657,11 @@ Deno.test({
     };
 
     // With the cache populated, the constructor trusts the cached filename
-    const tools = new ClientTools(fakeUrl, {
-      styles: {
+    const tools = new Styles(fakeUrl, {
         panel: css`
           color: hotpink;
         `,
-      },
-    });
+      });
 
     // The constructor trusts the cache on a warm start — this is expected
     // for startup performance. Stale algorithm caches are wiped by the
@@ -1756,26 +1687,22 @@ Deno.test({
 
     const baseUrl =
       `file:///test/query-normalization-${crypto.randomUUID()}.tsx`;
-    const toolsA = new ClientTools(`${baseUrl}?v=123`, {
-      styles: {
+    const toolsA = new Styles(`${baseUrl}?v=123`, {
         panel: css`
           color: chartreuse;
         `,
-      },
-    });
+      });
 
     const styleA = toolsA.generatedStyleNames.get("panel");
     assertExists(styleA);
 
     resetRegistries();
 
-    const toolsB = new ClientTools(`${baseUrl}?v=456`, {
-      styles: {
+    const toolsB = new Styles(`${baseUrl}?v=456`, {
         panel: css`
           color: chartreuse;
         `,
-      },
-    });
+      });
 
     assertEquals(
       toolsB.generatedStyleNames.get("panel"),

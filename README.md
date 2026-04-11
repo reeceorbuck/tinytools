@@ -8,8 +8,8 @@ enhanced JSX event handlers.
 
 ### Core Features
 
-- **ClientTools** - Unified factory for type-safe client-side event handlers and
-  scoped CSS styles
+- **Handlers & Styles** - Separate factories for type-safe client-side event
+  handlers and scoped CSS styles
 - **Enhanced JSX Types** - Better inline event types (onSubmit, onClick, etc.)
   that enforce type safety
 
@@ -43,10 +43,10 @@ enhanced JSX event handlers.
 
 ```tsx
 import { Hono } from "hono";
-import { ClientTools, css, setCustomScope, tiny } from "@tinytools/hono-tools";
+import { css, setCustomScope, tiny } from "@tinytools/hono-tools";
 import { buildScriptFiles } from "@tinytools/hono-tools/build";
 
-// Define client-side event handlers and styles together
+// Define client-side event handlers and styles separately
 const buttonStyle = css`
   background: blue;
   color: white;
@@ -57,52 +57,52 @@ const buttonStyle = css`
   }
 `;
 
-const tools = new ClientTools(import.meta.url, {
-  functions: {
-    handleClick(this: HTMLButtonElement, e: MouseEvent) {
-      console.log("Clicked!", e);
-      this.textContent = "Clicked!";
-    },
-    handleSubmit(this: HTMLFormElement, e: SubmitEvent) {
-      e.preventDefault();
-      console.log("Form submitted!");
-    },
+const routeHandlers = new tiny.Handlers(import.meta.url, {
+  handleClick(this: HTMLButtonElement, e: MouseEvent) {
+    console.log("Clicked!", e);
+    this.textContent = "Clicked!";
   },
-  styles: {
-    buttonStyle,
-    cardLayout: setCustomScope.toSelectors(
-      css`
-        display: grid;
-        gap: 12px;
-      `,
-      [".scopeBoundary>*"],
-    ),
-    articleBody: setCustomScope.toSelectors(
-      css`
-        font-size: 0.95rem;
-      `,
-      [".scope-break", "[data-scope-stop]"],
-    ),
-    articleInnerLayout: setCustomScope.toSelectors(
-      css`
-        margin-block: 8px;
-      `,
-      [".scope-break>*", "[data-scope-stop]>*"],
-    ),
-  },
-  globalStyles: { // TODO: globalStyles would always be unscoped
-    appTheme: setCustomScope.unscoped(css`
-      :root {
-        color-scheme: light;
-      }
-    `),
+  handleSubmit(this: HTMLFormElement, e: SubmitEvent) {
+    e.preventDefault();
+    console.log("Form submitted!");
   },
 });
+
+const routeStyles = new tiny.Styles(import.meta.url, {
+  buttonStyle,
+  cardLayout: setCustomScope.toSelectors(
+    css`
+      display: grid;
+      gap: 12px;
+    `,
+    [".scopeBoundary>*"],
+  ),
+  articleBody: setCustomScope.toSelectors(
+    css`
+      font-size: 0.95rem;
+    `,
+    [".scope-break", "[data-scope-stop]"],
+  ),
+  articleInnerLayout: setCustomScope.toSelectors(
+    css`
+      margin-block: 8px;
+    `,
+    [".scope-break>*", "[data-scope-stop]>*"],
+  ),
+});
+
+const globalStyles = new tiny.Styles(import.meta.url, {
+  appTheme: setCustomScope.unscoped(css`
+    :root {
+      color-scheme: light;
+    }
+  `),
+}, { global: true });
 
 // Create Hono app with tools using middleware
 const app = new Hono()
   .use(...tiny.middleware.all())
-  .use(tiny.middleware.sharedImports(tools));
+  .use(tiny.middleware.sharedImports(routeHandlers, routeStyles));
 
 // Use in routes
 app.get("/", (c) => {
@@ -130,9 +130,9 @@ export default app;
 > `[data-scope-boundary~="global"]`. The `~=` operator ensures exact token
 > matching, so `global` does not match partial values like `my-global-theme`.
 
-> **⚠️ Important:** Always declare `ClientTools` instances at **module level**
+> **⚠️ Important:** Always declare `Handlers` and `Styles` instances at **module level**
 > (outside of route handlers). This ensures handlers and styles are registered
-> once at startup and included in the build. Creating `ClientTools` inside a
+> once at startup and included in the build. Creating them inside a
 > route handler would re-register them on every request, causing performance
 > issues and build inconsistencies.
 
@@ -160,7 +160,7 @@ each connected client's `sseId` plus recent route paths.
 **`tiny.middleware.webComponents()`** - Enables lifecycle and window-event web
 components.
 
-**`tiny.middleware.globalStyles(...styles)`** - Ensures `ClientTools`
+**`tiny.middleware.globalStyles(...styles)`** - Ensures
 `globalStyles` assets are included on every request.
 
 **`tiny.middleware.layout(renderFn)`** - Adds a layout wrapper for sub-routes.
@@ -169,64 +169,60 @@ components.
 
 ```ts
 import { Hono } from "hono";
-import { ClientTools, tiny } from "@tinytools/hono-tools";
+import { tiny } from "@tinytools/hono-tools";
 
-const tools = new ClientTools(import.meta.url, {
-  functions: {
-    handleClick() {
-      console.log("clicked");
-    },
+const handlers = new tiny.Handlers(import.meta.url, {
+  handleClick() {
+    console.log("clicked");
   },
 });
 
 // Opt-in: only core tools (no client scripts)
 const app = new Hono()
   .use(...tiny.middleware.core())
-  .use(tiny.middleware.sharedImports(tools));
+  .use(tiny.middleware.sharedImports(handlers));
 
 // Opt-in: core + navigation + SSE
 const app2 = new Hono()
   .use(...tiny.middleware.core())
   .use(tiny.middleware.navApiTools())
   .use(tiny.middleware.sseTools())
-  .use(tiny.middleware.sharedImports(tools));
+  .use(tiny.middleware.sharedImports(handlers));
 
 // Everything enabled
 const app3 = new Hono()
   .use(...tiny.middleware.all({ generatedStyleHashLength: 4 }))
-  .use(tiny.middleware.sharedImports(tools));
+  .use(tiny.middleware.sharedImports(handlers));
 ```
 
 #### `tiny.middleware.sharedImports(...tools)`
 
 Creates middleware that extends the current tools context with additional
-ClientTools. Pass one or more tool groups to add route-specific or app-level
+Handlers/Styles. Pass one or more tool groups to add route-specific or app-level
 handlers and styles in a single middleware call.
 
 ```ts
 import { Hono } from "hono";
-import { ClientTools, tiny } from "@tinytools/hono-tools";
+import { tiny } from "@tinytools/hono-tools";
 
-const globalTools = new ClientTools(import.meta.url, {
-  functions: {
-    globalHandler() {
-      console.log("global");
-    },
+const globalHandlers = new tiny.Handlers(import.meta.url, {
+  globalHandler() {
+    console.log("global");
   },
 });
 
 const app = new Hono()
   .use(...tiny.middleware.core())
-  .use(tiny.middleware.sharedImports(globalTools));
+  .use(tiny.middleware.sharedImports(globalHandlers));
 
 const routeTools = new Hono()
   .use(...tiny.middleware.core())
-  .use(tiny.middleware.sharedImports(globalTools, routeStyles));
+  .use(tiny.middleware.sharedImports(globalHandlers, routeStyles));
 
 const themedApp = new Hono()
   .use(...tiny.middleware.core())
-  .use(tiny.middleware.sharedImports(globalTools))
-  .use(tiny.middleware.globalStyles(...globalTools.globalStyles));
+  .use(tiny.middleware.sharedImports(globalHandlers))
+  .use(tiny.middleware.globalStyles(...globalStyles.globalStyles));
 ```
 
 #### `withAncestors<T>`
@@ -236,15 +232,13 @@ safety when accessing tools from parent routes.
 
 ```ts
 import { Hono } from "hono";
-import { ClientTools, tiny, withAncestors } from "@tinytools/hono-tools";
+import { tiny, type withAncestors } from "@tinytools/hono-tools";
 import type { globalTools } from "./main.tsx";
 import type { parentTools } from "./parent.tsx";
 
-const localTools = new ClientTools(import.meta.url, {
-  functions: {
-    localHandler() {
-      console.log("local");
-    },
+const localHandlers = new tiny.Handlers(import.meta.url, {
+  localHandler() {
+    console.log("local");
   },
 });
 
@@ -252,7 +246,7 @@ const localTools = new ClientTools(import.meta.url, {
 export const childRoute = new Hono<
   withAncestors<[typeof parentTools, typeof globalTools]>
 >()
-  .use(tiny.middleware.sharedImports(localTools))
+  .use(tiny.middleware.sharedImports(localHandlers))
   .get("/", (c) => {
     const { fn } = c.var.tools;
     // Has access to: localHandler, parentTools handlers, globalTools handlers
@@ -260,17 +254,17 @@ export const childRoute = new Hono<
   });
 ```
 
-#### `ClientTools`
+#### `Handlers` & `Styles`
 
-Unified factory for creating type-safe client-side event handlers and scoped CSS
-styles.
+Separate factories for creating type-safe client-side event handlers and scoped
+CSS styles.
 
-> **\u26a0\ufe0f Always declare at module level** - `ClientTools` instances must
+> **\u26a0\ufe0f Always declare at module level** - `Handlers` and `Styles` instances must
 > be created outside of route handlers so they are registered once at startup
 > and included in the build process.
 
 ```ts
-import { ClientTools, css } from "@tinytools/hono-tools";
+import { tiny, css } from "@tinytools/hono-tools";
 
 const myStyle = css`
   color: blue;
@@ -278,24 +272,22 @@ const myStyle = css`
 `;
 
 // ✅ Correct: declared at module level
-const tools = new ClientTools(import.meta.url, {
-  functions: {
-    handlerName(this: HTMLElement, e: Event) {
-      // Handler code runs in the browser
-    },
+const handlers = new tiny.Handlers(import.meta.url, {
+  handlerName(this: HTMLElement, e: Event) {
+    // Handler code runs in the browser
   },
-  styles: { myStyle },
 });
 
-// Import handlers and styles from other files
-const combined = new ClientTools(import.meta.url, {
-  imports: [externalTools],
-  functions: {
-    localHandler() {
-      // ...
-    },
-  },
+const styles = new tiny.Styles(import.meta.url, {
+  myStyle,
 });
+
+// Import handlers from other files
+const localHandlers = new tiny.Handlers(import.meta.url, {
+  localHandler() {
+    // ...
+  },
+}, { imports: [externalHandlers] });
 ```
 
 #### Reusing a client function inside another client function
@@ -313,57 +305,50 @@ Why this is required:
 
 There are two different patterns to follow:
 
-- **Across separate `ClientTools` instances**: use
+- **Across separate instances**: use
   `otherTools.getFunctionReferences`, and ensure the calling instance includes
   the referenced tools in `imports: [...]`.
-- **Within the same `ClientTools` instance**: if one handler calls another,
+- **Within the same `Handlers` instance**: if one handler calls another,
   declare the referenced function at module scope (outside the constructor) and
-  then assign it into `functions`, instead of only declaring it inline.
+  then assign it into the handlers, instead of only declaring it inline.
 
-##### Across separate `ClientTools` instances (including different files)
+##### Across separate instances (including different files)
 
 ```ts
-import { ClientTools } from "@tinytools/hono-tools";
+import { tiny } from "@tinytools/hono-tools";
 
-const externalTools = new ClientTools(import.meta.url, {
-  functions: {
-    externalFunction(msg: string) {
-      console.log("external", msg);
-    },
+const externalHandlers = new tiny.Handlers(import.meta.url, {
+  externalFunction(msg: string) {
+    console.log("external", msg);
   },
 });
 
 // Module-level reference for composition inside another client function
-const { externalFunction } = externalTools.getFunctionReferences;
+const { externalFunction } = externalHandlers.getFunctionReferences;
 
-export const localTools = new ClientTools(import.meta.url, {
-  // Required when localTools calls functions from externalTools
-  imports: [externalTools],
-  functions: {
-    handleClick(this: HTMLElement, _e: MouseEvent) {
-      externalFunction("called from handleClick");
-      this.textContent = "done";
-    },
+export const localHandlers = new tiny.Handlers(import.meta.url, {
+  handleClick(this: HTMLElement, _e: MouseEvent) {
+    externalFunction("called from handleClick");
+    this.textContent = "done";
   },
-});
+  // Required when localHandlers calls functions from externalHandlers
+}, { imports: [externalHandlers] });
 ```
 
-##### Within the same `ClientTools` instance
+##### Within the same `Handlers` instance
 
 ```ts
-import { ClientTools } from "@tinytools/hono-tools";
+import { tiny } from "@tinytools/hono-tools";
 
 // Declare at module scope so other handlers can reference it safely. Must be defined in the same file.
 const sharedHandler = function (this: HTMLElement, e: MouseEvent) {
   console.log("shared", this, e);
 };
 
-export const tools = new ClientTools(import.meta.url, {
-  functions: {
-    sharedHandler,
-    nestedHandler: function (this: HTMLElement, e: MouseEvent) {
-      sharedHandler.call(this, e);
-    },
+export const handlers = new tiny.Handlers(import.meta.url, {
+  sharedHandler,
+  nestedHandler: function (this: HTMLElement, e: MouseEvent) {
+    sharedHandler.call(this, e);
   },
 });
 ```
@@ -372,7 +357,7 @@ Use `fn.*` only when attaching handlers in JSX/render code:
 
 ```tsx
 app.get("/", async (c) => {
-  const { fn } = await c.var.tools.extendWithImports(localTools);
+  const { fn } = await c.var.tools.extendWithImports(localHandlers);
   return c.render(<button onClick={fn.handleClick}>Run</button>);
 });
 ```
@@ -382,24 +367,22 @@ app.get("/", async (c) => {
 Extend tools within a route handler for single-route tools that don't need
 middleware. Returns a tools object with both parent and local tools.
 
-> **Note:** The `ClientTools` instance must still be declared at module level,
+> **Note:** The `Handlers`/`Styles` instance must still be declared at module level,
 > outside the route handler. Only the `extendWithImports()` call happens inside
 > the handler.
 
 ```ts
 // ✅ Declare at module level - registered once at startup
-const singleRouteTools = new ClientTools(import.meta.url, {
-  functions: {
-    specialHandler() {
-      console.log("special");
-    },
+const singleRouteHandlers = new tiny.Handlers(import.meta.url, {
+  specialHandler() {
+    console.log("special");
   },
 });
 
 app.get("/special", async (c) => {
   // Use extendWithImports inside the handler to access the tools
   const { fn, styled } = await c.var.tools.extendWithImports(
-    singleRouteTools,
+    singleRouteHandlers,
   );
 
   return c.render(
@@ -413,31 +396,30 @@ app.get("/special", async (c) => {
 Access tools from within async components (outside of route handlers). This uses
 Hono's context storage to retrieve the current request's tools.
 
-> **Note:** The `ClientTools` instance must still be declared at module level.
+> **Note:** The `Handlers`/`Styles` instance must still be declared at module level.
 > `getTools()` is for accessing tools inside components, not for declaring them.
 
 ```tsx
-import { ClientTools, css, getTools } from "@tinytools/hono-tools";
+import { css, getTools, tiny } from "@tinytools/hono-tools";
 
 const buttonStyle = css`
   background: blue;
 `;
 
 // ✅ Declare at module level
-const componentTools = new ClientTools(import.meta.url, {
-  functions: {
-    buttonClick() {
-      console.log("clicked");
-    },
+const componentHandlers = new tiny.Handlers(import.meta.url, {
+  buttonClick() {
+    console.log("clicked");
   },
-  styles: { buttonStyle },
 });
+
+const componentStyles = new tiny.Styles(import.meta.url, { buttonStyle });
 
 // Component that uses tools
 function MyButton({ label }: { label: string }) {
   // Access tools from context - works in async components
   const { fn, styled } = getTools().extendWithImports(
-    componentTools,
+    componentHandlers, componentStyles,
   );
 
   return (
@@ -461,7 +443,7 @@ import type { globalTools } from "./main.tsx";
 function MyComponent() {
   // Type-safe access to both local and ancestor tools
   const { fn } = getTools<[typeof globalTools]>().extend(
-    componentTools,
+    componentHandlers,
   );
 
   return <div onClick={fn.globalHandler}>Uses global handler</div>;
@@ -550,11 +532,11 @@ functions:
 const { fn } = c.var.tools;
 <button onClick={fn.handleClick}>Click</button>;
 
-// ❌ Error - functions from tools are not activated until used via middleware
-const tools = new ClientTools(import.meta.url, {
-  functions: { fn() {} },
+// ❌ Error - functions from handlers are not activated until used via middleware
+const handlers = new tiny.Handlers(import.meta.url, {
+  fn() {},
 });
-<button onClick={tools.fn}>Click</button>; // Type error!
+<button onClick={handlers.fn}>Click</button>; // Type error!
 ```
 
 ## License
