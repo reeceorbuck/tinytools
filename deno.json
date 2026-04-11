@@ -17,14 +17,12 @@
   },
   "imports": {
     "@std/assert": "jsr:@std/assert@^1.0.19",
-    "@tinytools/hono-tools/jsx-runtime": "./jsx-runtime.ts",
-    "tiny-jsx/jsx-runtime": "./jsx-runtime.ts",
     "esbuild": "npm:esbuild@^0.27.4",
     "hono": "jsr:@hono/hono@^4.12.8"
   },
   "compilerOptions": {
     "jsx": "precompile",
-    "jsxImportSource": "tiny-jsx",
+    "jsxImportSource": "./jsx",
     "lib": [
       "esnext",
       "deno.ns",
@@ -38,6 +36,7 @@
       "mod.ts",
       "titled.ts",
       "jsx-runtime.ts",
+      "jsx/**/*.ts",
       "build.ts",
       "clientFunctions.ts",
       "clientTools.ts",
