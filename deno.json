@@ -18,12 +18,13 @@
   "imports": {
     "@std/assert": "jsr:@std/assert@^1.0.19",
     "@tinytools/hono-tools/jsx-runtime": "./jsx-runtime.ts",
+    "tiny-jsx/jsx-runtime": "./jsx-runtime.ts",
     "esbuild": "npm:esbuild@^0.27.4",
     "hono": "jsr:@hono/hono@^4.12.8"
   },
   "compilerOptions": {
     "jsx": "precompile",
-    "jsxImportSource": "@tinytools/hono-tools",
+    "jsxImportSource": "tiny-jsx",
     "lib": [
       "esnext",
       "deno.ns",
