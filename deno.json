@@ -22,7 +22,7 @@
   },
   "compilerOptions": {
     "jsx": "precompile",
-    "jsxImportSource": "./jsx",
+    "jsxImportSource": "hono/jsx",
     "lib": [
       "esnext",
       "deno.ns",
@@ -36,7 +36,6 @@
       "mod.ts",
       "titled.ts",
       "jsx-runtime.ts",
-      "jsx/**/*.ts",
       "build.ts",
       "clientFunctions.ts",
       "clientTools.ts",
