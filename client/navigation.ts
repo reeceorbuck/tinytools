@@ -245,7 +245,6 @@ globalThis.navigation.addEventListener(
           setVariablesFromUrl(fromUrl, toUrl);
         },
 
-        // deno-lint-ignore require-await
         async handler() {
           try {
             console.log("In navigation handler for fetchUrl: ", fetchUrl.href);
