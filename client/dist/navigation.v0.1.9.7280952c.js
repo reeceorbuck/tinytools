@@ -1,9 +1,9 @@
-import { processLocalSuspenseTemplates } from "./localRoutes.v0.1.8.7dc8fcd3.js";
-import performFetchAndUpdate from "./performFetchAndUpdate.v0.1.8.7dc8fcd3.js";
+import { processLocalSuspenseTemplates } from "./localRoutes.v0.1.9.9fe9999d.js";
+import performFetchAndUpdate from "./performFetchAndUpdate.v0.1.9.5595411c.js";
 import {
   getActiveRouteCachePath,
   incrementNavGeneration
-} from "./routeCache.v0.1.8.7dc8fcd3.js";
+} from "./routeCache.v0.1.9.13f53340.js";
 function normalizePathname(pathname) {
   if (pathname === "/") {
     return pathname;

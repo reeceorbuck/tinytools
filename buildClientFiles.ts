@@ -15,25 +15,35 @@ type ClientSourceEntry = {
   sourceCode: string;
 };
 
-async function computeBuildHash(
-  packageVersion: string,
-  entries: ClientSourceEntry[],
-): Promise<string> {
-  const hashInput = [
-    packageVersion,
-    ...entries.flatMap((
-      { logicalName, sourceCode },
-    ) => [logicalName, sourceCode]),
-  ].join("\n\0\n");
+async function computeContentHash(content: string): Promise<string> {
   const digest = await crypto.subtle.digest(
     "SHA-256",
-    new TextEncoder().encode(hashInput),
+    new TextEncoder().encode(content),
   );
-
   return Array.from(new Uint8Array(digest))
     .map((value) => value.toString(16).padStart(2, "0"))
     .join("")
     .slice(0, 8);
+}
+
+function parseContentHashFromOutName(outName: string): string | null {
+  const match = outName.match(/\.([a-f0-9]{8})\.js$/);
+  return match ? match[1] : null;
+}
+
+async function readExistingManifest(
+  distDir: string,
+): Promise<Record<string, string>> {
+  try {
+    const content = await Deno.readTextFile(`${distDir}/manifest.ts`);
+    const match = content.match(
+      /clientFileManifest\s*=\s*({[\s\S]*?})\s*as\s*const/,
+    );
+    if (!match) return {};
+    return JSON.parse(match[1]);
+  } catch {
+    return {};
+  }
 }
 
 async function writeTextFileIfChanged(
@@ -82,33 +92,58 @@ export async function buildPackageClientFiles(): Promise<void> {
     left.logicalName.localeCompare(right.logicalName)
   );
 
-  const buildHash = await computeBuildHash(packageVersion, sourceEntries);
+  // Transpile all files and compute per-file content hashes
+  const esbuild = await getEsbuild();
+  const transpiledEntries = await Promise.all(
+    sourceEntries.map(async (entry) => {
+      const result = await esbuild.transform(entry.sourceCode, {
+        loader: entry.loader,
+        format: "esm",
+        target: ["esnext"],
+        sourcemap: false,
+      });
+      // Normalize .ts/.tsx imports to .js before hashing
+      const preRewriteCode = result.code.replace(
+        /(from\s+["'])([^"']+)(\.tsx?)(["'])/g,
+        "$1$2.js$4",
+      );
+      const contentHash = await computeContentHash(preRewriteCode);
+      return { ...entry, transpiledCode: preRewriteCode, contentHash };
+    }),
+  );
 
-  const manifestEntries = sourceEntries.map((entry) => ({
-    ...entry,
-    outName: entry.logicalName.replace(
-      /\.js$/i,
-      `.v${normalizedVersion}.${buildHash}.js`,
-    ),
-  }));
+  // Read existing manifest to preserve filenames for unchanged files
+  const existingManifest = await readExistingManifest(distDir);
+
+  // Determine output names: reuse existing name if content hash matches
+  const manifestEntries = transpiledEntries.map((entry) => {
+    const existingOutName = existingManifest[entry.logicalName];
+    const existingHash = existingOutName
+      ? parseContentHashFromOutName(existingOutName)
+      : null;
+
+    const outName = existingHash === entry.contentHash
+      ? existingOutName!
+      : entry.logicalName.replace(
+        /\.js$/i,
+        `.v${normalizedVersion}.${entry.contentHash}.js`,
+      );
+
+    return { ...entry, outName };
+  });
 
   const manifest = Object.fromEntries(
     manifestEntries.map(({ logicalName, outName }) => [logicalName, outName]),
   ) as Record<string, string>;
 
-  for (const { file, outName, loader, sourceCode } of manifestEntries) {
-    const esbuild = await getEsbuild();
-    const result = await esbuild.transform(sourceCode, {
-      loader,
-      format: "esm",
-      target: ["esnext"],
-      sourcemap: false,
-    });
+  // Compute a combined build hash from all content hashes
+  const buildHash = await computeContentHash(
+    manifestEntries.map((e) => e.contentHash).join("\0"),
+  );
 
-    const outputCode = result.code.replace(
-      /(from\s+["'])([^"']+)(\.tsx?)(["'])/g,
-      "$1$2.js$4",
-    ).replace(
+  for (const { file, outName, transpiledCode } of manifestEntries) {
+    // Rewrite local imports to use built filenames
+    const outputCode = transpiledCode.replace(
       /(from\s+["'])(\.\/[^"']+\.js)(["'])/g,
       (_match: string, prefix: string, importPath: string, suffix: string) => {
         const importedLogicalName = importPath.slice(2);
@@ -169,7 +204,6 @@ export async function buildPackageClientFiles(): Promise<void> {
       : `  manifest.ts unchanged (${manifestEntries.length} files)`,
   );
 
-  const esbuild = await getEsbuild();
   esbuild.stop();
   console.log("Done.");
 }
