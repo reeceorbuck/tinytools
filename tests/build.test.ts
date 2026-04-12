@@ -549,6 +549,7 @@ export function sayHello(): void {
       publicDir: TEST_PUBLIC_DIR,
       handlerDir: TEST_HANDLER_DIR,
       stylesDir: TEST_STYLES_DIR,
+      transpileClientFiles: true,
     });
 
     // Verify client file was transpiled
@@ -587,6 +588,7 @@ Deno.test({
       publicDir: TEST_PUBLIC_DIR,
       handlerDir: TEST_HANDLER_DIR,
       stylesDir: TEST_STYLES_DIR,
+      transpileClientFiles: true,
     });
 
     const outputPath = `${TEST_PUBLIC_DIR}/mtimeTest.js`;
@@ -602,6 +604,7 @@ Deno.test({
       publicDir: TEST_PUBLIC_DIR,
       handlerDir: TEST_HANDLER_DIR,
       stylesDir: TEST_STYLES_DIR,
+      transpileClientFiles: true,
     });
 
     // Mtime should be the same (file wasn't rewritten)
@@ -633,6 +636,7 @@ Deno.test({
       publicDir: TEST_PUBLIC_DIR,
       handlerDir: TEST_HANDLER_DIR,
       stylesDir: TEST_STYLES_DIR,
+      transpileClientFiles: true,
     });
 
     const outputPath = `${TEST_PUBLIC_DIR}/changingFile.js`;
@@ -655,6 +659,7 @@ Deno.test({
       publicDir: TEST_PUBLIC_DIR,
       handlerDir: TEST_HANDLER_DIR,
       stylesDir: TEST_STYLES_DIR,
+      transpileClientFiles: true,
     });
 
     // Content should be updated
@@ -691,6 +696,7 @@ Deno.test({
       publicDir: TEST_PUBLIC_DIR,
       handlerDir: TEST_HANDLER_DIR,
       stylesDir: TEST_STYLES_DIR,
+      transpileClientFiles: true,
     });
 
     // Check main.js has .js import, not .ts
@@ -1017,6 +1023,7 @@ export default Component;
       publicDir: TEST_PUBLIC_DIR,
       handlerDir: TEST_HANDLER_DIR,
       stylesDir: TEST_STYLES_DIR,
+      transpileClientFiles: true,
     });
 
     // Verify .tsx was transpiled to .js

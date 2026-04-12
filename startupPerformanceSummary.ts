@@ -109,8 +109,9 @@ export function logStartupPerformanceSummary() {
   const createAppMs = getLastMeasure("startup:createApp")?.duration;
   const routesMs = getLastMeasure("startup:routes")?.duration;
   const buildTotalMs = getLastMeasure("buildScriptFiles:total")?.duration;
+  const buildRevalidateMs = getLastMeasure("buildScriptFiles:revalidate")
+    ?.duration;
   const buildMkdirMs = getLastMeasure("buildScriptFiles:mkdir")?.duration;
-  const buildScanMs = getLastMeasure("buildScriptFiles:scan")?.duration;
   const buildHandlersMs = getLastMeasure("buildScriptFiles:handlers")?.duration;
   const buildClientMs = getLastMeasure("buildScriptFiles:client")?.duration;
   const buildStylesMs = getLastMeasure("buildScriptFiles:styles")?.duration;
@@ -220,13 +221,13 @@ export function logStartupPerformanceSummary() {
       }`,
     );
     console.log(
-      `     ├─ mkdir: ${fmtMs(buildMkdirMs)}ms${
-        pctOf(buildMkdirMs, buildTotalMs)
+      `     ├─ revalidate: ${fmtMs(buildRevalidateMs)}ms${
+        pctOf(buildRevalidateMs, buildTotalMs)
       }`,
     );
     console.log(
-      `     ├─ scan: ${fmtMs(buildScanMs)}ms${
-        pctOf(buildScanMs, buildTotalMs)
+      `     ├─ mkdir: ${fmtMs(buildMkdirMs)}ms${
+        pctOf(buildMkdirMs, buildTotalMs)
       }`,
     );
     console.log(

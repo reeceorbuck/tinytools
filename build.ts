@@ -124,213 +124,117 @@ export interface BuildOptions {
   handlerDir?: string;
   /** Subdirectory for style files (relative to publicDir) */
   stylesDir?: string;
+  /**
+   * Skip all cache and file-existence checks. Build everything unconditionally.
+   * Ideal for hosted/isolated environments (e.g. V8 isolates) where no prior
+   * build artifacts or cache exist.
+   */
+  fresh?: boolean;
+  /**
+   * Transpile user-provided client-side TypeScript files from `clientDir` into
+   * `publicDir`. Defaults to `false`.
+   */
+  transpileClientFiles?: boolean;
 }
 
 /**
- * Builds all registered client functions and scoped styles to the public directory.
- * Also transpiles any client-side TypeScript files.
+ * Build all registered handlers to JavaScript files.
  *
- * @param options Build configuration options
- *
- * @example
- * ```ts
- * import { buildScriptFiles } from "@tinytools/hono-tools/build";
- *
- * // Build with default options
- * await buildScriptFiles();
- *
- * // Build with custom directories
- * await buildScriptFiles({
- *   clientDir: "./src/client",
- *   publicDir: "./dist/public",
- * });
- * ```
+ * @param handlerDir Output directory for handler .js files
+ * @param options.fresh If true, skip file-existence and dependency checks — build everything unconditionally
+ * @returns Array of handler filenames (without extension) that were built or already existed
  */
-export async function buildScriptFiles(options: BuildOptions = {}) {
-  const {
-    clientDir = "./client",
-    publicDir = "./public",
-    handlerDir = `${publicDir}/handlers`,
-    stylesDir = `${publicDir}/styles`,
-  } = options;
+export async function buildHandlers(
+  handlerDir: string,
+  options: { fresh?: boolean } = {},
+): Promise<string[]> {
+  const { fresh = false } = options;
 
-  performance.mark("startup:buildScriptFilesStart");
-  performance.mark("buildScriptFiles:begin");
-
-  cache.beginChangeDetectionPass();
-
-  // Revalidate all handlers and styles. Since constructors no longer stat
-  // source files, we do a full pass here to detect changes and update filenames.
-  performance.mark("buildScriptFiles:revalidateStart");
-  for (const handler of handlers.values()) {
-    await handler.revalidateAndBuild(handlerDir);
-  }
-  for (const style of scopedStylesRegistry.values()) {
-    style.revalidate();
-  }
-
-  for (const tools of registeredClientTools) {
-    const { oldBundleFilename, newBundleFilename } = tools
-      .refreshStyleAssetMappings();
-    if (
-      oldBundleFilename && newBundleFilename &&
-      oldBundleFilename !== newBundleFilename
-    ) {
-      styleBundleRegistry.delete(oldBundleFilename);
-    }
-  }
-  performance.mark("buildScriptFiles:revalidateEnd");
-
-  // Ensure the public directories exist
-  performance.mark("buildScriptFiles:mkdirStart");
-  await Deno.mkdir(publicDir, { recursive: true });
-  await Deno.mkdir(handlerDir, { recursive: true });
-  await Deno.mkdir(stylesDir, { recursive: true });
-  performance.mark("buildScriptFiles:mkdirEnd");
-
-  performance.mark("buildScriptFiles:scanStart");
-
-  // Helper to scan a directory for client files
-  async function scanClientDir(
-    dir: string,
-  ): Promise<{ dir: string; files: Deno.DirEntry[] }> {
-    try {
-      const files = (await Array.fromAsync(Deno.readDir(dir)))
-        .filter((entry) => entry.isFile)
-        .filter((entry) =>
-          entry.name.endsWith(".ts") || entry.name.endsWith(".tsx")
-        );
-      return { dir, files };
-    } catch {
-      return { dir, files: [] };
-    }
-  }
-
-  // Scan user client dir for user-provided client scripts
-  const userClientFiles = await scanClientDir(clientDir);
-
-  performance.mark("buildScriptFiles:scanEnd");
-
-  if (userClientFiles.files.length > 0) {
-    console.log(
-      "User client files to process:",
-      userClientFiles.files.map((s) => s.name),
-    );
-  }
-
-  // Log any changed handlers for debugging
-  if (changedHandlerKeys.size > 0) {
-    console.log("Handlers that changed this run:");
-    for (const key of changedHandlerKeys) {
-      console.log(`  ${key}`);
-    }
-  }
-
-  // Log any changed styles for debugging
-  if (changedStyleKeys.size > 0) {
-    console.log("Styles that changed this run:");
-    for (const key of changedStyleKeys) {
-      console.log(`  ${key}`);
-    }
-  }
-
-  performance.mark("buildScriptFiles:handlersStart");
-  const handlerFiles = await Promise.all(
+  return await Promise.all(
     [...handlers.values()].map(async (handler) => {
       const { filename } = handler;
-      // console.log("Registered handler: ", filename);
 
-      const fileExists = await Deno.stat(`${handlerDir}/${filename}.js`)
-        .then(() => true)
-        .catch(() => false);
+      if (!fresh) {
+        const fileExists = await Deno.stat(`${handlerDir}/${filename}.js`)
+          .then(() => true)
+          .catch(() => false);
 
-      // Check if we need to rebuild due to dependency changes
-      const needsRebuildForDeps = handler.needsRebuildDueToDependencyChange();
+        const needsRebuildForDeps = handler.needsRebuildDueToDependencyChange();
 
-      if (fileExists && !needsRebuildForDeps) {
-        // console.log(
-        //   `File for handler ${filename} already exists, skipping build.`,
-        // );
-        return filename;
-      }
+        if (fileExists && !needsRebuildForDeps) {
+          return filename;
+        }
 
-      if (needsRebuildForDeps) {
-        console.log(
-          `Rebuilding handler ${filename} because a dependency changed.`,
-        );
+        if (needsRebuildForDeps) {
+          console.log(
+            `Rebuilding handler ${filename} because a dependency changed.`,
+          );
+        }
       }
 
       console.log(`Building file for handler:`, handler.buildCode);
       const functionCode = await handler.buildCode();
-      return Deno.writeTextFile(
-        `${handlerDir}/${filename}.js`,
-        functionCode,
-      ).then(() => {
-        console.log(`Handler file written: ${handlerDir}/${filename}.js`);
-        return filename;
-      });
+      await Deno.writeTextFile(`${handlerDir}/${filename}.js`, functionCode);
+      console.log(`Handler file written: ${handlerDir}/${filename}.js`);
+      return filename;
     }),
   );
-  performance.mark("buildScriptFiles:handlersEnd");
+}
 
-  performance.mark("buildScriptFiles:clientStart");
-  // Transpile user-provided client TS files
-  const clientBuiltFiles = await Promise.all(
-    userClientFiles.files.map((entry) =>
-      transpileClientFile(entry.name, userClientFiles.dir, publicDir)
-    ),
-  );
-  performance.mark("buildScriptFiles:clientEnd");
+/**
+ * Build all registered style bundles and individual global styles to CSS files.
+ *
+ * @param stylesDir Output directory for style .css files
+ * @param options.fresh If true, skip file-existence checks — build everything unconditionally
+ * @returns Array of style filenames (without extension) that were built or already existed
+ */
+export async function buildStyles(
+  stylesDir: string,
+  options: { fresh?: boolean } = {},
+): Promise<string[]> {
+  const { fresh = false } = options;
 
-  const files = [...handlerFiles, ...clientBuiltFiles];
-
-  console.log("Handler files: ", files.length);
-
-  // Build bundled style files (one file per ClientTools instance)
-  performance.mark("buildScriptFiles:stylesStart");
   const styleFiles = await Promise.all(
     [...styleBundleRegistry.entries()].map(
       async ([bundleFilename, styles]) => {
         const filePath = `${stylesDir}/${bundleFilename}.css`;
 
-        const fileExists = await Deno.stat(filePath)
-          .then(() => true)
-          .catch(() => false);
+        if (!fresh) {
+          const fileExists = await Deno.stat(filePath)
+            .then(() => true)
+            .catch(() => false);
 
-        // Check if any constituent style changed
-        const anyStyleChanged = styles.some((style) => {
-          const styleKey = style.sourceFileUrl
-            ? `${style.sourceFileUrl}::${style.styleName}`
-            : "";
-          return styleKey && changedStyleKeys.has(styleKey);
-        });
+          const anyStyleChanged = styles.some((style) => {
+            const styleKey = style.sourceFileUrl
+              ? `${style.sourceFileUrl}::${style.styleName}`
+              : "";
+            return styleKey && changedStyleKeys.has(styleKey);
+          });
 
-        if (fileExists && !anyStyleChanged) {
-          return bundleFilename;
-        }
+          if (fileExists && !anyStyleChanged) {
+            return bundleFilename;
+          }
 
-        if (anyStyleChanged) {
-          console.log(
-            `Rebuilding style bundle ${bundleFilename} because a constituent style changed.`,
-          );
+          if (anyStyleChanged) {
+            console.log(
+              `Rebuilding style bundle ${bundleFilename} because a constituent style changed.`,
+            );
+          }
         }
 
         const cssContent = buildLayeredCssContent(styles);
-        return Deno.writeTextFile(filePath, cssContent).then(() => {
-          console.log(
-            `Style bundle written: ${filePath} (${styles.length} styles)`,
-          );
-          return bundleFilename;
-        });
+        await Deno.writeTextFile(filePath, cssContent);
+        console.log(
+          `Style bundle written: ${filePath} (${styles.length} styles)`,
+        );
+        return bundleFilename;
       },
     ),
   );
 
-  // Also build individual global style files (not bundled)
   const globalStyleFiles = await Promise.all(
     [...scopedStylesRegistry.values()]
       .filter((style) => {
-        // Only process styles not covered by any bundle
         for (const bundleStyles of styleBundleRegistry.values()) {
           if (bundleStyles.some((bs) => bs.filename === style.filename)) {
             return false;
@@ -342,65 +246,227 @@ export async function buildScriptFiles(options: BuildOptions = {}) {
         const { filename, sourceFileUrl, styleName } = style;
         const filePath = `${stylesDir}/${filename}.css`;
 
-        const fileExists = await Deno.stat(filePath)
-          .then(() => true)
-          .catch(() => false);
+        if (!fresh) {
+          const fileExists = await Deno.stat(filePath)
+            .then(() => true)
+            .catch(() => false);
 
-        const styleKey = sourceFileUrl ? `${sourceFileUrl}::${styleName}` : "";
-        const styleChanged = styleKey && changedStyleKeys.has(styleKey);
+          const styleKey = sourceFileUrl
+            ? `${sourceFileUrl}::${styleName}`
+            : "";
+          const styleChanged = styleKey && changedStyleKeys.has(styleKey);
 
-        if (fileExists && !styleChanged) {
-          return filename;
+          if (fileExists && !styleChanged) {
+            return filename;
+          }
         }
 
         const cssContent = buildLayeredCssContent([style]);
-        return Deno.writeTextFile(filePath, cssContent).then(() => {
-          console.log(`Global style file written: ${filePath}`);
-          return filename;
-        });
+        await Deno.writeTextFile(filePath, cssContent);
+        console.log(`Global style file written: ${filePath}`);
+        return filename;
       }),
   );
 
-  const allStyleFiles = [...styleFiles, ...globalStyleFiles];
-  performance.mark("buildScriptFiles:stylesEnd");
+  return [...styleFiles, ...globalStyleFiles];
+}
 
-  console.log("Style files: ", allStyleFiles.length);
+/**
+ * Scan a directory for .ts/.tsx files and transpile them to .js.
+ *
+ * @param clientDir Source directory containing TypeScript files
+ * @param publicDir Output directory for transpiled .js files
+ * @returns Array of built base filenames (without extension)
+ */
+export async function transpileClientDir(
+  clientDir: string,
+  publicDir: string,
+): Promise<string[]> {
+  let files: Deno.DirEntry[];
+  try {
+    files = (await Array.fromAsync(Deno.readDir(clientDir)))
+      .filter((entry) => entry.isFile)
+      .filter((entry) =>
+        entry.name.endsWith(".ts") || entry.name.endsWith(".tsx")
+      );
+  } catch {
+    return [];
+  }
 
-  // Clean up handler files that are no longer registered
-  performance.mark("buildScriptFiles:cleanupStart");
+  if (files.length === 0) return [];
+
+  console.log(
+    "User client files to process:",
+    files.map((s) => s.name),
+  );
+
+  return Promise.all(
+    files.map((entry) => transpileClientFile(entry.name, clientDir, publicDir)),
+  );
+}
+
+/**
+ * Remove handler and style files that are no longer registered.
+ *
+ * @param handlerDir Directory containing handler .js files
+ * @param stylesDir Directory containing style .css files
+ * @param validHandlerFiles Current valid handler filenames (without extension)
+ * @param validStyleFiles Current valid style filenames (without extension)
+ */
+export async function cleanupStaleFiles(
+  handlerDir: string,
+  stylesDir: string,
+  validHandlerFiles: string[],
+  validStyleFiles: string[],
+): Promise<void> {
   for await (const dirEntry of Deno.readDir(handlerDir)) {
     if (dirEntry.isFile && dirEntry.name.endsWith(".js")) {
       const fileName = dirEntry.name.replace(/\.js$/, "");
-      if (!files.includes(fileName)) {
+      if (!validHandlerFiles.includes(fileName)) {
         console.log("Removing handler file: ", dirEntry.name);
         await Deno.remove(`${handlerDir}/${dirEntry.name}`);
       }
     }
   }
 
-  // Clean up style files that are no longer registered
   for await (const dirEntry of Deno.readDir(stylesDir)) {
     if (dirEntry.isFile && dirEntry.name.endsWith(".css")) {
       const fileName = dirEntry.name.replace(/\.css$/, "");
-      if (!allStyleFiles.includes(fileName)) {
+      if (!validStyleFiles.includes(fileName)) {
         console.log("Removing style file: ", dirEntry.name);
         await Deno.remove(`${stylesDir}/${dirEntry.name}`);
       }
     }
   }
+}
 
+/**
+ * Builds all registered client functions and scoped styles to the public directory.
+ * Stops the esbuild worker when done so the process can exit cleanly.
+ *
+ * @param options Build configuration options
+ *
+ * @example
+ * ```ts
+ * import { buildScriptFiles } from "@tinytools/hono-tools/build";
+ *
+ * // Build with default options (incremental, cache-aware)
+ * await buildScriptFiles();
+ *
+ * // Fresh build for hosted environments (skip all cache/existence checks)
+ * await buildScriptFiles({ fresh: true });
+ *
+ * // Include user client-side TypeScript transpilation
+ * await buildScriptFiles({ transpileClientFiles: true });
+ * ```
+ */
+export async function buildScriptFiles(options: BuildOptions = {}) {
+  const {
+    clientDir = "./client",
+    publicDir = "./public",
+    handlerDir = `${publicDir}/handlers`,
+    stylesDir = `${publicDir}/styles`,
+    fresh = false,
+    transpileClientFiles: shouldTranspileClient = false,
+  } = options;
+
+  performance.mark("startup:buildScriptFilesStart");
+  performance.mark("buildScriptFiles:begin");
+
+  // --- Revalidation phase (skip in fresh mode — filenames are already determined) ---
+  performance.mark("buildScriptFiles:revalidateStart");
+  if (!fresh) {
+    cache.beginChangeDetectionPass();
+
+    for (const handler of handlers.values()) {
+      await handler.revalidateAndBuild(handlerDir);
+    }
+    for (const style of scopedStylesRegistry.values()) {
+      style.revalidate();
+    }
+
+    for (const tools of registeredClientTools) {
+      const { oldBundleFilename, newBundleFilename } = tools
+        .refreshStyleAssetMappings();
+      if (
+        oldBundleFilename && newBundleFilename &&
+        oldBundleFilename !== newBundleFilename
+      ) {
+        styleBundleRegistry.delete(oldBundleFilename);
+      }
+    }
+  }
+  performance.mark("buildScriptFiles:revalidateEnd");
+
+  // --- Ensure directories ---
+  performance.mark("buildScriptFiles:mkdirStart");
+  await Deno.mkdir(publicDir, { recursive: true });
+  await Deno.mkdir(handlerDir, { recursive: true });
+  await Deno.mkdir(stylesDir, { recursive: true });
+  performance.mark("buildScriptFiles:mkdirEnd");
+
+  // --- Log changes (non-fresh only) ---
+  if (!fresh) {
+    if (changedHandlerKeys.size > 0) {
+      console.log("Handlers that changed this run:");
+      for (const key of changedHandlerKeys) {
+        console.log(`  ${key}`);
+      }
+    }
+    if (changedStyleKeys.size > 0) {
+      console.log("Styles that changed this run:");
+      for (const key of changedStyleKeys) {
+        console.log(`  ${key}`);
+      }
+    }
+  }
+
+  // --- Build handlers ---
+  performance.mark("buildScriptFiles:handlersStart");
+  const handlerFiles = await buildHandlers(handlerDir, { fresh });
+  performance.mark("buildScriptFiles:handlersEnd");
+
+  // --- Transpile client files (opt-in) ---
+  performance.mark("buildScriptFiles:clientStart");
+  const clientBuiltFiles = shouldTranspileClient
+    ? await transpileClientDir(clientDir, publicDir)
+    : [];
+  performance.mark("buildScriptFiles:clientEnd");
+
+  const allFiles = [...handlerFiles, ...clientBuiltFiles];
+  console.log("Handler files: ", allFiles.length);
+
+  // --- Build styles ---
+  performance.mark("buildScriptFiles:stylesStart");
+  const allStyleFiles = await buildStyles(stylesDir, { fresh });
+  performance.mark("buildScriptFiles:stylesEnd");
+
+  console.log("Style files: ", allStyleFiles.length);
+
+  // --- Cleanup stale files (skip in fresh mode — nothing to remove) ---
+  performance.mark("buildScriptFiles:cleanupStart");
+  if (!fresh) {
+    await cleanupStaleFiles(handlerDir, stylesDir, allFiles, allStyleFiles);
+  }
   performance.mark("buildScriptFiles:cleanupEnd");
+
+  // --- Persist cache so subsequent --prod runs can trust it ---
+  cache.save();
+
+  // --- Stop esbuild worker so the process can exit cleanly ---
+  await esbuild.stop();
+
   performance.mark("buildScriptFiles:end");
 
+  performance.measure(
+    "buildScriptFiles:revalidate",
+    "buildScriptFiles:revalidateStart",
+    "buildScriptFiles:revalidateEnd",
+  );
   performance.measure(
     "buildScriptFiles:mkdir",
     "buildScriptFiles:mkdirStart",
     "buildScriptFiles:mkdirEnd",
-  );
-  performance.measure(
-    "buildScriptFiles:scan",
-    "buildScriptFiles:scanStart",
-    "buildScriptFiles:scanEnd",
   );
   performance.measure(
     "buildScriptFiles:handlers",

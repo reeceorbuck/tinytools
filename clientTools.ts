@@ -446,19 +446,28 @@ class ClientToolsCacheManager {
     queueMicrotask(() => {
       this.flushScheduled = false;
       if (!this.dirty) return;
-      try {
-        Deno.mkdirSync(CACHE_DIR, { recursive: true });
-        const data: ClientToolsCacheV1 = {
-          version: 3,
-          hashConfig: this.hashConfig,
-          files: this.files,
-        };
-        Deno.writeTextFileSync(CACHE_PATH, JSON.stringify(data, null, 2));
-        this.dirty = false;
-      } catch {
-        // ignore write errors
-      }
+      this._writeSync();
     });
+  }
+
+  /** Synchronously persist the current cache state to disk. */
+  save(): void {
+    this._writeSync();
+  }
+
+  private _writeSync(): void {
+    try {
+      Deno.mkdirSync(CACHE_DIR, { recursive: true });
+      const data: ClientToolsCacheV1 = {
+        version: 3,
+        hashConfig: this.hashConfig,
+        files: this.files,
+      };
+      Deno.writeTextFileSync(CACHE_PATH, JSON.stringify(data, null, 2));
+      this.dirty = false;
+    } catch {
+      // ignore write errors
+    }
   }
 
   /** Get the mtime of a source file (memoized) */
