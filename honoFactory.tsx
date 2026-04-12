@@ -849,7 +849,6 @@ function createCoreMiddleware(
       const routeLayoutApplied = c.get(ROUTE_LAYOUT_APPLIED_KEY) === true;
 
       const sourceUrl = c.req.header("source-url");
-      console.log("Source URL: ", sourceUrl);
       if (sourceUrl) {
         return (
           <update>

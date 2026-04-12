@@ -239,6 +239,9 @@ export function generateStyleHash(str: string): string {
   return generateHash(str, "style");
 }
 
+/** Base URL for the current working directory, used to produce portable relative paths */
+const CWD_URL = new URL(`file:///${Deno.cwd().replace(/\\/g, "/")}/`);
+
 export function normalizeSourceFileUrl(
   sourceFileUrl: string | URL | undefined,
 ): string | undefined {
@@ -252,7 +255,14 @@ export function normalizeSourceFileUrl(
     const url = new URL(raw);
     url.search = "";
     url.hash = "";
-    return url.toString();
+    const absolute = url.toString();
+
+    // Convert to cwd-relative path so the cache is portable across machines
+    const cwdStr = CWD_URL.toString();
+    if (absolute.startsWith(cwdStr)) {
+      return absolute.slice(cwdStr.length);
+    }
+    return absolute;
   } catch {
     return raw.replace(/[?#].*$/, "");
   }
@@ -281,13 +291,15 @@ class ClientToolsCacheManager {
 
   private hashConfig: ClientToolsCacheV1["hashConfig"] = getCurrentHashConfig();
 
-  /** When true, skip all file stat checks and trust cached filenames */
+  /** When true, skip all file stat checks and trust cached filenames.
+   *  This is the default. Pass --lazy to disable. */
   readonly trustCache: boolean;
 
   files: ClientToolsCacheV1["files"] = {};
 
   constructor() {
-    this.trustCache = Deno.args.includes("--prod");
+    const lazyMode = Deno.args.includes("--lazy");
+    this.trustCache = !lazyMode;
 
     // Load the cache from disk
     try {
@@ -323,16 +335,30 @@ class ClientToolsCacheManager {
           this.normalizeLoadedFiles();
         }
       }
-    } catch {
-      // ignore missing/invalid cache
+    } catch (e) {
+      if (e instanceof Deno.errors.NotFound) {
+        // no cache file yet — expected on first run
+      } else {
+        console.warn("[tiny-tools] failed to load cache:", e);
+      }
     }
 
     if (this.trustCache && Object.keys(this.files).length === 0) {
       console.warn(
-        "[tiny-tools] --prod flag set but no valid cache found. " +
-          "Run a build first. Falling back to normal mode.",
+        "[tiny-tools] prod mode active but no valid cache found. " +
+          "Run a build first. Falling back to lazy mode.",
       );
       (this as { trustCache: boolean }).trustCache = false;
+    }
+
+    if (this.trustCache) {
+      console.log(
+        "[tiny-tools] \x1b[32mprod mode active\x1b[0m — cached handlers trusted, no builds will run during requests",
+      );
+    } else {
+      console.log(
+        "[tiny-tools] \x1b[33mlazy mode active\x1b[0m — handlers will be built/revalidated on demand",
+      );
     }
   }
 
@@ -463,10 +489,14 @@ class ClientToolsCacheManager {
         hashConfig: this.hashConfig,
         files: this.files,
       };
-      Deno.writeTextFileSync(CACHE_PATH, JSON.stringify(data, null, 2));
+      // Atomic write: write to temp file then rename, so a watcher restart
+      // mid-write can't corrupt the cache.
+      const tmp = `${CACHE_PATH}.tmp`;
+      Deno.writeTextFileSync(tmp, JSON.stringify(data, null, 2));
+      Deno.renameSync(tmp, CACHE_PATH);
       this.dirty = false;
-    } catch {
-      // ignore write errors
+    } catch (e) {
+      console.warn("[tiny-tools] failed to write cache:", e);
     }
   }
 
@@ -478,7 +508,12 @@ class ClientToolsCacheManager {
     const memo = this.sourceFileMtimeMemo.get(sourceFileUrl);
     if (memo !== undefined) return memo;
     try {
-      const stat = Deno.statSync(new URL(sourceFileUrl));
+      // Resolve relative paths (produced by normalizeSourceFileUrl) back to
+      // absolute file:// URLs so Deno.statSync can find them.
+      const url = sourceFileUrl.startsWith("file://")
+        ? new URL(sourceFileUrl)
+        : new URL(sourceFileUrl, CWD_URL);
+      const stat = Deno.statSync(url);
       const value = stat.mtime ? stat.mtime.getTime() : null;
       this.sourceFileMtimeMemo.set(sourceFileUrl, value);
       return value;
@@ -1027,7 +1062,7 @@ class ClientToolsClass<
 
   /**
    * Deferred validation and build for all handlers and styles in this instance.
-   * Called at request time by tiny.middleware.sharedImports(). Skips entirely in --prod mode.
+   * Called at request time by tiny.middleware.sharedImports(). Skips entirely in prod mode.
    * Subsequent calls return the same promise (idempotent).
    */
   async ensureBuilt(): Promise<void> {

@@ -1,4 +1,4 @@
-import { processIncomingHtml } from "./processIncomingHtml.v0.1.0.f14a8475.js";
+import { processIncomingHtml } from "./processIncomingHtml.v0.1.8.7dc8fcd3.js";
 import {
   getCachedRouteTemplate,
   getOrderedLocalRouteTemplates,
@@ -6,7 +6,7 @@ import {
   isRuntimeCachedRouteTemplate,
   markLocalTemplateContent,
   SPA_REDIRECT_ATTR
-} from "./routeCache.v0.1.0.f14a8475.js";
+} from "./routeCache.v0.1.8.7dc8fcd3.js";
 function parseQueryPattern(queryPattern) {
   const trimmed = queryPattern.trim();
   if (trimmed === "" || trimmed.toLowerCase() === "none") {
@@ -124,7 +124,7 @@ function processLocalSuspenseTemplates(destinationUrl, formData, currentPathname
         Array.from(formData.entries()).map(([key, value]) => [key, value.toString()])
       ) : {}
     };
-    console.log("Processing LOCAL route for path:", params);
+    console.log("Processing LOCAL route for path with params:", params);
     console.log("using template:", templateToRender);
     const fragment = document.createDocumentFragment();
     const content = templateToRender.content.cloneNode(true);

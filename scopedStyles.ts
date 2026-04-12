@@ -400,7 +400,17 @@ export class ScopedStyleImpl {
     const newFilename = `${this.styleName}_${
       generateStyleHash(this.hashInput)
     }`;
-    if (newFilename === this.filename) return false;
+    if (newFilename === this.filename) {
+      // Filename unchanged, but still ensure the cache entry exists
+      // (it may have been cleared by resetHashDependentState)
+      cache.setCachedStyle(
+        this.sourceFileUrl,
+        this.styleName,
+        this.occurrenceIndex,
+        this.filename,
+      );
+      return false;
+    }
 
     const oldFilename = this.filename;
     // Remove old registry entry

@@ -5,7 +5,7 @@
  * Run before publishing: deno task build:client
  */
 
-import * as esbuild from "esbuild";
+import { getEsbuild } from "./esbuildInit.ts";
 import type { Loader } from "esbuild";
 
 type ClientSourceEntry = {
@@ -97,6 +97,7 @@ export async function buildPackageClientFiles(): Promise<void> {
   ) as Record<string, string>;
 
   for (const { file, outName, loader, sourceCode } of manifestEntries) {
+    const esbuild = await getEsbuild();
     const result = await esbuild.transform(sourceCode, {
       loader,
       format: "esm",
@@ -109,7 +110,7 @@ export async function buildPackageClientFiles(): Promise<void> {
       "$1$2.js$4",
     ).replace(
       /(from\s+["'])(\.\/[^"']+\.js)(["'])/g,
-      (_match, prefix: string, importPath: string, suffix: string) => {
+      (_match: string, prefix: string, importPath: string, suffix: string) => {
         const importedLogicalName = importPath.slice(2);
         const importedBuiltName = manifest[importedLogicalName];
 
@@ -168,6 +169,7 @@ export async function buildPackageClientFiles(): Promise<void> {
       : `  manifest.ts unchanged (${manifestEntries.length} files)`,
   );
 
+  const esbuild = await getEsbuild();
   esbuild.stop();
   console.log("Done.");
 }

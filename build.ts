@@ -8,9 +8,15 @@ performance.mark("import:@tinytools/hono-tools/build:start");
  * @module
  */
 
-import * as esbuild from "esbuild";
+import { getEsbuild } from "./esbuildInit.ts";
 performance.mark("import:esbuild:done");
-import { cache, registeredClientTools } from "./clientTools.ts";
+import {
+  cache,
+  registeredClientTools,
+  setGeneratedFilenameHashLength,
+  setGeneratedHandlerHashLength,
+  setGeneratedStyleHashLength,
+} from "./clientTools.ts";
 import { changedHandlerKeys, handlers } from "./clientFunctions.ts";
 performance.mark("import:clientFunctions:done");
 import {
@@ -101,12 +107,13 @@ export async function buildHandlerCode(
   }\nconst ${handlerExportName} = ${functionExpression};\nexport { ${handlerExportName} as default };\nglobalThis.handlers ??= {};\nglobalThis.handlers["${filename}"] = ${handlerExportName};`;
   console.log("Function code: ", functionCode);
 
+  const esbuild = await getEsbuild();
   const result = await esbuild.transform(functionCode, {
     loader: "ts",
     format: "esm",
     target: ["esnext"],
     sourcemap: false,
-  }).catch((err) => {
+  }).catch((err: Error) => {
     console.error("Esbuild transform error: ", err);
     return { code: functionCode };
   });
@@ -135,6 +142,12 @@ export interface BuildOptions {
    * `publicDir`. Defaults to `false`.
    */
   transpileClientFiles?: boolean;
+  /** Set both handler and style hash lengths at once. */
+  generatedFilenameHashLength?: number;
+  /** Length of the hash fragment in handler filenames. */
+  generatedHandlerHashLength?: number;
+  /** Length of the hash fragment in style filenames. */
+  generatedStyleHashLength?: number;
 }
 
 /**
@@ -370,6 +383,17 @@ export async function buildScriptFiles(options: BuildOptions = {}) {
     transpileClientFiles: shouldTranspileClient = false,
   } = options;
 
+  // --- Apply hash length overrides before any revalidation ---
+  if (options.generatedFilenameHashLength !== undefined) {
+    setGeneratedFilenameHashLength(options.generatedFilenameHashLength);
+  }
+  if (options.generatedHandlerHashLength !== undefined) {
+    setGeneratedHandlerHashLength(options.generatedHandlerHashLength);
+  }
+  if (options.generatedStyleHashLength !== undefined) {
+    setGeneratedStyleHashLength(options.generatedStyleHashLength);
+  }
+
   performance.mark("startup:buildScriptFilesStart");
   performance.mark("buildScriptFiles:begin");
 
@@ -450,10 +474,11 @@ export async function buildScriptFiles(options: BuildOptions = {}) {
   }
   performance.mark("buildScriptFiles:cleanupEnd");
 
-  // --- Persist cache so subsequent --prod runs can trust it ---
+  // --- Persist cache so subsequent prod runs can trust it ---
   cache.save();
 
   // --- Stop esbuild worker so the process can exit cleanly ---
+  const esbuild = await getEsbuild();
   await esbuild.stop();
 
   performance.mark("buildScriptFiles:end");
@@ -523,6 +548,7 @@ async function transpileClientFile(
   }
 
   const inputCode = await Deno.readTextFile(inPath);
+  const esbuild = await getEsbuild();
   const loader = fileName.toLowerCase().endsWith(".tsx") ? "tsx" : "ts";
   const result = await esbuild.transform(inputCode, {
     loader,

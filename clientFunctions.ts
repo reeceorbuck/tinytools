@@ -125,7 +125,7 @@ export class ClientFunctionImpl<
       resolvedFilename = `${fnName}_${
         generateHandlerHash(
           fn.toString() + "::" + (normalizedSourceFileUrl ?? "") +
-          (importsFingerprint ? `::imports[${importsFingerprint}]` : ""),
+            (importsFingerprint ? `::imports[${importsFingerprint}]` : ""),
         )
       }`;
     }
@@ -270,6 +270,15 @@ export class ClientFunctionImpl<
 
         // Remove the old handler file from disk
         await Deno.remove(`${handlerDir}/${oldFilename}.js`).catch(() => {});
+      } else {
+        // Filename unchanged, but still ensure the cache entry exists
+        // (it may have been cleared by resetHashDependentState)
+        cache.setCachedHandler(
+          this.sourceFileUrl,
+          this.fnName,
+          this.occurrenceIndex,
+          this.filename,
+        );
       }
     }
 
