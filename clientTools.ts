@@ -264,7 +264,12 @@ export function normalizeSourceFileUrl(
     }
     return absolute;
   } catch {
-    return raw.replace(/[?#].*$/, "");
+    // Reject values that don't look like file paths (e.g. "true" from import.meta.main)
+    const cleaned = raw.replace(/[?#].*$/, "");
+    if (!/[/\\.]/.test(cleaned)) {
+      return undefined;
+    }
+    return cleaned;
   }
 }
 
@@ -789,11 +794,11 @@ interface HandlersConstructor {
 }
 
 interface StylesConstructor {
+  // Overloads without sourceFileUrl (styles as first arg)
   new <
     // deno-lint-ignore ban-types
     TStyles extends Record<string, ScopedStyleInput> = {},
   >(
-    sourceFileUrl: string | URL,
     styles: ForbidReservedStyledKeys<TStyles>,
   ): ClientToolsClass<{}, TStyles, {}>;
 
@@ -803,7 +808,6 @@ interface StylesConstructor {
     // deno-lint-ignore no-explicit-any
     TImports extends AnyClientToolsInstance[] = [],
   >(
-    sourceFileUrl: string | URL,
     styles: ForbidReservedStyledKeys<TStyles>,
     options: { global: true; imports?: TImports },
   ): ClientToolsClass<
@@ -818,7 +822,45 @@ interface StylesConstructor {
     // deno-lint-ignore no-explicit-any
     TImports extends AnyClientToolsInstance[] = [],
   >(
-    sourceFileUrl: string | URL,
+    styles: ForbidReservedStyledKeys<TStyles>,
+    options: StylesOptions<TImports>,
+  ): ClientToolsClass<
+    UnionOfFunctions<TImports>,
+    TStyles & UnionOfStyles<TImports>,
+    {}
+  >;
+
+  // Overloads with sourceFileUrl
+  new <
+    // deno-lint-ignore ban-types
+    TStyles extends Record<string, ScopedStyleInput> = {},
+  >(
+    sourceFileUrl: string | URL | undefined,
+    styles: ForbidReservedStyledKeys<TStyles>,
+  ): ClientToolsClass<{}, TStyles, {}>;
+
+  new <
+    // deno-lint-ignore ban-types
+    TStyles extends Record<string, ScopedStyleInput> = {},
+    // deno-lint-ignore no-explicit-any
+    TImports extends AnyClientToolsInstance[] = [],
+  >(
+    sourceFileUrl: string | URL | undefined,
+    styles: ForbidReservedStyledKeys<TStyles>,
+    options: { global: true; imports?: TImports },
+  ): ClientToolsClass<
+    UnionOfFunctions<TImports>,
+    UnionOfStyles<TImports>,
+    TStyles
+  >;
+
+  new <
+    // deno-lint-ignore ban-types
+    TStyles extends Record<string, ScopedStyleInput> = {},
+    // deno-lint-ignore no-explicit-any
+    TImports extends AnyClientToolsInstance[] = [],
+  >(
+    sourceFileUrl: string | URL | undefined,
     styles: ForbidReservedStyledKeys<TStyles>,
     options: StylesOptions<TImports>,
   ): ClientToolsClass<
@@ -907,14 +949,14 @@ class ClientToolsClass<
   private _ensureBuiltPromise: Promise<void> | null = null;
 
   constructor(
-    sourceFileUrl: string | URL,
+    sourceFileUrl: string | URL | undefined,
     // deno-lint-ignore no-explicit-any
     options?: ClientToolsOptions<any, any, any, any>,
   ) {
     this.sourceFileUrl = normalizeSourceFileUrl(sourceFileUrl) ??
       (typeof sourceFileUrl === "string"
         ? sourceFileUrl
-        : sourceFileUrl.toString());
+        : sourceFileUrl?.toString() ?? "");
     registeredClientTools.add(this);
 
     if (options) {
@@ -1596,11 +1638,50 @@ class HandlersClass extends ClientToolsClass<{}, {}, {}> {
 
 class StylesClass extends ClientToolsClass<{}, {}, {}> {
   constructor(
-    sourceFileUrl: string | URL,
-    styles: Record<string, ScopedStyleInput>,
+    sourceFileUrlOrStyles:
+      | string
+      | URL
+      | undefined
+      | Record<string, ScopedStyleInput>,
     // deno-lint-ignore no-explicit-any
-    options?: StylesOptions<any>,
+    stylesOrOptions?: Record<string, ScopedStyleInput> | StylesOptions<any>,
+    // deno-lint-ignore no-explicit-any
+    maybeOptions?: StylesOptions<any>,
   ) {
+    // Detect whether first arg is the styles object (no sourceFileUrl provided)
+    const firstArgIsStyles = sourceFileUrlOrStyles !== null &&
+      sourceFileUrlOrStyles !== undefined &&
+      typeof sourceFileUrlOrStyles === "object" &&
+      !(sourceFileUrlOrStyles instanceof URL);
+
+    const sourceFileUrl = firstArgIsStyles
+      ? undefined
+      : sourceFileUrlOrStyles as string | URL | undefined;
+    const styles =
+      (firstArgIsStyles ? sourceFileUrlOrStyles : stylesOrOptions) as Record<
+        string,
+        ScopedStyleInput
+      >;
+    // deno-lint-ignore no-explicit-any
+    const options = (firstArgIsStyles ? stylesOrOptions : maybeOptions) as
+      | StylesOptions<any>
+      | undefined;
+
+    const resolvedUrl = normalizeSourceFileUrl(sourceFileUrl);
+    if (!resolvedUrl && !cache.trustCache) {
+      const detail = sourceFileUrl
+        ? `Received ${
+          JSON.stringify(String(sourceFileUrl))
+        } which is not a valid file path. ` +
+          "Did you mean to use import.meta.url instead of import.meta.main?"
+        : "No source file URL was provided.";
+      console.warn(
+        `[tiny-tools] \x1b[33mWarning:\x1b[0m tiny.Styles constructed without a valid source file URL. ${detail} ` +
+          "Style changes will not be tracked between builds and stale CSS files will not be cleaned up. " +
+          "Pass import.meta.url as the first argument to enable change tracking.",
+      );
+    }
+
     super(
       sourceFileUrl,
       options?.global
