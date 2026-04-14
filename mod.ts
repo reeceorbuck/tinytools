@@ -51,6 +51,7 @@ export {
   type RouteLayoutProps,
   type SseToolsOptions,
   tiny,
+  type TinyHonoOptions,
   type TinyToolsVariables,
   type WebComponentsOptions,
   type withAncestors,

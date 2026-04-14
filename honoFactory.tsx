@@ -7,6 +7,9 @@
  * @module
  */
 
+import { Hono as HonoBase } from "hono";
+import type { BlankEnv, Env } from "hono/types";
+import type { HonoOptions } from "hono/hono-base";
 import type { Context, MiddlewareHandler } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { Child } from "hono/jsx";
@@ -928,8 +931,79 @@ function createCoreMiddleware(
  *   .use(...tiny.middleware.core())
  *   .use(tiny.middleware.layout(MyLayout))
  * ```
+ *
+ * @example Using tiny.Hono wrapper
+ * ```ts
+ * // Plain Hono instance (for sub-routes)
+ * const sub = new tiny.Hono();
+ *
+ * // With core middleware
+ * const app = new tiny.Hono({ includeMiddleware: "core" });
+ *
+ * // With all middleware
+ * const app = new tiny.Hono({ includeMiddleware: "all" });
+ * ```
  */
+
+/**
+ * Options for `new tiny.Hono()`.
+ * Extends Hono's native options with an optional `tools` setting.
+ */
+export type TinyHonoOptions<E extends Env = BlankEnv> =
+  & HonoOptions<E>
+  & ClientToolsOptions
+  & {
+    /**
+     * Opt in to automatic middleware setup.
+     *
+     * - `"core"` — applies `tiny.middleware.core()` (static serving, context storage, tools tracking, JSX rendering)
+     * - `"all"`  — applies `tiny.middleware.all()` (core + navigation, SSE, local routes, web components)
+     *
+     * Omit to create a plain Hono instance (useful for sub-routes).
+     */
+    tools?: "core" | "all";
+  };
+
+/**
+ * A Hono subclass that can optionally apply tinytools middleware on construction.
+ *
+ * - `new tiny.Hono()` — plain Hono instance, no middleware (for sub-routes)
+ * - `new tiny.Hono({ tools: "core" })` — core middleware applied
+ * - `new tiny.Hono({ tools: "all" })` — all middleware applied
+ *
+ * All standard `HonoOptions` are forwarded to the underlying Hono constructor.
+ */
+class TinyHono<E extends Env = BlankEnv> extends HonoBase<E> {
+  constructor(options: TinyHonoOptions<E> = {} as TinyHonoOptions<E>) {
+    const {
+      tools,
+      generatedFilenameHashLength,
+      generatedHandlerHashLength,
+      generatedStyleHashLength,
+      ...honoOptions
+    } = options;
+    super(honoOptions as HonoOptions<E>);
+
+    if (tools) {
+      const clientToolsOptions: ClientToolsOptions = {
+        generatedFilenameHashLength,
+        generatedHandlerHashLength,
+        generatedStyleHashLength,
+      };
+
+      const middleware = tools === "all"
+        ? createAllMiddleware(clientToolsOptions)
+        : createCoreMiddleware(clientToolsOptions);
+
+      for (const mw of middleware) {
+        this.use(mw);
+      }
+    }
+  }
+}
+
 export const tiny = {
+  Hono: TinyHono,
   Handlers,
   Styles,
   css,
@@ -1118,13 +1192,42 @@ export const tiny = {
      * ```
      */
     all(options?: ClientToolsOptions): MiddlewareHandler[] {
-      return [
-        ...createCoreMiddleware(options),
-        createFeatureMiddleware("navigation"),
-        createSseFeatureMiddleware(),
-        createFeatureMiddleware("localRoutes"),
-        createFeatureMiddleware("webComponents"),
-      ];
+      return createAllMiddleware(options);
     },
   },
+
+  /**
+   * Build all registered client functions and scoped styles to the public directory.
+   * Dynamically imports the build module so esbuild is only loaded when needed.
+   *
+   * @param options - Build configuration options
+   *
+   * @example
+   * ```ts
+   * import { tiny } from "@tinytools/hono-tools";
+   * import "./main.tsx";
+   *
+   * await tiny.build();
+   * ```
+   */
+  async build(options?: import("./build.ts").BuildOptions) {
+    const { buildScriptFiles } = await import("./build.ts");
+    await buildScriptFiles(options);
+  },
 } as const;
+
+/**
+ * Create the full middleware array (core + all features).
+ * @internal
+ */
+function createAllMiddleware(
+  options?: ClientToolsOptions,
+): MiddlewareHandler[] {
+  return [
+    ...createCoreMiddleware(options),
+    createFeatureMiddleware("navigation"),
+    createSseFeatureMiddleware(),
+    createFeatureMiddleware("localRoutes"),
+    createFeatureMiddleware("webComponents"),
+  ];
+}
