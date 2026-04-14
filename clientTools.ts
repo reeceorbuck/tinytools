@@ -771,9 +771,9 @@ interface ClientToolsConstructor {
 }
 
 interface HandlersConstructor {
+  // Overloads without sourceFileUrl (functions as first arg)
   // deno-lint-ignore ban-types
   new <TFunctions extends Record<string, AnyFunction> = {}>(
-    sourceFileUrl: string | URL,
     functions: TFunctions,
   ): ClientToolsClass<TFunctions, {}, {}>;
 
@@ -783,7 +783,28 @@ interface HandlersConstructor {
     // deno-lint-ignore no-explicit-any
     TImports extends AnyClientToolsInstance[] = [],
   >(
-    sourceFileUrl: string | URL,
+    functions: TFunctions,
+    options: HandlersOptions<TImports>,
+  ): ClientToolsClass<
+    TFunctions & UnionOfFunctions<TImports>,
+    UnionOfStyles<TImports>,
+    {}
+  >;
+
+  // Overloads with sourceFileUrl
+  // deno-lint-ignore ban-types
+  new <TFunctions extends Record<string, AnyFunction> = {}>(
+    sourceFileUrl: string | URL | undefined,
+    functions: TFunctions,
+  ): ClientToolsClass<TFunctions, {}, {}>;
+
+  new <
+    // deno-lint-ignore ban-types
+    TFunctions extends Record<string, AnyFunction> = {},
+    // deno-lint-ignore no-explicit-any
+    TImports extends AnyClientToolsInstance[] = [],
+  >(
+    sourceFileUrl: string | URL | undefined,
     functions: TFunctions,
     options: HandlersOptions<TImports>,
   ): ClientToolsClass<
@@ -1624,11 +1645,49 @@ export const ClientTools: ClientToolsConstructor =
 
 class HandlersClass extends ClientToolsClass<{}, {}, {}> {
   constructor(
-    sourceFileUrl: string | URL,
-    functions: Record<string, AnyFunction>,
+    sourceFileUrlOrFunctions:
+      | string
+      | URL
+      | undefined
+      | Record<string, AnyFunction>,
     // deno-lint-ignore no-explicit-any
-    options?: HandlersOptions<any>,
+    functionsOrOptions?: Record<string, AnyFunction> | HandlersOptions<any>,
+    // deno-lint-ignore no-explicit-any
+    maybeOptions?: HandlersOptions<any>,
   ) {
+    // Detect whether first arg is the functions object (no sourceFileUrl provided)
+    const firstArgIsFunctions = sourceFileUrlOrFunctions !== null &&
+      sourceFileUrlOrFunctions !== undefined &&
+      typeof sourceFileUrlOrFunctions === "object" &&
+      !(sourceFileUrlOrFunctions instanceof URL);
+
+    const sourceFileUrl = firstArgIsFunctions
+      ? undefined
+      : sourceFileUrlOrFunctions as string | URL | undefined;
+    const functions =
+      (firstArgIsFunctions
+        ? sourceFileUrlOrFunctions
+        : functionsOrOptions) as Record<string, AnyFunction>;
+    // deno-lint-ignore no-explicit-any
+    const options = (firstArgIsFunctions ? functionsOrOptions : maybeOptions) as
+      | HandlersOptions<any>
+      | undefined;
+
+    const resolvedUrl = normalizeSourceFileUrl(sourceFileUrl);
+    if (!resolvedUrl && !cache.trustCache) {
+      const detail = sourceFileUrl
+        ? `Received ${
+          JSON.stringify(String(sourceFileUrl))
+        } which is not a valid file path. ` +
+          "Did you mean to use import.meta.url instead of import.meta.main?"
+        : "No source file URL was provided.";
+      console.warn(
+        `[tiny-tools] \x1b[33mWarning:\x1b[0m tiny.Handlers constructed without a valid source file URL. ${detail} ` +
+          "Handler changes will not be tracked between builds and stale files will not be cleaned up. " +
+          "Pass import.meta.url as the first argument to enable change tracking.",
+      );
+    }
+
     super(sourceFileUrl, {
       functions,
       imports: options?.imports,
