@@ -1065,7 +1065,7 @@ class ClientToolsClass<
 
     // Use source filename as prefix for readability
     const urlPath = this.sourceFileUrl.replace(/\\/g, "/");
-    const baseName = urlPath.split("/").pop()?.replace(/\.[^.]+$/, "") ??
+    const baseName = urlPath.split("/").pop()?.replace(/\.[^.]+$/, "") ||
       "styles";
     const bundleFilename = `${baseName}_${
       generateStyleHash(sortedStyleHashes.join(","))
