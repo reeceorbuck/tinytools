@@ -1,11 +1,12 @@
 {
   "name": "@tinytools/hono-tools",
   "description": "A lightweight enhancement layer for Hono web applications. Provides type-safe client functions, scoped styles, and enhanced JSX event handlers. Works with Deno, Bun, and Node.js.",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "license": "MIT",
   "exports": {
     ".": "./mod.ts",
     "./jsx-runtime": "./jsx-runtime.ts",
+    "./jsx-dev-runtime": "./jsx-dev-runtime.ts",
     "./build": "./build.ts",
     "./components": "./components/mod.ts",
     "./client": "./client/mod.ts"
@@ -20,7 +21,7 @@
     "esbuild": "npm:esbuild@^0.28.0",
     "esbuild-wasm-browser": "npm:esbuild-wasm@^0.28.0/lib/browser.min.js",
     "esbuild-wasm/esbuild.wasm": "npm:esbuild-wasm@^0.28.0/esbuild.wasm",
-    "hono": "jsr:@hono/hono@^4.12.12"
+    "hono": "npm:hono@^4.12.12"
   },
   "compilerOptions": {
     "jsx": "react-jsx",
@@ -38,6 +39,7 @@
       "mod.ts",
       "titled.ts",
       "jsx-runtime.ts",
+      "jsx-dev-runtime.ts",
       "build.ts",
       "esbuildInit.ts",
       "clientFunctions.ts",
