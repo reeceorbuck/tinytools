@@ -1,6 +1,6 @@
 {
   "name": "@tinytools/hono-tools",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "description": "A lightweight enhancement layer for Hono web applications. Provides type-safe client functions, scoped styles, and enhanced JSX event handlers. Works with Deno, Bun, and Node.js.",
   "type": "module",
   "license": "MIT",
