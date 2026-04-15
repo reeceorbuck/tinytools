@@ -2,7 +2,7 @@ performance.mark("import:@tinytools/hono-tools:start");
 /**
  * @module @tinytools/hono-tools
  *
- * A lightweight enhancement layer for Hono web applications running on Deno.
+ * A lightweight enhancement layer for Hono web applications.
  * Provides type-safe client functions, scoped styles, and enhanced JSX event handlers.
  *
  * @example Basic Usage with Handlers and Styles

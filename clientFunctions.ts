@@ -10,6 +10,8 @@
 // deno-lint-ignore no-explicit-any
 type AnyFunction = (...args: any[]) => any;
 
+import { mkdir, rm, stat as fsStat, writeFile } from "node:fs/promises";
+
 /**
  * Interface for handler implementations stored in the registry.
  * @internal
@@ -269,7 +271,7 @@ export class ClientFunctionImpl<
         );
 
         // Remove the old handler file from disk
-        await Deno.remove(`${handlerDir}/${oldFilename}.js`).catch(() => {});
+        await rm(`${handlerDir}/${oldFilename}.js`).catch(() => {});
       } else {
         // Filename unchanged, but still ensure the cache entry exists
         // (it may have been cleared by resetHashDependentState)
@@ -284,7 +286,7 @@ export class ClientFunctionImpl<
 
     // Build if .js file doesn't exist
     try {
-      await Deno.stat(`${handlerDir}/${this.filename}.js`);
+      await fsStat(`${handlerDir}/${this.filename}.js`);
       // File exists — check if we need to rebuild due to dependency changes
       if (!this.needsRebuildDueToDependencyChange()) {
         return false;
@@ -294,8 +296,8 @@ export class ClientFunctionImpl<
     }
 
     const functionCode = await this.buildCode();
-    await Deno.mkdir(handlerDir, { recursive: true });
-    await Deno.writeTextFile(`${handlerDir}/${this.filename}.js`, functionCode);
+    await mkdir(handlerDir, { recursive: true });
+    await writeFile(`${handlerDir}/${this.filename}.js`, functionCode);
     console.log(`Handler file written: ${handlerDir}/${this.filename}.js`);
     return true;
   }

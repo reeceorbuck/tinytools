@@ -29,6 +29,14 @@ import type { Context } from "hono";
 
 // Import shared registries from registry modules
 import { changedHandlerKeys, ClientFunctionImpl } from "./clientFunctions.ts";
+import {
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { mkdir, rm, stat as fsStat, writeFile } from "node:fs/promises";
 
 // ============================================================================
 // Cache Management (combined for both functions and styles)
@@ -240,7 +248,7 @@ export function generateStyleHash(str: string): string {
 }
 
 /** Base URL for the current working directory, used to produce portable relative paths */
-const CWD_URL = new URL(`file:///${Deno.cwd().replace(/\\/g, "/")}/`);
+const CWD_URL = new URL(`file:///${process.cwd().replace(/\\/g, "/")}/`);
 
 export function normalizeSourceFileUrl(
   sourceFileUrl: string | URL | undefined,
@@ -303,12 +311,12 @@ class ClientToolsCacheManager {
   files: ClientToolsCacheV1["files"] = {};
 
   constructor() {
-    const lazyMode = Deno.args.includes("--lazy");
+    const lazyMode = process.argv.slice(2).includes("--lazy");
     this.trustCache = !lazyMode;
 
     // Load the cache from disk
     try {
-      const text = Deno.readTextFileSync(CACHE_PATH);
+      const text = readFileSync(CACHE_PATH, "utf-8");
       const parsed = JSON.parse(text);
 
       if (
@@ -341,7 +349,8 @@ class ClientToolsCacheManager {
         }
       }
     } catch (e) {
-      if (e instanceof Deno.errors.NotFound) {
+      // deno-lint-ignore no-explicit-any
+      if ((e as any)?.code === "ENOENT") {
         // no cache file yet — expected on first run
       } else {
         console.warn("[tiny-tools] failed to load cache:", e);
@@ -488,7 +497,7 @@ class ClientToolsCacheManager {
 
   private _writeSync(): void {
     try {
-      Deno.mkdirSync(CACHE_DIR, { recursive: true });
+      mkdirSync(CACHE_DIR, { recursive: true });
       const data: ClientToolsCacheV1 = {
         version: 3,
         hashConfig: this.hashConfig,
@@ -497,8 +506,8 @@ class ClientToolsCacheManager {
       // Atomic write: write to temp file then rename, so a watcher restart
       // mid-write can't corrupt the cache.
       const tmp = `${CACHE_PATH}.tmp`;
-      Deno.writeTextFileSync(tmp, JSON.stringify(data, null, 2));
-      Deno.renameSync(tmp, CACHE_PATH);
+      writeFileSync(tmp, JSON.stringify(data, null, 2));
+      renameSync(tmp, CACHE_PATH);
       this.dirty = false;
     } catch (e) {
       console.warn("[tiny-tools] failed to write cache:", e);
@@ -514,11 +523,11 @@ class ClientToolsCacheManager {
     if (memo !== undefined) return memo;
     try {
       // Resolve relative paths (produced by normalizeSourceFileUrl) back to
-      // absolute file:// URLs so Deno.statSync can find them.
+      // absolute file:// URLs so statSync can find them.
       const url = sourceFileUrl.startsWith("file://")
         ? new URL(sourceFileUrl)
         : new URL(sourceFileUrl, CWD_URL);
-      const stat = Deno.statSync(url);
+      const stat = statSync(url);
       const value = stat.mtime ? stat.mtime.getTime() : null;
       this.sourceFileMtimeMemo.set(sourceFileUrl, value);
       return value;
@@ -1195,7 +1204,7 @@ class ClientToolsClass<
         oldBundleFilename !== newBundleFilename
       ) {
         styleBundleRegistry.delete(oldBundleFilename);
-        await Deno.remove(`${stylesDir}/${oldBundleFilename}.css`).catch(
+        await rm(`${stylesDir}/${oldBundleFilename}.css`).catch(
           () => {},
         );
       }
@@ -1226,7 +1235,7 @@ class ClientToolsClass<
           this._staleOwnBundleFilename &&
           this._staleOwnBundleFilename !== bundleFilename
         ) {
-          await Deno.remove(`${stylesDir}/${this._staleOwnBundleFilename}.css`)
+          await rm(`${stylesDir}/${this._staleOwnBundleFilename}.css`)
             .catch(() => {});
           this._staleOwnBundleFilename = undefined;
         }
@@ -1243,13 +1252,13 @@ class ClientToolsClass<
       await this._ensureStyleFileBuilt(stylesDir, impl);
       // If revalidate changed the filename, the old file on disk is stale
       if (oldFilename && oldFilename !== impl.filename) {
-        await Deno.remove(`${stylesDir}/${oldFilename}.css`).catch(
+        await rm(`${stylesDir}/${oldFilename}.css`).catch(
           () => {},
         );
       }
       const staleFilename = impl.staleFilenameForCleanup;
       if (staleFilename && staleFilename !== impl.filename) {
-        await Deno.remove(`${stylesDir}/${staleFilename}.css`).catch(
+        await rm(`${stylesDir}/${staleFilename}.css`).catch(
           () => {},
         );
       }
@@ -1263,7 +1272,7 @@ class ClientToolsClass<
     styles: ScopedStyleImpl[],
   ): Promise<void> {
     const filePath = `${stylesDir}/${bundleFilename}.css`;
-    const fileExists = await Deno.stat(filePath).then(() => true).catch(
+    const fileExists = await fsStat(filePath).then(() => true).catch(
       () => false,
     );
 
@@ -1277,9 +1286,9 @@ class ClientToolsClass<
     if (fileExists && !anyChanged) return;
 
     const { buildLayeredCssContent } = await import("./build.ts");
-    await Deno.mkdir(stylesDir, { recursive: true });
+    await mkdir(stylesDir, { recursive: true });
     const cssContent = buildLayeredCssContent(styles);
-    await Deno.writeTextFile(filePath, cssContent);
+    await writeFile(filePath, cssContent);
     console.log(
       `Style bundle written: ${filePath} (${styles.length} styles)`,
     );
@@ -1290,7 +1299,7 @@ class ClientToolsClass<
     style: ScopedStyleImpl,
   ): Promise<void> {
     const filePath = `${stylesDir}/${style.filename}.css`;
-    const fileExists = await Deno.stat(filePath).then(() => true).catch(
+    const fileExists = await fsStat(filePath).then(() => true).catch(
       () => false,
     );
 
@@ -1301,9 +1310,9 @@ class ClientToolsClass<
       if (!styleKey || !changedStyleKeys.has(styleKey)) return;
     }
 
-    await Deno.mkdir(stylesDir, { recursive: true });
+    await mkdir(stylesDir, { recursive: true });
     const cssContent = style.buildCssContent();
-    await Deno.writeTextFile(filePath, cssContent);
+    await writeFile(filePath, cssContent);
     console.log(`Style file written: ${filePath}`);
   }
 

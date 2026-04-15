@@ -235,3 +235,5 @@ interface NavigationPrecommitController {
 interface Window {
   navigation: Navigation;
 }
+
+declare var navigation: Navigation;

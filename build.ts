@@ -27,6 +27,14 @@ import {
   styleBundleRegistry,
 } from "./scopedStyles.ts";
 performance.mark("import:scopedStyles:done");
+import {
+  mkdir,
+  readFile,
+  rm,
+  stat as fsStat,
+  writeFile,
+} from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 
 // deno-lint-ignore no-explicit-any
 type AnyFunction = (...args: any[]) => any;
@@ -168,7 +176,7 @@ export async function buildHandlers(
       const { filename } = handler;
 
       if (!fresh) {
-        const fileExists = await Deno.stat(`${handlerDir}/${filename}.js`)
+        const fileExists = await fsStat(`${handlerDir}/${filename}.js`)
           .then(() => true)
           .catch(() => false);
 
@@ -187,7 +195,7 @@ export async function buildHandlers(
 
       console.log(`Building file for handler:`, handler.buildCode);
       const functionCode = await handler.buildCode();
-      await Deno.writeTextFile(`${handlerDir}/${filename}.js`, functionCode);
+      await writeFile(`${handlerDir}/${filename}.js`, functionCode);
       console.log(`Handler file written: ${handlerDir}/${filename}.js`);
       return filename;
     }),
@@ -213,7 +221,7 @@ export async function buildStyles(
         const filePath = `${stylesDir}/${bundleFilename}.css`;
 
         if (!fresh) {
-          const fileExists = await Deno.stat(filePath)
+          const fileExists = await fsStat(filePath)
             .then(() => true)
             .catch(() => false);
 
@@ -236,7 +244,7 @@ export async function buildStyles(
         }
 
         const cssContent = buildLayeredCssContent(styles);
-        await Deno.writeTextFile(filePath, cssContent);
+        await writeFile(filePath, cssContent);
         console.log(
           `Style bundle written: ${filePath} (${styles.length} styles)`,
         );
@@ -260,7 +268,7 @@ export async function buildStyles(
         const filePath = `${stylesDir}/${filename}.css`;
 
         if (!fresh) {
-          const fileExists = await Deno.stat(filePath)
+          const fileExists = await fsStat(filePath)
             .then(() => true)
             .catch(() => false);
 
@@ -275,7 +283,7 @@ export async function buildStyles(
         }
 
         const cssContent = buildLayeredCssContent([style]);
-        await Deno.writeTextFile(filePath, cssContent);
+        await writeFile(filePath, cssContent);
         console.log(`Global style file written: ${filePath}`);
         return filename;
       }),
@@ -295,10 +303,10 @@ export async function transpileClientDir(
   clientDir: string,
   publicDir: string,
 ): Promise<string[]> {
-  let files: Deno.DirEntry[];
+  let files: import("node:fs").Dirent[];
   try {
-    files = (await Array.fromAsync(Deno.readDir(clientDir)))
-      .filter((entry) => entry.isFile)
+    files = (await readdir(clientDir, { withFileTypes: true }))
+      .filter((entry) => entry.isFile())
       .filter((entry) =>
         entry.name.endsWith(".ts") || entry.name.endsWith(".tsx")
       );
@@ -332,22 +340,24 @@ export async function cleanupStaleFiles(
   validHandlerFiles: string[],
   validStyleFiles: string[],
 ): Promise<void> {
-  for await (const dirEntry of Deno.readDir(handlerDir)) {
-    if (dirEntry.isFile && dirEntry.name.endsWith(".js")) {
+  const handlerEntries = await readdir(handlerDir, { withFileTypes: true });
+  for (const dirEntry of handlerEntries) {
+    if (dirEntry.isFile() && dirEntry.name.endsWith(".js")) {
       const fileName = dirEntry.name.replace(/\.js$/, "");
       if (!validHandlerFiles.includes(fileName)) {
         console.log("Removing handler file: ", dirEntry.name);
-        await Deno.remove(`${handlerDir}/${dirEntry.name}`);
+        await rm(`${handlerDir}/${dirEntry.name}`);
       }
     }
   }
 
-  for await (const dirEntry of Deno.readDir(stylesDir)) {
-    if (dirEntry.isFile && dirEntry.name.endsWith(".css")) {
+  const styleEntries = await readdir(stylesDir, { withFileTypes: true });
+  for (const dirEntry of styleEntries) {
+    if (dirEntry.isFile() && dirEntry.name.endsWith(".css")) {
       const fileName = dirEntry.name.replace(/\.css$/, "");
       if (!validStyleFiles.includes(fileName)) {
         console.log("Removing style file: ", dirEntry.name);
-        await Deno.remove(`${stylesDir}/${dirEntry.name}`);
+        await rm(`${stylesDir}/${dirEntry.name}`);
       }
     }
   }
@@ -424,9 +434,9 @@ export async function buildScriptFiles(options: BuildOptions = {}) {
 
   // --- Ensure directories ---
   performance.mark("buildScriptFiles:mkdirStart");
-  await Deno.mkdir(publicDir, { recursive: true });
-  await Deno.mkdir(handlerDir, { recursive: true });
-  await Deno.mkdir(stylesDir, { recursive: true });
+  await mkdir(publicDir, { recursive: true });
+  await mkdir(handlerDir, { recursive: true });
+  await mkdir(stylesDir, { recursive: true });
   performance.mark("buildScriptFiles:mkdirEnd");
 
   // --- Log changes (non-fresh only) ---
@@ -532,10 +542,10 @@ async function transpileClientFile(
   const outBaseName = fileName.replace(/\.(ts|tsx)$/i, "");
   const outPath = `${publicDir}/${outBaseName}.js`;
 
-  const sourceStat = await Deno.stat(inPath);
+  const sourceStat = await fsStat(inPath);
   const sourceMtimeMs = sourceStat.mtime?.getTime() ?? null;
 
-  const existingOutStat = await Deno.stat(outPath).catch(() => null);
+  const existingOutStat = await fsStat(outPath).catch(() => null);
   const outMtimeMs = existingOutStat?.mtime?.getTime() ?? null;
 
   // mtime-based cache: if output exists and is newer/equal to source, skip.
@@ -547,7 +557,7 @@ async function transpileClientFile(
     return outBaseName;
   }
 
-  const inputCode = await Deno.readTextFile(inPath);
+  const inputCode = await readFile(inPath, "utf-8");
   const esbuild = await getEsbuild();
   const loader = fileName.toLowerCase().endsWith(".tsx") ? "tsx" : "ts";
   const result = await esbuild.transform(inputCode, {
@@ -563,7 +573,7 @@ async function transpileClientFile(
     "$1$2.js$4",
   );
 
-  await Deno.writeTextFile(outPath, outputCode);
+  await writeFile(outPath, outputCode);
   console.log(`Client script written: ${outPath}`);
   return outBaseName;
 }

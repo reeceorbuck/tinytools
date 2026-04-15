@@ -31,12 +31,13 @@ import {
 } from "./clientTools.ts";
 import type { ActivateClientFunctions } from "./jsx-runtime.ts";
 import { type ActivateScopedStyles, css } from "./scopedStyles.ts";
-import { serveStatic } from "hono/deno";
 import { jsxRenderer } from "hono/jsx-renderer";
 import { AssetTags } from "./components/AssetTags.tsx";
 import type { JSX } from "hono/jsx/jsx-runtime";
 import { clientFiles } from "./client/dist/manifest.ts";
 import { trackConnectedClients } from "./sse.ts";
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 
 /** URL prefix for package-provided client scripts */
 export const TINYTOOLS_CLIENT_PREFIX = "/_tinytools";
@@ -585,6 +586,16 @@ export type ClientToolsOptions = {
    * Valid range is 1-8, values outside range are clamped.
    */
   generatedStyleHashLength?: number;
+  /**
+   * Static file serving middleware factory. If not provided, auto-detects
+   * the runtime and uses the appropriate Hono adapter.
+   *
+   * - Deno: `import { serveStatic } from "hono/deno"`
+   * - Bun: `import { serveStatic } from "hono/bun"`
+   * - Node: `import { serveStatic } from "@hono/node-server/serve-static"`
+   */
+  // deno-lint-ignore no-explicit-any
+  serveStatic?: (options: any) => MiddlewareHandler;
 };
 
 /** Options for `tiny.middleware.navApiTools()`. Reserved for future use. */
@@ -732,8 +743,7 @@ function servePackageClientFiles(): MiddlewareHandler {
     }
 
     if (resolvedUrl.startsWith("file://")) {
-      const { fromFileUrl } = await import("jsr:@std/path@^1");
-      const content = await Deno.readTextFile(fromFileUrl(resolvedUrl));
+      const content = await readFile(fileURLToPath(resolvedUrl), "utf-8");
       c.header("Content-Type", "application/javascript; charset=utf-8");
       c.header("Cache-Control", "public, max-age=31536000, immutable");
       return c.body(content);
@@ -748,7 +758,52 @@ function servePackageClientFiles(): MiddlewareHandler {
 }
 
 /**
- * Create a feature middleware that adds a flag to the tinyToolsFeatures set.
+ * Auto-detect the runtime's serveStatic adapter.
+ * Tries hono/deno, hono/bun, then @hono/node-server in order.
+ * @internal
+ */
+// deno-lint-ignore no-explicit-any
+async function detectServeStatic(): Promise<
+  (options: any) => MiddlewareHandler
+> {
+  try {
+    return (await import("hono/deno")).serveStatic;
+  } catch { /* not available */ }
+  try {
+    return (await import("hono/bun")).serveStatic;
+  } catch { /* not available */ }
+  try {
+    // deno-lint-ignore no-explicit-any
+    return (await import("@hono/node-server/serve-static" as any)).serveStatic;
+  } catch { /* not available */ }
+  throw new Error(
+    "[tiny-tools] No serveStatic adapter found. " +
+      "Pass serveStatic in options: tiny.middleware.all({ serveStatic })",
+  );
+}
+
+/**
+ * Create a middleware that lazily initializes serveStatic on first request.
+ * Uses user-provided serveStatic or auto-detects runtime adapter.
+ * @internal
+ */
+function createLazyServeStaticMiddleware(
+  // deno-lint-ignore no-explicit-any
+  userServeStatic: ((options: any) => MiddlewareHandler) | undefined,
+  // deno-lint-ignore no-explicit-any
+  staticOptions: any,
+): MiddlewareHandler {
+  let middleware: MiddlewareHandler | null = null;
+  return async (c, next) => {
+    if (!middleware) {
+      const serveStaticFn = userServeStatic ?? await detectServeStatic();
+      middleware = serveStaticFn(staticOptions);
+    }
+    return middleware(c, next);
+  };
+}
+
+/**
  * @internal
  */
 function createFeatureMiddleware(featureName: string): MiddlewareHandler {
@@ -815,16 +870,16 @@ function createCoreMiddleware(
     // Serve package client JS files from /_tinytools/
     servePackageClientFiles(),
     // Static file serving for user's public directory with aggressive caching for content-hashed files
-    serveStatic({
+    createLazyServeStaticMiddleware(options.serveStatic, {
       root: "./public/",
-      onFound: (path, c) => {
+      onFound: (path: string, c: Context) => {
         // Handler files (public/handlers/*.js) and style files (public/styles/*.css)
         // have content-hashed filenames, so they're immutable and can be cached forever
         if (isImmutablePublicAssetPath(path)) {
           c.header("Cache-Control", "public, max-age=31536000, immutable");
         }
       },
-      onNotFound: (path, c) => {
+      onNotFound: (path: string, c: Context) => {
         if (isImmutablePublicAssetPath(path)) {
           console.error(`Handler or style file not found: ${path}`);
         }

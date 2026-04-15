@@ -7,9 +7,12 @@
 
 import { getEsbuild } from "./esbuildInit.ts";
 import type { Loader } from "esbuild";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import type { Dirent } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 type ClientSourceEntry = {
-  file: Deno.DirEntry;
+  file: Dirent;
   logicalName: string;
   loader: Loader;
   sourceCode: string;
@@ -35,7 +38,7 @@ async function readExistingManifest(
   distDir: string,
 ): Promise<Record<string, string>> {
   try {
-    const content = await Deno.readTextFile(`${distDir}/manifest.ts`);
+    const content = await readFile(`${distDir}/manifest.ts`, "utf-8");
     const match = content.match(
       /clientFileManifest\s*=\s*({[\s\S]*?})\s*as\s*const/,
     );
@@ -50,12 +53,12 @@ async function writeTextFileIfChanged(
   path: string,
   content: string,
 ): Promise<boolean> {
-  const existingContent = await Deno.readTextFile(path).catch(() => null);
+  const existingContent = await readFile(path, "utf-8").catch(() => null);
   if (existingContent === content) {
     return false;
   }
 
-  await Deno.writeTextFile(path, content);
+  await writeFile(path, content);
   return true;
 }
 
@@ -64,17 +67,20 @@ export async function buildPackageClientFiles(): Promise<void> {
   const distDir = `${clientDir}/dist`;
 
   const packageConfig = JSON.parse(
-    await Deno.readTextFile(new URL("./deno.json", import.meta.url)),
+    await readFile(
+      fileURLToPath(new URL("./deno.json", import.meta.url)),
+      "utf-8",
+    ),
   ) as { version?: string };
   const packageVersion = typeof packageConfig.version === "string"
     ? packageConfig.version
     : "0.0.0";
   const normalizedVersion = packageVersion.replace(/[^a-zA-Z0-9.-]/g, "-");
 
-  await Deno.mkdir(distDir, { recursive: true });
+  await mkdir(distDir, { recursive: true });
 
-  const files = (await Array.fromAsync(Deno.readDir(clientDir)))
-    .filter((entry) => entry.isFile)
+  const files = (await readdir(clientDir, { withFileTypes: true }))
+    .filter((entry) => entry.isFile())
     .filter((entry) =>
       entry.name.endsWith(".ts") || entry.name.endsWith(".tsx")
     );
@@ -85,7 +91,7 @@ export async function buildPackageClientFiles(): Promise<void> {
     file,
     logicalName: file.name.replace(/\.(ts|tsx)$/i, ".js"),
     loader: (file.name.toLowerCase().endsWith(".tsx") ? "tsx" : "ts") as Loader,
-    sourceCode: await Deno.readTextFile(`${clientDir}/${file.name}`),
+    sourceCode: await readFile(`${clientDir}/${file.name}`, "utf-8"),
   })));
 
   sourceEntries.sort((left, right) =>
@@ -169,13 +175,14 @@ export async function buildPackageClientFiles(): Promise<void> {
   }
 
   const generatedFiles = new Set(manifestEntries.map(({ outName }) => outName));
-  for await (const entry of Deno.readDir(distDir)) {
+  const distEntries = await readdir(distDir, { withFileTypes: true });
+  for (const entry of distEntries) {
     if (
-      entry.isFile &&
+      entry.isFile() &&
       entry.name.endsWith(".js") &&
       !generatedFiles.has(entry.name)
     ) {
-      await Deno.remove(`${distDir}/${entry.name}`);
+      await rm(`${distDir}/${entry.name}`);
       console.log(`  removed stale dist/${entry.name}`);
     }
   }
@@ -207,6 +214,6 @@ export async function buildPackageClientFiles(): Promise<void> {
   console.log("Done.");
 }
 
-if (import.meta.main) {
+if (import.meta.filename === process.argv[1]) {
   await buildPackageClientFiles();
 }

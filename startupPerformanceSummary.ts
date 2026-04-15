@@ -138,7 +138,7 @@ export function logStartupPerformanceSummary() {
     "startup:importsComplete",
   );
 
-  const isLazy = Deno.args.includes("--lazy");
+  const isLazy = process.argv.slice(2).includes("--lazy");
   const mode = hasBuildPhase ? "build" : isLazy ? "lazy" : "prod";
   console.log(`[startup] total init: ${fmtMs(totalMs)}ms  (${mode})`);
   console.log(`[startup] breakdown:`);
