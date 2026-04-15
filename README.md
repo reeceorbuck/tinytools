@@ -1,8 +1,8 @@
 # @tinytools/hono-tools
 
-A lightweight enhancement layer for [Hono](https://hono.dev/) web applications
-running on Deno. Provides type-safe client functions, scoped styles, and
-enhanced JSX event handlers.
+A lightweight enhancement layer for [Hono](https://hono.dev/) web applications.
+Provides type-safe client functions, scoped styles, and enhanced JSX event
+handlers. Works with **Deno**, **Bun**, and **Node.js**.
 
 ## Features
 
@@ -23,20 +23,57 @@ enhanced JSX event handlers.
 
 ## Installation
 
-```ts
-// deno.json
+> **Note:** The package is published under different scope names depending on
+> the registry:
+>
+> - **JSR** (Deno): `@tinytools/hono-tools`
+> - **npm** (Node.js / Bun): `@tinyenterprise/hono-tools`
+
+### Deno (via JSR)
+
+```bash
+deno add jsr:@tinytools/hono-tools
+```
+
+Or manually add to your `deno.json`:
+
+```json
 {
   "imports": {
     "@tinytools/hono-tools": "jsr:@tinytools/hono-tools@^0.1.0",
-    "@tinytools/hono-tools/jsx-runtime": "jsr:@tinytools/hono-tools@^0.1.0/jsx-runtime",
     "@tinytools/hono-tools/build": "jsr:@tinytools/hono-tools@^0.1.0/build",
     "@tinytools/hono-tools/components": "jsr:@tinytools/hono-tools@^0.1.0/components"
-  },
+  }
+}
+```
+
+Optionally, Deno supports precompiled JSX for better performance:
+
+```json
+{
   "compilerOptions": {
     "jsx": "precompile",
     "jsxImportSource": "@tinytools/hono-tools"
   }
 }
+```
+
+### Node.js / Bun (via npm)
+
+```bash
+# npm
+npm install @tinyenterprise/hono-tools
+
+# bun
+bun add @tinyenterprise/hono-tools
+```
+
+Then import using the npm scope:
+
+```ts
+import { css, tiny } from "@tinyenterprise/hono-tools";
+import { buildScriptFiles } from "@tinyenterprise/hono-tools/build";
+import { Partial, Suspense } from "@tinyenterprise/hono-tools/components";
 ```
 
 ## Quick Start
@@ -259,9 +296,24 @@ export const childRoute = new Hono<
 Separate factories for creating type-safe client-side event handlers and scoped
 CSS styles.
 
-> **\u26a0\ufe0f Always declare at module level** - `Handlers` and `Styles`
-> instances must be created outside of route handlers so they are registered
-> once at startup and included in the build process.
+> **⚠️ Always declare at module level** - `Handlers` and `Styles` instances must
+> be created outside of route handlers so they are registered once at startup
+> and included in the build process.
+
+The first argument to `Handlers` and `Styles` is an optional `import.meta.url`.
+When provided, the build step tracks which file each handler/style belongs to
+and only rebuilds the files that have changed. This makes development faster
+because rebuilds happen lazily — only the affected output files are regenerated
+instead of everything. If omitted, all handlers and styles are rebuilt on every
+change.
+
+```ts
+// With import.meta.url (recommended) — enables lazy, incremental rebuilds
+const handlers = new tiny.Handlers(import.meta.url, { ... });
+
+// Without — still works, but every change triggers a full rebuild
+const handlers = new tiny.Handlers({ ... });
+```
 
 ```ts
 import { css, tiny } from "@tinytools/hono-tools";

@@ -35,7 +35,7 @@ import { jsxRenderer } from "hono/jsx-renderer";
 import { AssetTags } from "./components/AssetTags.tsx";
 import type { JSX } from "hono/jsx/jsx-runtime";
 import { clientFiles } from "./client/dist/manifest.ts";
-import { trackConnectedClients } from "./sse.ts";
+import { addStream, removeStream, trackConnectedClients } from "./sse.ts";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
@@ -823,6 +823,41 @@ function createSseFeatureMiddleware(): MiddlewareHandler {
       features.add("sse");
     }
     await trackConnectedClients(c, next);
+
+    // Default SSE endpoint — only activates if no user-defined route handled it
+    if (
+      c.req.method === "GET" &&
+      c.req.path === "/sse" &&
+      c.res.status === 404
+    ) {
+      const { streamSSE } = await import("hono/streaming");
+      const { getCookie } = await import("hono/cookie");
+      const sseId = getCookie(c, "sseId");
+      if (!sseId) {
+        c.res = c.json({ error: "No SSE ID cookie" }, 400);
+        return;
+      }
+      c.res = streamSSE(c, async (stream) => {
+        c.req.raw.signal.addEventListener("abort", () => {
+          stream.close();
+          removeStream(stream);
+        });
+        addStream({
+          id: sseId,
+          userName: "Unknown",
+          userAgent: c.req.header("user-agent") || "Unknown",
+          stream,
+        });
+        await stream.writeSSE({
+          event: "info",
+          data:
+            "Connected to default SSE endpoint. User tracking is not configured. Define your own /sse route to enable user identification and tracking.",
+        });
+        return new Promise((resolve) => {
+          stream.onAbort(resolve);
+        });
+      });
+    }
   };
 }
 
