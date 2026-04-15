@@ -19,7 +19,7 @@ export async function getEsbuild(): Promise<EsbuildAPI> {
   } catch {
     // Fall back to the browser WASM build (no child_process needed)
     console.log("Native esbuild unavailable, falling back to esbuild-wasm");
-    const browserModule = await import("esbuild-wasm-browser");
+    const browserModule = await import("esbuild-wasm/lib/browser.min.js");
     const browser = browserModule.default ?? browserModule;
     const wasmUrl = import.meta.resolve("esbuild-wasm/esbuild.wasm");
     const wasmModule = await WebAssembly.compile(
