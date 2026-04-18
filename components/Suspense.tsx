@@ -141,9 +141,6 @@ export const Suspense: FC<
             htmlArray = htmlArray.flat();
             const content = htmlArray.join("");
             if (buffer) {
-              console.log(
-                "There is a buffer! See if we can replace content before it sends",
-              );
               buffer[0] = buffer[0].replace(
                 new RegExp(
                   `<div id="suspended-${index}" style="display:contents">.*?</div>`,

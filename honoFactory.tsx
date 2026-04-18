@@ -934,12 +934,16 @@ function createCoreMiddleware(
       { children, title }: any,
       c,
     ) => {
-      console.log(
-        "Rendering page with jsx renderer for layout, title: ",
-        title,
-      );
-      const evaluatedBody = await children;
       const routeLayoutApplied = c.get(ROUTE_LAYOUT_APPLIED_KEY) === true;
+
+      // Await children so route/layout rendering populates tool tracking sets
+      // for AssetTags to read. Re-wrap as Promise to preserve streaming callbacks
+      // (childrenToStringToBuffer drops .callbacks via string concat for isEscaped
+      // strings, but preserves them through the Promise/async path).
+      const evaluatedBody = await children;
+      const body = evaluatedBody?.callbacks?.length
+        ? Promise.resolve(evaluatedBody)
+        : evaluatedBody;
 
       const sourceUrl = c.req.header("source-url");
       if (sourceUrl) {
@@ -949,7 +953,7 @@ function createCoreMiddleware(
               <head-update>
                 <AssetTags fullPageLoad={false} />
               </head-update>
-              <body-update>{evaluatedBody}</body-update>
+              <body-update>{body}</body-update>
             </template>
           </update>
         );
@@ -976,7 +980,7 @@ function createCoreMiddleware(
             </style>
             <AssetTags />
           </head>
-          {routeLayoutApplied ? evaluatedBody : <body>{evaluatedBody}</body>}
+          {routeLayoutApplied ? body : <body>{body}</body>}
         </html>
       );
     }, {
