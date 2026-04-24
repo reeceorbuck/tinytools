@@ -443,11 +443,26 @@ export function getOrderedLocalRouteTemplates() {
     document.querySelectorAll<HTMLTemplateElement>("template[path]"),
   );
 
-  const cached = templates.filter(isRuntimeCachedRouteTemplate);
-  const authored = templates.filter((template) =>
-    !isRuntimeCachedRouteTemplate(template)
-  );
-  return [...cached, ...authored];
+  // Priority order:
+  //   1. Authored templates (the default) — treated as explicit local route
+  //      definitions and win over the automatic runtime route cache.
+  //   2. Runtime cached route templates — captured from previous responses;
+  //      used when no authored template matches.
+  //   3. Authored templates marked `placeholder` — loading/fallback content
+  //      that should only be used if no fresh cached response is available.
+  const authored: HTMLTemplateElement[] = [];
+  const placeholders: HTMLTemplateElement[] = [];
+  const cached: HTMLTemplateElement[] = [];
+  for (const template of templates) {
+    if (isRuntimeCachedRouteTemplate(template)) {
+      cached.push(template);
+    } else if (template.hasAttribute("placeholder")) {
+      placeholders.push(template);
+    } else {
+      authored.push(template);
+    }
+  }
+  return [...authored, ...cached, ...placeholders];
 }
 
 export function applyIncomingToCachedTemplates(

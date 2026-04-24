@@ -127,10 +127,12 @@ export function processLocalSuspenseTemplates(
   requestMethod = formData ? "post" : "get",
   options: {
     allowRuntimeCache?: boolean;
+    bypassRouteCache?: boolean;
   } = {},
 ) {
   const method = requestMethod.toLowerCase();
   const allowRuntimeCache = options.allowRuntimeCache ?? true;
+  const bypassRouteCache = options.bypassRouteCache ?? false;
   let block = false;
 
   const targetPathname = destinationUrl.pathname;
@@ -199,7 +201,9 @@ export function processLocalSuspenseTemplates(
       continue;
     }
     const blockNav = templateToRender.hasAttribute("data-nav-block");
-    const cacheCurrentPath = method === "get" ? currentPathname : undefined;
+    const cacheCurrentPath = method === "get" && !bypassRouteCache
+      ? currentPathname
+      : undefined;
     const pathParams = execResult.pathname.groups as Record<string, string>;
     const queryParams = destinationUrl.searchParams;
     const params: Record<string, string> = {
@@ -265,7 +269,9 @@ export function processLocalSuspenseTemplates(
     );
     processIncomingHtml(fragment, document, {
       cacheCurrentPath,
-      activeRouteRegistrations: method === "get" && targetPathname
+      bypassRouteCache,
+      activeRouteRegistrations: method === "get" && targetPathname &&
+          !bypassRouteCache
         ? [
           {
             pathname: targetPathname,
@@ -280,7 +286,7 @@ export function processLocalSuspenseTemplates(
           entry !== null
         )
         : undefined,
-      activeRoutePath: method === "get"
+      activeRoutePath: method === "get" && !bypassRouteCache
         ? (redirectPathname || targetPathname)
         : undefined,
     });

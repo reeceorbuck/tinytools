@@ -25,7 +25,12 @@ import {
   setCustomScope,
   styleBundleRegistry,
 } from "../scopedStyles.ts";
-import { cache, Handlers, Styles } from "../clientTools.ts";
+import {
+  cache,
+  Handlers,
+  normalizeSourceFileUrl,
+  Styles,
+} from "../clientTools.ts";
 import { registeredClientTools } from "../clientTools.ts";
 import { css } from "../scopedStyles.ts";
 
@@ -68,6 +73,11 @@ function setupPerformanceMarks() {
 /** Reset the global registries to a clean state */
 function resetRegistries() {
   cache.resetHashDependentState();
+  // Tests exercise the lazy-mode rebuild path. A persisted cache on disk can
+  // otherwise leave the shared cache in trustCache=true mode, which skips all
+  // mtime/revalidation work and breaks assertions that depend on detecting
+  // source changes.
+  (cache as { trustCache: boolean }).trustCache = false;
   handlers.clear();
   scopedStylesRegistry.clear();
   styleBundleRegistry.clear();
@@ -247,6 +257,174 @@ Deno.test({
     // Verify file was not rewritten (same content)
     const newContent = await readFileOrNull(handlerPath);
     assertEquals(newContent, originalContent);
+
+    await cleanupTestDirs();
+  },
+  sanitizeOps: false,
+  sanitizeResources: false,
+});
+
+Deno.test({
+  name:
+    "buildScriptFiles - rewrites handler file when source mtime changes but filename stays the same",
+  async fn() {
+    await cleanupTestDirs();
+    resetRegistries();
+
+    new Handlers(import.meta.url, {
+      refreshOnSourceChange(this: HTMLElement) {
+        console.log("fresh output", this.tagName);
+      },
+    });
+
+    await buildForTest({
+      clientDir: TEST_CLIENT_DIR,
+      publicDir: TEST_PUBLIC_DIR,
+      handlerDir: TEST_HANDLER_DIR,
+      stylesDir: TEST_STYLES_DIR,
+    });
+
+    const handlerFiles = await listFiles(TEST_HANDLER_DIR);
+    assertEquals(handlerFiles.length, 1);
+    const handlerPath = `${TEST_HANDLER_DIR}/${handlerFiles[0]}`;
+
+    await Deno.writeTextFile(handlerPath, "stale-output");
+
+    const sourceKey = normalizeSourceFileUrl(import.meta.url);
+    assertExists(sourceKey);
+    assertExists(cache.files[sourceKey]);
+    cache.files[sourceKey].mtimeMs = 0;
+
+    await buildForTest({
+      clientDir: TEST_CLIENT_DIR,
+      publicDir: TEST_PUBLIC_DIR,
+      handlerDir: TEST_HANDLER_DIR,
+      stylesDir: TEST_STYLES_DIR,
+    });
+
+    const rebuiltContent = await readFileOrNull(handlerPath);
+    assertExists(rebuiltContent);
+    assertNotEquals(rebuiltContent, "stale-output");
+    assertEquals(rebuiltContent.includes("fresh output"), true);
+
+    await cleanupTestDirs();
+  },
+  sanitizeOps: false,
+  sanitizeResources: false,
+});
+
+Deno.test({
+  name:
+    "buildScriptFiles - does not persist cache mtime until after handler rebuild succeeds",
+  async fn() {
+    await cleanupTestDirs();
+    resetRegistries();
+
+    new Handlers(import.meta.url, {
+      cacheMtimeCommitCheck(this: HTMLElement) {
+        console.log("commit-check", this.tagName);
+      },
+    });
+
+    const sourceKey = normalizeSourceFileUrl(import.meta.url);
+    assertExists(sourceKey);
+
+    // Simulate a prior-detection-only state: cache mtime still at 0 so the
+    // current source is considered changed. If the cache committed mtime
+    // at detection time, this entry would already match the source mtime.
+    cache.files[sourceKey] ??= {
+      mtimeMs: 0,
+      externalImports: [],
+      handlers: {},
+      styles: {},
+    };
+    cache.files[sourceKey].mtimeMs = 0;
+
+    // Detect the change without building anything yet.
+    const detected = cache.checkAndTrackMtimeChange(sourceKey);
+    assertEquals(detected, true);
+    assertEquals(
+      cache.files[sourceKey].mtimeMs,
+      0,
+      "detection must not persist the new mtime",
+    );
+
+    // Now run a full build — only after this should the mtime be committed.
+    await buildForTest({
+      clientDir: TEST_CLIENT_DIR,
+      publicDir: TEST_PUBLIC_DIR,
+      handlerDir: TEST_HANDLER_DIR,
+      stylesDir: TEST_STYLES_DIR,
+    });
+
+    assertNotEquals(cache.files[sourceKey].mtimeMs, 0);
+
+    await cleanupTestDirs();
+  },
+  sanitizeOps: false,
+  sanitizeResources: false,
+});
+
+Deno.test({
+  name: "cache - eagerly revalidates sibling handlers on first mtime detection",
+  async fn() {
+    await cleanupTestDirs();
+    resetRegistries();
+
+    // Two handlers on the SAME source file — mirrors the real-world pattern
+    // of one file exporting multiple `new tiny.Handlers(import.meta.url, …)`
+    // bound to different routes (e.g. dental/partials/charting.tsx).
+    const first = new Handlers(import.meta.url, {
+      firstSharedHandler(this: HTMLElement) {
+        console.log("first", this.tagName);
+      },
+    });
+    const second = new Handlers(import.meta.url, {
+      secondSharedHandler(this: HTMLElement) {
+        console.log("second", this.tagName);
+      },
+    });
+
+    const sourceKey = normalizeSourceFileUrl(import.meta.url);
+    assertExists(sourceKey);
+
+    // Pretend the cache was written before this file was last edited so the
+    // mtime-based detection will flag the source as changed.
+    cache.files[sourceKey] ??= {
+      mtimeMs: 0,
+      externalImports: [],
+      handlers: {},
+      styles: {},
+    };
+    cache.files[sourceKey].mtimeMs = 1;
+
+    cache.beginChangeDetectionPass();
+
+    // Grab the per-handler impl objects that the source registered during
+    // construction. These expose the `revalidateAndBuild` method that the
+    // cache invokes during the lazy rebuild pass.
+    const siblings = [
+      ...(cache.getHandlersForSource(sourceKey) ?? []),
+    ] as Array<{
+      revalidateAndBuild: (dir: string) => Promise<void>;
+    }>;
+    assertEquals(siblings.length, 2);
+
+    // Revalidate only the FIRST impl. The eager-sibling-fanout mechanism
+    // must process the second impl as part of the same pass so its .js
+    // file is refreshed before the source mtime is committed.
+    await siblings[0].revalidateAndBuild(TEST_HANDLER_DIR);
+
+    assertEquals(
+      cache.isHandlerProcessedThisPass(siblings[1] as object),
+      true,
+      "sibling handler on the same source file must be eagerly revalidated",
+    );
+
+    // Silence unused-binding lints — the Handlers instances keep the impls
+    // alive in the registry.
+    void first;
+    void second;
 
     await cleanupTestDirs();
   },

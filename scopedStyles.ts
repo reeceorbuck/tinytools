@@ -178,7 +178,7 @@ export interface ScopedStyleEntry {
   layer: ScopedStyleLayer;
   buildCssLayerContent(): string;
   buildCssContent(): string;
-  revalidate(): boolean;
+  revalidate(): Promise<boolean>;
 }
 
 /** Global registry of all scoped styles for build process */
@@ -326,6 +326,7 @@ export class ScopedStyleImpl {
         occurrenceIndex,
         resolvedFilename,
       );
+      cache.registerStyleForSource(normalizedSourceFileUrl, this);
     }
 
     this.styleName = styleName;
@@ -387,14 +388,45 @@ export class ScopedStyleImpl {
   }
 
   /**
-   * Deferred validation and build. Called at request time via ensureBuilt().
-   * Checks if the source file changed, re-hashes if needed, and writes the .css file.
-   * Returns true if the filename changed.
+   * Deferred validation. Called at request time via `ensureBuilt()`. If
+   * the source file mtime has changed, re-hashes this style and eagerly
+   * revalidates every sibling handler and scoped style registered
+   * against the same source file. This guarantees that all artifacts
+   * owned by the source file are consistent before `_doEnsureBuilt`
+   * commits the source mtime, even when those siblings live in other
+   * `ClientTools` instances the current request never engages.
+   *
+   * Returns true if this style's filename changed (which feeds the
+   * bundle refresh logic in `_doEnsureBuilt`).
    */
-  revalidate(): boolean {
+  async revalidate(): Promise<boolean> {
     if (!this.sourceFileUrl) return false;
+    if (cache.isStyleProcessedThisPass(this)) return false;
+    cache.markStyleProcessedThisPass(this);
 
     const mtimeChanged = cache.checkAndTrackMtimeChange(this.sourceFileUrl);
+    const filenameChanged = this._revalidateSelf(mtimeChanged);
+
+    if (mtimeChanged) {
+      // Fan out to every other artifact registered against the same
+      // source file. The per-pass processed sets on the cache manager
+      // guarantee termination.
+      const { revalidateSourceFileSiblings } = await import(
+        "./clientFunctions.ts"
+      );
+      const { DEFAULT_HANDLER_DIR } = await import("./clientTools.ts");
+      await revalidateSourceFileSiblings(
+        this.sourceFileUrl,
+        DEFAULT_HANDLER_DIR,
+      );
+    }
+
+    return filenameChanged;
+  }
+
+  /** Inner revalidate step for just this style. */
+  private _revalidateSelf(mtimeChanged: boolean): boolean {
+    if (!this.sourceFileUrl) return false;
     if (!mtimeChanged) return false;
 
     const newFilename = `${this.styleName}_${
@@ -433,4 +465,19 @@ export class ScopedStyleImpl {
     );
     return true;
   }
+}
+
+/**
+ * Revalidate a single sibling style impl during an eager cross-artifact
+ * pass. Exported for `clientFunctions.ts` so the handler-side
+ * `revalidateSourceFileSiblings` helper can await each style sibling
+ * without repeating the impl-type cast at every call site.
+ */
+export async function revalidateScopedStyleSibling(
+  impl: unknown,
+): Promise<void> {
+  if (!impl || typeof impl !== "object") return;
+  const styleImpl = impl as ScopedStyleImpl;
+  if (cache.isStyleProcessedThisPass(styleImpl)) return;
+  await styleImpl.revalidate();
 }

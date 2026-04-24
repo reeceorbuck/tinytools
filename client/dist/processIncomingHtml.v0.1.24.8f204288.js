@@ -8,7 +8,7 @@ import {
   getNavGeneration,
   LOCAL_TEMPLATE_SOURCE_ATTR,
   setActiveRouteCachePath
-} from "./routeCache.v0.1.9.13f53340.js";
+} from "./routeCache.v0.1.24.4c2b30e3.js";
 function processIncomingHtml(fragment, scope = document, options = {}) {
   console.log("incoming fragment: ", fragment);
   const children = Array.from(fragment.children);

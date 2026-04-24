@@ -1,4 +1,4 @@
-import { processIncomingHtml } from "./processIncomingHtml.v0.1.9.8f204288.js";
+import { processIncomingHtml } from "./processIncomingHtml.v0.1.24.8f204288.js";
 function activateScripts(container) {
   const scripts = container.querySelectorAll("script");
   scripts.forEach((script) => {

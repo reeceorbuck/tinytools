@@ -312,11 +312,19 @@ function getOrderedLocalRouteTemplates() {
   const templates = Array.from(
     document.querySelectorAll("template[path]")
   );
-  const cached = templates.filter(isRuntimeCachedRouteTemplate);
-  const authored = templates.filter(
-    (template) => !isRuntimeCachedRouteTemplate(template)
-  );
-  return [...cached, ...authored];
+  const authored = [];
+  const placeholders = [];
+  const cached = [];
+  for (const template of templates) {
+    if (isRuntimeCachedRouteTemplate(template)) {
+      cached.push(template);
+    } else if (template.hasAttribute("placeholder")) {
+      placeholders.push(template);
+    } else {
+      authored.push(template);
+    }
+  }
+  return [...authored, ...cached, ...placeholders];
 }
 function applyIncomingToCachedTemplates(incomingElements) {
   if (incomingElements.length === 0) {

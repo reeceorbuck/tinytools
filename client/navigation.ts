@@ -268,7 +268,10 @@ globalThis.navigation.addEventListener(
                 e.formData ?? null,
                 cacheCurrentPath,
                 navigationMethod,
-                { allowRuntimeCache: !bypassRouteCache },
+                {
+                  allowRuntimeCache: !bypassRouteCache,
+                  bypassRouteCache,
+                },
               );
               if (block) {
                 console.log(

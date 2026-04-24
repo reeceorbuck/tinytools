@@ -1,4 +1,4 @@
-import { processIncomingHtml } from "./processIncomingHtml.v0.1.9.8f204288.js";
+import { processIncomingHtml } from "./processIncomingHtml.v0.1.24.8f204288.js";
 import {
   getCachedRouteTemplate,
   getOrderedLocalRouteTemplates,
@@ -6,7 +6,7 @@ import {
   isRuntimeCachedRouteTemplate,
   markLocalTemplateContent,
   SPA_REDIRECT_ATTR
-} from "./routeCache.v0.1.9.13f53340.js";
+} from "./routeCache.v0.1.24.4c2b30e3.js";
 function parseQueryPattern(queryPattern) {
   const trimmed = queryPattern.trim();
   if (trimmed === "" || trimmed.toLowerCase() === "none") {
@@ -63,6 +63,7 @@ function matchesQueryPattern(queryParams, parsed) {
 function processLocalSuspenseTemplates(destinationUrl, formData, currentPathname, requestMethod = formData ? "post" : "get", options = {}) {
   const method = requestMethod.toLowerCase();
   const allowRuntimeCache = options.allowRuntimeCache ?? true;
+  const bypassRouteCache = options.bypassRouteCache ?? false;
   let block = false;
   const targetPathname = destinationUrl.pathname;
   console.log(
@@ -114,7 +115,7 @@ function processLocalSuspenseTemplates(destinationUrl, formData, currentPathname
       continue;
     }
     const blockNav = templateToRender.hasAttribute("data-nav-block");
-    const cacheCurrentPath = method === "get" ? currentPathname : void 0;
+    const cacheCurrentPath = method === "get" && !bypassRouteCache ? currentPathname : void 0;
     const pathParams = execResult.pathname.groups;
     const queryParams = destinationUrl.searchParams;
     const params = {
@@ -173,7 +174,8 @@ function processLocalSuspenseTemplates(destinationUrl, formData, currentPathname
     );
     processIncomingHtml(fragment, document, {
       cacheCurrentPath,
-      activeRouteRegistrations: method === "get" && targetPathname ? [
+      bypassRouteCache,
+      activeRouteRegistrations: method === "get" && targetPathname && !bypassRouteCache ? [
         {
           pathname: targetPathname,
           redirectTo: redirectTo ?? void 0
@@ -184,7 +186,7 @@ function processLocalSuspenseTemplates(destinationUrl, formData, currentPathname
       ].filter(
         (entry) => entry !== null
       ) : void 0,
-      activeRoutePath: method === "get" ? redirectPathname || targetPathname : void 0
+      activeRoutePath: method === "get" && !bypassRouteCache ? redirectPathname || targetPathname : void 0
     });
     if (redirectTo) {
       const redirectUrl = new URL(redirectTo, destinationUrl.href);

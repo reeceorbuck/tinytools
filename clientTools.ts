@@ -299,6 +299,36 @@ class ClientToolsCacheManager {
   private sourceFileMtimeMemo = new Map<string, number | null>();
   private filesWithMtimeChange = new Set<string>();
 
+  /**
+   * Per-source registry of every `ClientFunctionImpl` constructed against
+   * the source file URL. Populated at module-load time. Used by the lazy
+   * revalidate path to eagerly rebuild every sibling handler whenever any
+   * handler in the source is observed to have changed — which guarantees
+   * that the on-disk `.js` for every handler in the source matches the
+   * current `fn.toString()` before the source mtime is committed to the
+   * cache, even when those siblings live in different `ClientTools`
+   * instances (e.g. one `import.meta.url` shared by multiple
+   * `new tiny.Handlers(...)` declarations).
+   */
+  private handlersBySource = new Map<string, Set<unknown>>();
+
+  /**
+   * Per-source registry of every `ScopedStyleImpl` constructed against
+   * the source file URL. Mirrors {@link handlersBySource} for the style
+   * side of the same eager-revalidate-on-detection contract.
+   */
+  private stylesBySource = new Map<string, Set<unknown>>();
+
+  /**
+   * Handler/style impls already revalidated in the current detection
+   * pass. Cleared by {@link beginChangeDetectionPass}. Used to short
+   * circuit recursive sibling iteration so that each artifact is
+   * processed at most once per pass regardless of which sibling started
+   * the chain.
+   */
+  private processedHandlersThisPass = new WeakSet<object>();
+  private processedStylesThisPass = new WeakSet<object>();
+
   /** Tracks instantiation order per file per name per kind (handler/style) */
   private nameOccurrences = new Map<string, number>();
 
@@ -403,6 +433,10 @@ class ClientToolsCacheManager {
     this.sourceFileMtimeMemo.clear();
     this.filesWithMtimeChange.clear();
     this.nameOccurrences.clear();
+    this.handlersBySource.clear();
+    this.stylesBySource.clear();
+    this.processedHandlersThisPass = new WeakSet();
+    this.processedStylesThisPass = new WeakSet();
     this.markDirty();
   }
 
@@ -410,6 +444,8 @@ class ClientToolsCacheManager {
   beginChangeDetectionPass(): void {
     this.sourceFileMtimeMemo.clear();
     this.filesWithMtimeChange.clear();
+    this.processedHandlersThisPass = new WeakSet();
+    this.processedStylesThisPass = new WeakSet();
   }
 
   /**
@@ -537,7 +573,15 @@ class ClientToolsCacheManager {
     }
   }
 
-  /** Check if file mtime changed and track it (only first caller updates cache) */
+  /**
+   * Check whether the source file's mtime differs from the cached mtime.
+   *
+   * This does NOT persist the new mtime. The cache mtime is only updated
+   * via {@link commitSourceMtime} once the dependent build artifact has
+   * actually been rewritten, so a crash or early exit mid-rebuild cannot
+   * leave the cache claiming the source is up to date while the generated
+   * `.js`/`.css` file on disk is still stale.
+   */
   checkAndTrackMtimeChange(sourceFileUrl: string): boolean {
     if (this.trustCache) return false;
 
@@ -551,9 +595,10 @@ class ClientToolsCacheManager {
 
     const existingEntry = this.files[sourceFileUrl];
     if (!existingEntry) {
-      // New file - create entry and mark as changed
+      // New file - create entry (with mtimeMs left at 0 until a rebuild
+      // commits the real value) and mark as changed.
       this.files[sourceFileUrl] = {
-        mtimeMs: sourceMtimeMs,
+        mtimeMs: 0,
         externalImports: [],
         handlers: {},
         styles: {},
@@ -564,16 +609,110 @@ class ClientToolsCacheManager {
     }
 
     if (existingEntry.mtimeMs !== sourceMtimeMs) {
-      // mtime changed - update cache and track
-      existingEntry.mtimeMs = sourceMtimeMs;
-      this.markDirty();
+      // mtime differs - track the change but leave the persisted mtime
+      // untouched until commitSourceMtime() is called post-rebuild.
       this.filesWithMtimeChange.add(sourceFileUrl);
       return true;
     }
 
     return false;
   }
+
+  /**
+   * Persist the current source file mtime to the cache. Call this only
+   * after every artifact dependent on the source file has been
+   * successfully rewritten (or confirmed up to date on disk) for the
+   * current source mtime.
+   */
+  commitSourceMtime(sourceFileUrl: string): void {
+    if (this.trustCache) return;
+    const entry = this.files[sourceFileUrl];
+    if (!entry) return;
+    const sourceMtimeMs = this.getSourceFileMtimeMs(sourceFileUrl);
+    if (sourceMtimeMs === null) return;
+    if (entry.mtimeMs === sourceMtimeMs) return;
+    entry.mtimeMs = sourceMtimeMs;
+    this.markDirty();
+  }
+
+  /**
+   * Commit mtimes for every source file that was detected as changed in
+   * the current detection pass and clear the pending set. Safe because
+   * `revalidateAndBuild` / `revalidate` eagerly iterate every sibling
+   * artifact for a source file as soon as a change is detected, so by
+   * the time we reach this call every on-disk artifact for each pending
+   * source is guaranteed to be fresh.
+   */
+  commitPendingSourceMtimes(): void {
+    if (this.trustCache) return;
+    for (const sourceFileUrl of this.filesWithMtimeChange) {
+      this.commitSourceMtime(sourceFileUrl);
+    }
+    this.filesWithMtimeChange.clear();
+  }
+
+  /** Register a `ClientFunctionImpl` with the source-file sibling index. */
+  registerHandlerForSource(sourceFileUrl: string, impl: object): void {
+    let set = this.handlersBySource.get(sourceFileUrl);
+    if (!set) {
+      set = new Set();
+      this.handlersBySource.set(sourceFileUrl, set);
+    }
+    set.add(impl);
+  }
+
+  /** Register a `ScopedStyleImpl` with the source-file sibling index. */
+  registerStyleForSource(sourceFileUrl: string, impl: object): void {
+    let set = this.stylesBySource.get(sourceFileUrl);
+    if (!set) {
+      set = new Set();
+      this.stylesBySource.set(sourceFileUrl, set);
+    }
+    set.add(impl);
+  }
+
+  /** Every handler impl registered against the given source file URL. */
+  getHandlersForSource(sourceFileUrl: string): ReadonlySet<unknown> {
+    return this.handlersBySource.get(sourceFileUrl) ?? EMPTY_SET;
+  }
+
+  /** Every style impl registered against the given source file URL. */
+  getStylesForSource(sourceFileUrl: string): ReadonlySet<unknown> {
+    return this.stylesBySource.get(sourceFileUrl) ?? EMPTY_SET;
+  }
+
+  /** True if the handler impl has already been revalidated this pass. */
+  isHandlerProcessedThisPass(impl: object): boolean {
+    return this.processedHandlersThisPass.has(impl);
+  }
+
+  /** Mark a handler impl as revalidated for the current pass. */
+  markHandlerProcessedThisPass(impl: object): void {
+    this.processedHandlersThisPass.add(impl);
+  }
+
+  /** True if the style impl has already been revalidated this pass. */
+  isStyleProcessedThisPass(impl: object): boolean {
+    return this.processedStylesThisPass.has(impl);
+  }
+
+  /** Mark a style impl as revalidated for the current pass. */
+  markStyleProcessedThisPass(impl: object): void {
+    this.processedStylesThisPass.add(impl);
+  }
 }
+
+const EMPTY_SET: ReadonlySet<unknown> = new Set();
+
+/**
+ * Directory (relative to the app's CWD) where handler `.js` files are
+ * written by the lazy-mode revalidate path. Matches the hardcoded path
+ * used by `ClientToolsClass._doEnsureBuilt` — kept in one place so that
+ * eager cross-artifact sibling iteration (e.g. a style detecting a source
+ * change and forcing its sibling handlers to rewrite) can use the same
+ * output directory without duplicating the string.
+ */
+export const DEFAULT_HANDLER_DIR = "./public/handlers";
 
 /** Shared cache instance for all client tools */
 export const cache = new ClientToolsCacheManager();
@@ -1152,7 +1291,7 @@ class ClientToolsClass<
   }
 
   private async _doEnsureBuilt(): Promise<void> {
-    const handlerDir = "./public/handlers";
+    const handlerDir = DEFAULT_HANDLER_DIR;
     const stylesDir = "./public/styles";
 
     cache.beginChangeDetectionPass();
@@ -1179,8 +1318,8 @@ class ClientToolsClass<
 
     // Revalidate all scoped styles (own + imported)
     let anyStyleChanged = false;
-    for (const [styleName, impl] of this._scopedStyles) {
-      const changed = impl.revalidate();
+    for (const [, impl] of this._scopedStyles) {
+      const changed = await impl.revalidate();
       if (changed) {
         anyStyleChanged = true;
       }
@@ -1188,7 +1327,7 @@ class ClientToolsClass<
 
     // Revalidate global styles too
     for (const [, impl] of this._globalStyles) {
-      const changed = impl.revalidate();
+      const changed = await impl.revalidate();
       if (changed) {
         anyStyleChanged = true;
       }
@@ -1264,6 +1403,12 @@ class ClientToolsClass<
       }
       impl.markCurrentFilenameAsClean();
     }
+
+    // Every artifact for each source file whose mtime changed has been
+    // eagerly revalidated inside `revalidateAndBuild` / `revalidate`
+    // (including siblings that live in other `ClientTools` instances),
+    // so it is now safe to persist their source mtimes.
+    cache.commitPendingSourceMtimes();
   }
 
   private async _ensureStyleBundleBuilt(

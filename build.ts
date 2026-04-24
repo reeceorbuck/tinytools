@@ -416,7 +416,7 @@ export async function buildScriptFiles(options: BuildOptions = {}) {
       await handler.revalidateAndBuild(handlerDir);
     }
     for (const style of scopedStylesRegistry.values()) {
-      style.revalidate();
+      await style.revalidate();
     }
 
     for (const tools of registeredClientTools) {
@@ -483,6 +483,12 @@ export async function buildScriptFiles(options: BuildOptions = {}) {
     await cleanupStaleFiles(handlerDir, stylesDir, allFiles, allStyleFiles);
   }
   performance.mark("buildScriptFiles:cleanupEnd");
+
+  // All handler and style artifacts for changed sources have been written,
+  // so it's now safe to persist their source mtimes.
+  if (!fresh) {
+    cache.commitPendingSourceMtimes();
+  }
 
   // --- Persist cache so subsequent prod runs can trust it ---
   cache.save();

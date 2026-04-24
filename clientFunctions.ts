@@ -146,6 +146,7 @@ export class ClientFunctionImpl<
         occurrenceIndex,
         resolvedFilename,
       );
+      cache.registerHandlerForSource(normalizedSourceFileUrl, this);
     }
     Object.defineProperty(fn, "name", { value: fnName });
     this.fnName = fnName;
@@ -229,14 +230,52 @@ export class ClientFunctionImpl<
   }
 
   /**
-   * Deferred validation and build. Called at request time via ensureBuilt().
-   * Checks if the source file changed, re-hashes if needed, and writes the .js file.
-   * Returns true if a rebuild was performed.
+   * Deferred validation and build. Called at request time via
+   * `ensureBuilt()`. If the source file's mtime has changed, re-hashes
+   * the handler (renaming the on-disk `.js` if the content hash shifted)
+   * and writes a fresh `.js`. Also eagerly revalidates every sibling
+   * handler and scoped/global style registered against the same source
+   * file — ensuring the entire file's build artifacts are consistent
+   * before the source mtime is committed to the cache, even when
+   * siblings live in different `ClientTools` instances that the current
+   * request never engages.
+   *
+   * Safe against infinite recursion: a per-pass processed set short
+   * circuits sibling calls that have already been handled in this
+   * request cycle.
+   *
+   * Returns true if this handler's `.js` file was (re)written.
    */
   async revalidateAndBuild(handlerDir: string): Promise<boolean> {
     if (!this.sourceFileUrl) return false;
+    if (cache.isHandlerProcessedThisPass(this)) return false;
+    cache.markHandlerProcessedThisPass(this);
 
     const mtimeChanged = cache.checkAndTrackMtimeChange(this.sourceFileUrl);
+    const rebuilt = await this._revalidateSelf(handlerDir, mtimeChanged);
+
+    // Eagerly revalidate every sibling artifact registered against the
+    // same source file. This guarantees the on-disk state for the whole
+    // file is consistent before `_doEnsureBuilt` commits the source
+    // mtime, even though siblings may belong to `ClientTools` instances
+    // the current request never engages directly.
+    if (mtimeChanged) {
+      await revalidateSourceFileSiblings(this.sourceFileUrl, handlerDir);
+    }
+
+    return rebuilt;
+  }
+
+  /**
+   * Inner revalidate step for just this handler — split out so the
+   * eager sibling pass in `revalidateAndBuild` can reuse it without
+   * retriggering its own sibling iteration.
+   */
+  private async _revalidateSelf(
+    handlerDir: string,
+    mtimeChanged: boolean,
+  ): Promise<boolean> {
+    if (!this.sourceFileUrl) return false;
 
     if (mtimeChanged) {
       // Re-hash and check if filename actually changed
@@ -284,11 +323,9 @@ export class ClientFunctionImpl<
       }
     }
 
-    // Build if .js file doesn't exist
     try {
       await fsStat(`${handlerDir}/${this.filename}.js`);
-      // File exists — check if we need to rebuild due to dependency changes
-      if (!this.needsRebuildDueToDependencyChange()) {
+      if (!mtimeChanged && !this.needsRebuildDueToDependencyChange()) {
         return false;
       }
     } catch {
@@ -300,5 +337,40 @@ export class ClientFunctionImpl<
     await writeFile(`${handlerDir}/${this.filename}.js`, functionCode);
     console.log(`Handler file written: ${handlerDir}/${this.filename}.js`);
     return true;
+  }
+}
+
+/**
+ * Revalidate every handler and style registered against `sourceFileUrl`
+ * that has not yet been processed in the current detection pass. Used
+ * by both `ClientFunctionImpl.revalidateAndBuild` and
+ * `ScopedStyleImpl.revalidate` to guarantee that a single mtime change
+ * on a source file fans out to every build artifact it owns, regardless
+ * of which `ClientTools` instance the current request engaged.
+ *
+ * The per-pass processed sets on the cache manager (reset by
+ * `beginChangeDetectionPass`) ensure each artifact is touched at most
+ * once per pass and that mutual recursion between handlers and styles
+ * terminates.
+ */
+export async function revalidateSourceFileSiblings(
+  sourceFileUrl: string,
+  handlerDir: string,
+): Promise<void> {
+  const siblingHandlers = cache.getHandlersForSource(sourceFileUrl);
+  for (const sibling of siblingHandlers) {
+    const impl = sibling as ClientFunctionImpl;
+    if (cache.isHandlerProcessedThisPass(impl)) continue;
+    // revalidateAndBuild itself guards against reentry, so calling it
+    // here is safe even though it in turn triggers another sibling
+    // pass (which will short-circuit via the processed sets).
+    await impl.revalidateAndBuild(handlerDir);
+  }
+
+  const { revalidateScopedStyleSibling } = await import("./scopedStyles.ts");
+  const siblingStyles = cache.getStylesForSource(sourceFileUrl);
+  for (const sibling of siblingStyles) {
+    if (cache.isStyleProcessedThisPass(sibling as object)) continue;
+    await revalidateScopedStyleSibling(sibling);
   }
 }
