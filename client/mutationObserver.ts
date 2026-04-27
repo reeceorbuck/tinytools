@@ -6,6 +6,7 @@
  */
 
 import type { HandlerProxy } from "./eventHandlers.ts";
+import { navigation } from "./navigationApi.ts";
 
 interface SymbolIndexedElement extends Element {
   [key: symbol]: AbortController | undefined;
@@ -16,9 +17,9 @@ const GLOBAL_EVENT_NAMES_SYM = Symbol.for("__globalEventNames");
 
 const GLOBAL_EVENT_TARGETS: Record<string, EventTarget | undefined> = {
   // Navigation API events
-  navigatesuccess: globalThis.navigation,
-  navigateerror: globalThis.navigation,
-  currententrychange: globalThis.navigation,
+  navigatesuccess: navigation,
+  navigateerror: navigation,
+  currententrychange: navigation,
   // Window events
   hashchange: globalThis,
   resize: globalThis,

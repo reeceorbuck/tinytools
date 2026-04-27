@@ -1,10 +1,11 @@
+import { navigation } from "./navigationApi.v0.1.26.2ec47448.js";
 const EVENT_ABORT_CONTROLLER_SYM = /* @__PURE__ */ Symbol.for("__event_AbortController");
 const GLOBAL_EVENT_NAMES_SYM = /* @__PURE__ */ Symbol.for("__globalEventNames");
 const GLOBAL_EVENT_TARGETS = {
   // Navigation API events
-  navigatesuccess: globalThis.navigation,
-  navigateerror: globalThis.navigation,
-  currententrychange: globalThis.navigation,
+  navigatesuccess: navigation,
+  navigateerror: navigation,
+  currententrychange: navigation,
   // Window events
   hashchange: globalThis,
   resize: globalThis,

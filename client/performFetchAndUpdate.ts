@@ -6,6 +6,7 @@
 
 import { processIncomingData } from "./processIncomingData.ts";
 import { getActiveRouteCachePath } from "./routeCache.ts";
+import { navigation } from "./navigationApi.ts";
 
 /** Tracks in-flight GET requests per pathname so rapid-fire calls abort stale ones. */
 const inflightGetRequests = new Map<string, AbortController>();
@@ -75,7 +76,7 @@ export async function performFetchAndUpdate(
     canonicalRoutePath = redirectUrl.pathname + redirectUrl.search +
       redirectUrl.hash;
     activeRoutePathname = redirectUrl.pathname;
-    globalThis.navigation.navigate(
+    navigation.navigate(
       spaRedirect,
       {
         history: "replace",
@@ -90,7 +91,7 @@ export async function performFetchAndUpdate(
   if (response.redirected) {
     const redirectedUrl = new URL(response.url);
     console.log("Redirected to: ", redirectedUrl);
-    globalThis.navigation.navigate(
+    navigation.navigate(
       redirectedUrl.href,
       {
         history: "replace",

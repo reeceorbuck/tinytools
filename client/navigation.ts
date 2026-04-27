@@ -10,6 +10,23 @@ import {
   getActiveRouteCachePath,
   incrementNavGeneration,
 } from "./routeCache.ts";
+import type { NavigateEvent } from "../globals.d.ts";
+import { navigation } from "./navigationApi.ts";
+
+interface NavigationClientInfo {
+  blockIntercept?: boolean;
+  onlyUpdateUrl?: boolean;
+}
+
+function getNavigationClientInfo(
+  e: NavigateEvent,
+): NavigationClientInfo | null {
+  if (!e.info || typeof e.info !== "object") {
+    return null;
+  }
+
+  return e.info as NavigationClientInfo;
+}
 
 function normalizePathname(pathname: string) {
   if (pathname === "/") {
@@ -22,6 +39,15 @@ function normalizePathname(pathname: string) {
 function getNavigationMethod(e: NavigateEvent): "get" | "post" {
   if (e.sourceElement instanceof HTMLFormElement) {
     return (e.sourceElement.method || "get").toLowerCase() === "post"
+      ? "post"
+      : "get";
+  }
+
+  if (
+    e.sourceElement instanceof HTMLButtonElement ||
+    e.sourceElement instanceof HTMLInputElement
+  ) {
+    return (e.sourceElement.formMethod || "get").toLowerCase() === "post"
       ? "post"
       : "get";
   }
@@ -74,13 +100,15 @@ function shouldBypassRouteCache(e: NavigateEvent) {
   return hasTruthyNoCacheAttr(sourceForm);
 }
 
-globalThis.navigation.addEventListener(
+navigation.addEventListener(
   "navigate",
   (e) => {
     try {
+      const navigationInfo = getNavigationClientInfo(e);
       const fromUrl = new URL(globalThis.location.href);
       const toUrl = new URL(e.destination.url);
       const fetchUrl = new URL(toUrl);
+      let displayUrl = new URL(toUrl);
 
       // If info has blockIntercept, don't intercept
       // If different origin, dont intercept, just let it happen
@@ -89,7 +117,7 @@ globalThis.navigation.addEventListener(
         (e.sourceElement &&
           e.sourceElement.hasAttribute("data-no-intercept")) ||
         toUrl.origin !== fromUrl.origin ||
-        (e.info && e.info.blockIntercept)
+        navigationInfo?.blockIntercept
       ) {
         console.log(
           "Navigation no intercept",
@@ -194,8 +222,8 @@ globalThis.navigation.addEventListener(
               });
               if (cleaned) {
                 console.log("Cleaned URL: ", cleanUrl.href);
-                controller.redirect(cleanUrl.href);
-                toUrl.pathname = cleanUrl.pathname;
+                displayUrl = cleanUrl;
+                controller.redirect(displayUrl.href);
               }
             } catch (err) {
               console.error("Error cleaning URL: ", err);
@@ -222,16 +250,16 @@ globalThis.navigation.addEventListener(
                 console.log(
                   "data-nav-redirect is true, keeping current URL in address bar",
                 );
-                controller.redirect(fromUrl.href);
+                displayUrl = new URL(fromUrl);
+                controller.redirect(displayUrl.href);
               } else if (redirectAttr) {
-                const displayUrl = new URL(
+                displayUrl = new URL(
                   redirectAttr,
                   globalThis.location.href,
                 );
                 // displayUrl.searchParams.delete("date_input"); <-- example of deleting a query param after use
                 console.log("redirecting to custom URL: ", displayUrl.href);
                 controller.redirect(displayUrl.href);
-                toUrl.pathname = displayUrl.pathname;
               } else {
                 console.log(
                   "No data-nav-redirect attribute, proceeding with normal url update to: ",
@@ -242,7 +270,7 @@ globalThis.navigation.addEventListener(
               console.error("Error in pre-commit handler: ", err);
             }
           }
-          setVariablesFromUrl(fromUrl, toUrl);
+          setVariablesFromUrl(fromUrl, displayUrl);
         },
 
         async handler() {
@@ -253,7 +281,7 @@ globalThis.navigation.addEventListener(
             const cacheCurrentPath = navigationMethod === "get"
               ? getActiveRouteCachePath(fromUrl.pathname)
               : undefined;
-            if (e.info?.onlyUpdateUrl) {
+            if (navigationInfo?.onlyUpdateUrl) {
               console.log(
                 "Navigation event onlyUpdateUrl, no fetch performed.",
               );
@@ -297,7 +325,7 @@ globalThis.navigation.addEventListener(
             return await performFetchAndUpdate(
               fetchUrl,
               fromUrl,
-              toUrl,
+              displayUrl,
               e.formData,
               navigationMethod,
               { bypassRouteCache, navGeneration },

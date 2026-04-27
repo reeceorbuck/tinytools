@@ -13,6 +13,7 @@ import {
   markLocalTemplateContent,
   SPA_REDIRECT_ATTR,
 } from "./routeCache.ts";
+import { navigation } from "./navigationApi.ts";
 
 type QueryCondition = {
   key: string;
@@ -303,7 +304,7 @@ export function processLocalSuspenseTemplates(
           "Applying cached route redirect from runtime template:",
           redirectPathWithSearch,
         );
-        globalThis.navigation.navigate(redirectPathWithSearch, {
+        navigation.navigate(redirectPathWithSearch, {
           history: "replace",
           info: {
             onlyUpdateUrl: true,

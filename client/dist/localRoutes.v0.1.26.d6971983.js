@@ -7,6 +7,7 @@ import {
   markLocalTemplateContent,
   SPA_REDIRECT_ATTR
 } from "./routeCache.v0.1.24.4c2b30e3.js";
+import { navigation } from "./navigationApi.v0.1.26.2ec47448.js";
 function parseQueryPattern(queryPattern) {
   const trimmed = queryPattern.trim();
   if (trimmed === "" || trimmed.toLowerCase() === "none") {
@@ -197,7 +198,7 @@ function processLocalSuspenseTemplates(destinationUrl, formData, currentPathname
           "Applying cached route redirect from runtime template:",
           redirectPathWithSearch
         );
-        globalThis.navigation.navigate(redirectPathWithSearch, {
+        navigation.navigate(redirectPathWithSearch, {
           history: "replace",
           info: {
             onlyUpdateUrl: true

@@ -59,6 +59,15 @@ const childHandlers = new Handlers(import.meta.url, {
   },
 });
 
+const formHandlers = new Handlers(import.meta.url, {
+  submitOnly(this: HTMLFormElement, e: SubmitEvent) {
+    console.log("Submit only handler called", e);
+  },
+  genericFormEvent(this: HTMLFormElement, e: Event) {
+    console.log("Generic form event handler called", e);
+  },
+});
+
 const childStyles = new Styles(import.meta.url, {
   childStyle,
 });
@@ -261,6 +270,33 @@ Deno.test("JSX types - onClick requires ActivatedClientFunction", () => {
     const _element = <div onClick={fn.testHandler}>content</div> as JSX.Element;
 
     assertExists(_element);
+    return c.text("OK");
+  });
+
+  assertExists(app);
+});
+
+Deno.test("JSX types - onReset rejects SubmitEvent-only handlers", () => {
+  const app = new Hono()
+    .use(...tiny.middleware.core())
+    .use(tiny.middleware.sharedImports(formHandlers));
+
+  app.get("/test", (c) => {
+    const { fn } = c.var.tools;
+    type FormOnSubmit = NonNullable<JSX.IntrinsicElements["form"]["onSubmit"]>;
+    type FormOnReset = NonNullable<JSX.IntrinsicElements["form"]["onReset"]>;
+
+    const _validSubmit: FormOnSubmit = fn.submitOnly;
+    const _validReset: FormOnReset = fn.genericFormEvent;
+    const _validSubmitWithGenericEvent: FormOnSubmit = fn.genericFormEvent;
+
+    // @ts-expect-error SubmitEvent-only handlers must not be assignable to onReset
+    const _invalidReset: FormOnReset = fn.submitOnly;
+
+    assertExists(_validSubmit);
+    assertExists(_validReset);
+    assertExists(_validSubmitWithGenericEvent);
+    assertExists(_invalidReset);
     return c.text("OK");
   });
 

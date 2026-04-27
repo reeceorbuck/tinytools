@@ -8,42 +8,6 @@
  * @module
  */
 
-// Navigation API types (local definitions for JSR compatibility)
-interface NavigateEvent extends Event {
-  readonly navigationType: string;
-  readonly destination: NavigationDestination;
-  readonly canIntercept: boolean;
-  readonly userInitiated: boolean;
-  readonly hashChange: boolean;
-  readonly signal: AbortSignal;
-  readonly formData: FormData | null;
-  readonly downloadRequest: string | null;
-  readonly info: unknown;
-  readonly hasUAVisualTransition: boolean;
-  readonly sourceElement: Element | null;
-  intercept(options?: { handler?: () => Promise<void> }): void;
-  scroll(): void;
-}
-
-interface NavigationDestination {
-  readonly url: string;
-  readonly key: string | null;
-  readonly id: string | null;
-  readonly index: number;
-  readonly sameDocument: boolean;
-  getState(): unknown;
-}
-
-interface NavigationCurrentEntryChangeEvent extends Event {
-  readonly navigationType?: string;
-  readonly from: { url: string | null; key: string; id: string };
-}
-
-interface CommandEvent extends Event {
-  source: HTMLButtonElement;
-  command: string;
-}
-
 export {
   Fragment,
   jsx,
@@ -54,6 +18,11 @@ export {
 } from "hono/jsx/jsx-runtime";
 import type { JSX as HonoJSX } from "hono/jsx/jsx-runtime";
 import type { ClientTools } from "./clientTools.ts";
+import type {
+  CommandEvent,
+  NavigateEvent,
+  NavigationCurrentEntryChangeEvent,
+} from "./globals.d.ts";
 
 /**
  * Brand symbol for ClientFunction types.
@@ -208,13 +177,16 @@ export type IsClientFunction<T> = T extends ClientFunction<infer _F> ? true
  * a handler accepting `Event` is valid for any specific event (e.g., `onSubmit`),
  * while a handler accepting `MouseEvent` would be rejected for `onSubmit`.
  *
+ * The `this` parameter remains broad so element-specific handlers can still be
+ * passed through JSX without forcing every intrinsic prop to model its exact
+ * receiver element type.
+ *
  * If you see a type error, you likely need to:
  * 1. Use ClientTools constructor with functions option instead of raw functions
  * 2. Access handlers from c.var.tools.fn (not factory)
  */
 type ClientEventHandler<E extends Event> =
-  // deno-lint-ignore no-explicit-any
-  | ActivatedClientFunction<(this: any, event: E) => any>
+  | ActivatedClientFunction<(this: any, event: E) => void>
   | undefined;
 
 type ClientEventHandlerWithThis<E extends Event, T = HTMLElement> =

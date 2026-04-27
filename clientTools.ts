@@ -329,6 +329,18 @@ class ClientToolsCacheManager {
   private processedHandlersThisPass = new WeakSet<object>();
   private processedStylesThisPass = new WeakSet<object>();
 
+  /**
+   * Refcount of in-flight change-detection passes. Concurrent callers
+   * (e.g. `Promise.all` over multiple ClientTools' `ensureBuilt()`)
+   * share a single logical pass: only the first call clears per-pass
+   * state, and only the last call committing the pass persists source
+   * mtimes. Without this, parallel passes would wipe each other's
+   * `filesWithMtimeChange` + processed sets mid-fanout, causing sibling
+   * handlers to observe `mtimeChanged=false` and skip filename
+   * recomputation — leaving stale `.js` files on disk.
+   */
+  private passDepth = 0;
+
   /** Tracks instantiation order per file per name per kind (handler/style) */
   private nameOccurrences = new Map<string, number>();
 
@@ -437,15 +449,25 @@ class ClientToolsCacheManager {
     this.stylesBySource.clear();
     this.processedHandlersThisPass = new WeakSet();
     this.processedStylesThisPass = new WeakSet();
+    this.passDepth = 0;
     this.markDirty();
   }
 
-  /** Start a fresh mtime-tracking pass for a build/request cycle. */
+  /**
+   * Begin a change-detection pass. Refcounted: nested/concurrent callers
+   * participate in the same logical pass so that per-pass state
+   * (`filesWithMtimeChange`, processed sets, mtime memo) is cleared
+   * exactly once on entry and preserved for every participant until the
+   * matching {@link commitPendingSourceMtimes} drops the count to zero.
+   */
   beginChangeDetectionPass(): void {
-    this.sourceFileMtimeMemo.clear();
-    this.filesWithMtimeChange.clear();
-    this.processedHandlersThisPass = new WeakSet();
-    this.processedStylesThisPass = new WeakSet();
+    if (this.passDepth === 0) {
+      this.sourceFileMtimeMemo.clear();
+      this.filesWithMtimeChange.clear();
+      this.processedHandlersThisPass = new WeakSet();
+      this.processedStylesThisPass = new WeakSet();
+    }
+    this.passDepth++;
   }
 
   /**
@@ -642,9 +664,18 @@ class ClientToolsCacheManager {
    * artifact for a source file as soon as a change is detected, so by
    * the time we reach this call every on-disk artifact for each pending
    * source is guaranteed to be fresh.
+   *
+   * Refcounted counterpart to {@link beginChangeDetectionPass}: only the
+   * final call of a concurrent batch actually persists mtimes so that
+   * siblings still running in parallel cannot see a committed mtime
+   * mid-pass and incorrectly skip rebuilds.
    */
   commitPendingSourceMtimes(): void {
     if (this.trustCache) return;
+    if (this.passDepth > 0) {
+      this.passDepth--;
+      if (this.passDepth > 0) return;
+    }
     for (const sourceFileUrl of this.filesWithMtimeChange) {
       this.commitSourceMtime(sourceFileUrl);
     }

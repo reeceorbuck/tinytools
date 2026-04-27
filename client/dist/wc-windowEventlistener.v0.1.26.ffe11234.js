@@ -1,3 +1,4 @@
+import { navigation } from "./navigationApi.v0.1.26.2ec47448.js";
 const windowEventMap = {
   onload: { target: globalThis, eventName: "load" },
   onresize: { target: globalThis, eventName: "resize" },
@@ -18,17 +19,17 @@ const windowEventMap = {
   onblur: { target: globalThis, eventName: "blur" },
   onerror: { target: globalThis, eventName: "error" },
   // Navigation API events
-  onnavigate: { target: globalThis.navigation, eventName: "navigate" },
+  onnavigate: { target: navigation, eventName: "navigate" },
   onnavigatesuccess: {
-    target: globalThis.navigation,
+    target: navigation,
     eventName: "navigatesuccess"
   },
   onnavigateerror: {
-    target: globalThis.navigation,
+    target: navigation,
     eventName: "navigateerror"
   },
   oncurrententrychange: {
-    target: globalThis.navigation,
+    target: navigation,
     eventName: "currententrychange"
   }
 };

@@ -7,6 +7,7 @@
 /// <reference lib="dom" />
 
 import type { HandlerProxy } from "./eventHandlers.ts";
+import { navigation } from "./navigationApi.ts";
 
 /**
  * Window event attribute mappings (all lowercase keys).
@@ -35,17 +36,17 @@ const windowEventMap: Record<
   onblur: { target: globalThis, eventName: "blur" },
   onerror: { target: globalThis, eventName: "error" },
   // Navigation API events
-  onnavigate: { target: globalThis.navigation, eventName: "navigate" },
+  onnavigate: { target: navigation, eventName: "navigate" },
   onnavigatesuccess: {
-    target: globalThis.navigation,
+    target: navigation,
     eventName: "navigatesuccess",
   },
   onnavigateerror: {
-    target: globalThis.navigation,
+    target: navigation,
     eventName: "navigateerror",
   },
   oncurrententrychange: {
-    target: globalThis.navigation,
+    target: navigation,
     eventName: "currententrychange",
   },
 };

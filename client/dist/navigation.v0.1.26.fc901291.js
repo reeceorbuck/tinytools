@@ -1,9 +1,16 @@
-import { processLocalSuspenseTemplates } from "./localRoutes.v0.1.24.6901d80f.js";
-import performFetchAndUpdate from "./performFetchAndUpdate.v0.1.9.5595411c.js";
+import { processLocalSuspenseTemplates } from "./localRoutes.v0.1.26.d6971983.js";
+import performFetchAndUpdate from "./performFetchAndUpdate.v0.1.26.cd6b0ef3.js";
 import {
   getActiveRouteCachePath,
   incrementNavGeneration
 } from "./routeCache.v0.1.24.4c2b30e3.js";
+import { navigation } from "./navigationApi.v0.1.26.2ec47448.js";
+function getNavigationClientInfo(e) {
+  if (!e.info || typeof e.info !== "object") {
+    return null;
+  }
+  return e.info;
+}
 function normalizePathname(pathname) {
   if (pathname === "/") {
     return pathname;
@@ -13,6 +20,9 @@ function normalizePathname(pathname) {
 function getNavigationMethod(e) {
   if (e.sourceElement instanceof HTMLFormElement) {
     return (e.sourceElement.method || "get").toLowerCase() === "post" ? "post" : "get";
+  }
+  if (e.sourceElement instanceof HTMLButtonElement || e.sourceElement instanceof HTMLInputElement) {
+    return (e.sourceElement.formMethod || "get").toLowerCase() === "post" ? "post" : "get";
   }
   if (e.sourceElement && "form" in e.sourceElement) {
     const form = e.sourceElement.form;
@@ -48,14 +58,16 @@ function shouldBypassRouteCache(e) {
   const sourceForm = getNavigationSourceForm(e.sourceElement);
   return hasTruthyNoCacheAttr(sourceForm);
 }
-globalThis.navigation.addEventListener(
+navigation.addEventListener(
   "navigate",
   (e) => {
     try {
+      const navigationInfo = getNavigationClientInfo(e);
       const fromUrl = new URL(globalThis.location.href);
       const toUrl = new URL(e.destination.url);
       const fetchUrl = new URL(toUrl);
-      if (e.sourceElement && e.sourceElement.hasAttribute("data-no-intercept") || toUrl.origin !== fromUrl.origin || e.info && e.info.blockIntercept) {
+      let displayUrl = new URL(toUrl);
+      if (e.sourceElement && e.sourceElement.hasAttribute("data-no-intercept") || toUrl.origin !== fromUrl.origin || navigationInfo?.blockIntercept) {
         console.log(
           "Navigation no intercept"
         );
@@ -104,8 +116,8 @@ globalThis.navigation.addEventListener(
               });
               if (cleaned) {
                 console.log("Cleaned URL: ", cleanUrl.href);
-                controller.redirect(cleanUrl.href);
-                toUrl.pathname = cleanUrl.pathname;
+                displayUrl = cleanUrl;
+                controller.redirect(displayUrl.href);
               }
             } catch (err) {
               console.error("Error cleaning URL: ", err);
@@ -125,15 +137,15 @@ globalThis.navigation.addEventListener(
                 console.log(
                   "data-nav-redirect is true, keeping current URL in address bar"
                 );
-                controller.redirect(fromUrl.href);
+                displayUrl = new URL(fromUrl);
+                controller.redirect(displayUrl.href);
               } else if (redirectAttr) {
-                const displayUrl = new URL(
+                displayUrl = new URL(
                   redirectAttr,
                   globalThis.location.href
                 );
                 console.log("redirecting to custom URL: ", displayUrl.href);
                 controller.redirect(displayUrl.href);
-                toUrl.pathname = displayUrl.pathname;
               } else {
                 console.log(
                   "No data-nav-redirect attribute, proceeding with normal url update to: ",
@@ -144,7 +156,7 @@ globalThis.navigation.addEventListener(
               console.error("Error in pre-commit handler: ", err);
             }
           }
-          setVariablesFromUrl(fromUrl, toUrl);
+          setVariablesFromUrl(fromUrl, displayUrl);
         },
         async handler() {
           try {
@@ -152,7 +164,7 @@ globalThis.navigation.addEventListener(
             const navigationMethod = getNavigationMethod(e);
             const localRouteUrl = fetchUrl;
             const cacheCurrentPath = navigationMethod === "get" ? getActiveRouteCachePath(fromUrl.pathname) : void 0;
-            if (e.info?.onlyUpdateUrl) {
+            if (navigationInfo?.onlyUpdateUrl) {
               console.log(
                 "Navigation event onlyUpdateUrl, no fetch performed."
               );
@@ -191,7 +203,7 @@ globalThis.navigation.addEventListener(
             return await performFetchAndUpdate(
               fetchUrl,
               fromUrl,
-              toUrl,
+              displayUrl,
               e.formData,
               navigationMethod,
               { bypassRouteCache, navGeneration }
