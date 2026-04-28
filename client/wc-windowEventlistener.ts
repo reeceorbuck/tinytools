@@ -7,7 +7,11 @@
 /// <reference lib="dom" />
 
 import type { HandlerProxy } from "./eventHandlers.ts";
-import { navigation } from "./navigationApi.ts";
+
+/** Local typed reference to `globalThis.navigation` (Navigation API).
+ * Inlined to avoid importing from another module at runtime. */
+const navigation = (globalThis as unknown as { navigation: EventTarget })
+  .navigation;
 
 /**
  * Window event attribute mappings (all lowercase keys).

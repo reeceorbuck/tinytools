@@ -1,4 +1,4 @@
-import { navigation } from "./navigationApi.v0.1.26.2ec47448.js";
+const navigation = globalThis.navigation;
 const windowEventMap = {
   onload: { target: globalThis, eventName: "load" },
   onresize: { target: globalThis, eventName: "resize" },

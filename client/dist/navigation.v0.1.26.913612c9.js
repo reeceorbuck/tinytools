@@ -22,7 +22,15 @@ function getNavigationMethod(e) {
     return (e.sourceElement.method || "get").toLowerCase() === "post" ? "post" : "get";
   }
   if (e.sourceElement instanceof HTMLButtonElement || e.sourceElement instanceof HTMLInputElement) {
-    return (e.sourceElement.formMethod || "get").toLowerCase() === "post" ? "post" : "get";
+    const explicit = e.sourceElement.getAttribute("formmethod");
+    if (explicit) {
+      return explicit.toLowerCase() === "post" ? "post" : "get";
+    }
+    const form = e.sourceElement.form;
+    if (form) {
+      return (form.method || "get").toLowerCase() === "post" ? "post" : "get";
+    }
+    return "get";
   }
   if (e.sourceElement && "form" in e.sourceElement) {
     const form = e.sourceElement.form;

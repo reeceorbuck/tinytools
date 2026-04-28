@@ -47,9 +47,19 @@ function getNavigationMethod(e: NavigateEvent): "get" | "post" {
     e.sourceElement instanceof HTMLButtonElement ||
     e.sourceElement instanceof HTMLInputElement
   ) {
-    return (e.sourceElement.formMethod || "get").toLowerCase() === "post"
-      ? "post"
-      : "get";
+    // Prefer an explicitly set formmethod; otherwise fall back to the
+    // owning form's method. button.formMethod returns "" when the
+    // formmethod content attribute is missing/invalid, so we must check
+    // the attribute directly rather than the IDL getter alone.
+    const explicit = e.sourceElement.getAttribute("formmethod");
+    if (explicit) {
+      return explicit.toLowerCase() === "post" ? "post" : "get";
+    }
+    const form = e.sourceElement.form;
+    if (form) {
+      return (form.method || "get").toLowerCase() === "post" ? "post" : "get";
+    }
+    return "get";
   }
 
   if (e.sourceElement && "form" in e.sourceElement) {
