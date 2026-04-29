@@ -85,9 +85,49 @@ export class ClientFunctionImpl<
 
   private _computeHashInput(): string {
     const base = this.fn.toString() + "::" + (this.sourceFileUrl ?? "");
-    return this.importsFingerprint
-      ? `${base}::imports[${this.importsFingerprint}]`
-      : base;
+    const fingerprint = this._currentImportsFingerprint();
+    return fingerprint ? `${base}::imports[${fingerprint}]` : base;
+  }
+
+  /**
+   * Build the imports fingerprint from the current filenames of any
+   * cross-file handlers this source file imports. Falls back to the
+   * static `importsFingerprint` set at construction time when no
+   * external imports have been registered yet (e.g. during the very
+   * first build before `import()` has run for this source). Including
+   * imported filenames in the fingerprint makes this handler's own hash
+   * (and therefore filename) change whenever any handler it imports is
+   * rebuilt with a new content hash, which busts browser cache for
+   * stale consumer bundles that referenced the old import filename.
+   */
+  private _currentImportsFingerprint(): string {
+    if (this.sourceFileUrl) {
+      const fileEntry = cache.files[this.sourceFileUrl];
+      if (fileEntry && fileEntry.externalImports.length > 0) {
+        const parts: string[] = [];
+        for (const externalKey of fileEntry.externalImports) {
+          const sep = externalKey.indexOf("::");
+          if (sep === -1) continue;
+          const importedSourceFileUrl = externalKey.slice(0, sep);
+          const importedFnName = externalKey.slice(sep + 2);
+          const importedHandlers = cache.getHandlersForSource(
+            importedSourceFileUrl,
+          );
+          for (const handler of importedHandlers) {
+            const impl = handler as ClientFunctionImpl;
+            if (impl.fnName === importedFnName) {
+              parts.push(`${importedFnName}=${impl.filename}`);
+              break;
+            }
+          }
+        }
+        if (parts.length > 0) {
+          parts.sort();
+          return parts.join(",");
+        }
+      }
+    }
+    return this.importsFingerprint;
   }
 
   constructor(
@@ -173,8 +213,19 @@ export class ClientFunctionImpl<
     const registry = getImportRegistry(targetKey);
     registry.set(this.fnName, this.filename);
 
-    const fileEntry = cache.files[targetKey];
-    if (fileEntry && this.sourceFileUrl) {
+    if (this.sourceFileUrl) {
+      // Ensure the consumer's cache entry exists. `_processImport` calls
+      // this method during `super()` BEFORE the consumer's own
+      // `_processFunctions` runs (which is what otherwise creates the
+      // entry), so without this initialization the externalImports push
+      // below is silently dropped on first build.
+      cache.files[targetKey] ??= {
+        mtimeMs: 0,
+        externalImports: [],
+        handlers: {},
+        styles: {},
+      };
+      const fileEntry = cache.files[targetKey];
       const importKey = handlerKey(this.sourceFileUrl, this.fnName);
       if (!fileEntry.externalImports.includes(importKey)) {
         fileEntry.externalImports.push(importKey);
@@ -251,6 +302,14 @@ export class ClientFunctionImpl<
     if (cache.isHandlerProcessedThisPass(this)) return false;
     cache.markHandlerProcessedThisPass(this);
 
+    // Revalidate any handlers imported from other source files first, so
+    // that filename changes in those imports are recorded in
+    // `changedHandlerKeys` before this handler decides whether it needs
+    // a rebuild. Without this, editing only the imported file (e.g.
+    // helpers.tsx) without touching the consumer file would leave the
+    // consumer pointing at a stale imported handler filename.
+    await revalidateExternalImports(this.sourceFileUrl, handlerDir);
+
     const mtimeChanged = cache.checkAndTrackMtimeChange(this.sourceFileUrl);
     const rebuilt = await this._revalidateSelf(handlerDir, mtimeChanged);
 
@@ -277,7 +336,15 @@ export class ClientFunctionImpl<
   ): Promise<boolean> {
     if (!this.sourceFileUrl) return false;
 
-    if (mtimeChanged) {
+    // Even when this file's own mtime is unchanged, an imported handler's
+    // filename may have changed this pass — in which case our hash input
+    // (which now includes imported filenames) has shifted and we need to
+    // rename ourselves so consumers/browsers don't keep using a stale
+    // cached bundle.
+    const depsChanged = !mtimeChanged &&
+      this.needsRebuildDueToDependencyChange();
+
+    if (mtimeChanged || depsChanged) {
       // Re-hash and check if filename actually changed
       const str = this._computeHashInput();
       const newFilename = `${this.fnName}_${generateHandlerHash(str)}`;
@@ -311,7 +378,7 @@ export class ClientFunctionImpl<
 
         // Remove the old handler file from disk
         await rm(`${handlerDir}/${oldFilename}.js`).catch(() => {});
-      } else {
+      } else if (mtimeChanged) {
         // Filename unchanged, but still ensure the cache entry exists
         // (it may have been cleared by resetHashDependentState)
         cache.setCachedHandler(
@@ -325,7 +392,7 @@ export class ClientFunctionImpl<
 
     try {
       await fsStat(`${handlerDir}/${this.filename}.js`);
-      if (!mtimeChanged && !this.needsRebuildDueToDependencyChange()) {
+      if (!mtimeChanged && !depsChanged) {
         return false;
       }
     } catch {
@@ -372,5 +439,45 @@ export async function revalidateSourceFileSiblings(
   for (const sibling of siblingStyles) {
     if (cache.isStyleProcessedThisPass(sibling as object)) continue;
     await revalidateScopedStyleSibling(sibling);
+  }
+}
+
+/**
+ * Revalidate every external (cross-file) handler registered as an
+ * import on `sourceFileUrl`. Used by `ClientFunctionImpl.revalidateAndBuild`
+ * so that editing only an imported source file (whose own handlers are
+ * never directly engaged by the current request) still propagates a
+ * filename hash change back to the consuming handler.
+ */
+async function revalidateExternalImports(
+  sourceFileUrl: string,
+  handlerDir: string,
+): Promise<void> {
+  const fileEntry = cache.files[sourceFileUrl];
+  if (!fileEntry || fileEntry.externalImports.length === 0) return;
+
+  const consumerRegistry = getImportRegistry(sourceFileUrl);
+
+  for (const externalKey of fileEntry.externalImports) {
+    const sep = externalKey.indexOf("::");
+    if (sep === -1) continue;
+    const importedSourceFileUrl = externalKey.slice(0, sep);
+    const importedFnName = externalKey.slice(sep + 2);
+
+    const importedHandlers = cache.getHandlersForSource(importedSourceFileUrl);
+    for (const handler of importedHandlers) {
+      const impl = handler as ClientFunctionImpl;
+      if (impl.fnName !== importedFnName) continue;
+      if (!cache.isHandlerProcessedThisPass(impl)) {
+        await impl.revalidateAndBuild(handlerDir);
+      }
+      // Always sync the consumer's import registry to the imported
+      // handler's current filename. `import()` set this entry once at
+      // construction time, but the imported handler's filename can
+      // change later when its source file is edited — without this
+      // update, the consumer would keep emitting the stale filename
+      // even after rebuilding.
+      consumerRegistry.set(impl.fnName, impl.filename);
+    }
   }
 }

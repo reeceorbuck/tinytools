@@ -36,7 +36,13 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { mkdir, rm, stat as fsStat, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  readdir,
+  rm,
+  stat as fsStat,
+  writeFile,
+} from "node:fs/promises";
 
 // ============================================================================
 // Cache Management (combined for both functions and styles)
@@ -1134,6 +1140,8 @@ class ClientToolsClass<
   private _ownStyleNames = new Set<string>();
   /** Previous bundle filename derived from cached constituent style hashes. */
   private _staleOwnBundleFilename?: string;
+  /** Whether the on-disk reconciliation prune has run yet for this instance. */
+  private _stalePruneDone = false;
   /** Tracks which imported ClientTools instance owns each imported style name */
   // deno-lint-ignore no-explicit-any
   private _importedStyleOwners = new Map<
@@ -1410,6 +1418,11 @@ class ClientToolsClass<
           this._staleOwnBundleFilename = undefined;
         }
 
+        if (bundleFilename && !this._stalePruneDone) {
+          await this._pruneStaleOwnBundleFiles(stylesDir, bundleFilename);
+          this._stalePruneDone = true;
+        }
+
         for (const [, style] of ownStyles) {
           style.markCurrentFilenameAsClean();
         }
@@ -1467,6 +1480,43 @@ class ClientToolsClass<
     await writeFile(filePath, cssContent);
     console.log(
       `Style bundle written: ${filePath} (${styles.length} styles)`,
+    );
+  }
+
+  /**
+   * Reconcile the styles directory against this instance's current bundle
+   * filename. Deletes any `${baseName}_*.css` files that don't match the
+   * current bundle. Catches stale bundles left behind by interrupted dev
+   * runs, hash-config changes, or any earlier edit whose cleanup did not
+   * complete. Runs once per instance per process.
+   */
+  private async _pruneStaleOwnBundleFiles(
+    stylesDir: string,
+    currentBundleFilename: string,
+  ): Promise<void> {
+    if (this._ownStyleNames.size === 0) return;
+    const urlPath = this.sourceFileUrl.replace(/\\/g, "/");
+    const baseName = urlPath.split("/").pop()?.replace(/\.[^.]+$/, "") ||
+      "styles";
+    const prefix = `${baseName}_`;
+    let entries: string[];
+    try {
+      entries = await readdir(stylesDir);
+    } catch {
+      return;
+    }
+    const currentFile = `${currentBundleFilename}.css`;
+    await Promise.all(
+      entries.map(async (entry) => {
+        if (!entry.startsWith(prefix) || !entry.endsWith(".css")) return;
+        if (entry === currentFile) return;
+        // Skip if another registered bundle owns this filename (e.g. an
+        // imported instance whose source happens to share the same baseName).
+        const withoutExt = entry.slice(0, -".css".length);
+        if (styleBundleRegistry.has(withoutExt)) return;
+        await rm(`${stylesDir}/${entry}`).catch(() => {});
+        console.log(`Pruned stale style bundle: ${stylesDir}/${entry}`);
+      }),
     );
   }
 
