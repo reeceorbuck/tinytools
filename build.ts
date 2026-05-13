@@ -87,19 +87,41 @@ export async function buildHandlerCode(
 ): Promise<string> {
   console.log("Building code for handler: ", fnName);
 
+  // Convert function to string up front so we can scope emitted import
+  // lines to the symbols this handler actually references. Emitting an
+  // import for every entry in the source file's import registry would
+  // otherwise (a) make the emitted file content depend on the
+  // filenames of unrelated siblings, and (b) create an unstable
+  // feedback loop where every sibling's hash depends on every other
+  // sibling's hash, never converging. Filtering here matches what
+  // `ClientFunctionImpl._currentImportsFingerprint` uses to derive the
+  // consumer's own hash, keeping the two in sync.
+  const fnString = fn.toString();
+  const referenced = new Set<string>();
+  {
+    const idRe = /[A-Za-z_$][\w$]*/g;
+    let m: RegExpExecArray | null;
+    while ((m = idRe.exec(fnString)) !== null) {
+      if (m[0] !== fnName) referenced.add(m[0]);
+    }
+  }
+
   const importLines: string[] = [];
 
   for (const [name, importFilename] of importRegistry.entries()) {
     // Avoid self-imports; they are unnecessary and can create circular deps.
     if (name === fnName || importFilename === filename) continue;
+    // Skip imports the handler body does not reference. False positives
+    // (matches inside strings or comments) are acceptable and merely
+    // over-emit.
+    if (!referenced.has(name)) continue;
     importLines.push(
       `import { default as ${name} } from "./${importFilename}.js";`,
     );
   }
 
-  // Convert function to string and normalize it to a stable expression bound to a
-  // known symbol. This supports named and anonymous functions.
-  const fnString = fn.toString();
+  // Normalize the function expression to bind it to a known symbol.
+  // Supports named and anonymous functions.
   const handlerExportName = "_handler";
 
   const trimmedFnString = fnString.trim();

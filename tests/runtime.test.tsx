@@ -142,16 +142,19 @@ Deno.test("Runtime - tiny.middleware.core supports separate handler/style hash l
 });
 
 Deno.test("Runtime - startup cache hydration avoids reset for same style hash length", async () => {
-  const testDir = "./.test-client-src";
-  await Deno.mkdir(testDir, { recursive: true });
-
   const testId = crypto.randomUUID().replace(/-/g, "");
-  const modulePath = `${testDir}/cache-hydration-${testId}.ts`;
+  // Run the subprocess from an isolated cwd so it has its own ./.cache
+  // directory that cannot be clobbered by the parent test process or other
+  // tests running in parallel.
+  const isolatedDir = `./.test-client-src/cache-hydration-${testId}`;
+  await Deno.mkdir(isolatedDir, { recursive: true });
+  const moduleFilename = "module.ts";
+  const modulePath = `${isolatedDir}/${moduleFilename}`;
 
   const moduleCode = [
-    'import { tiny } from "../honoFactory.tsx";',
-    'import { Handlers, Styles } from "../clientTools.ts";',
-    'import { css } from "../scopedStyles.ts";',
+    'import { tiny } from "../../honoFactory.tsx";',
+    'import { Handlers, Styles } from "../../clientTools.ts";',
+    'import { css } from "../../scopedStyles.ts";',
     "",
     "tiny.middleware.core({ generatedStyleHashLength: 4 });",
     "",
@@ -169,7 +172,8 @@ Deno.test("Runtime - startup cache hydration avoids reset for same style hash le
 
   const runModule = async (): Promise<string> => {
     const command = new Deno.Command("deno", {
-      args: ["run", "-A", modulePath],
+      args: ["run", "-A", `./${moduleFilename}`],
+      cwd: isolatedDir,
       stdout: "piped",
       stderr: "piped",
     });
@@ -214,7 +218,7 @@ Deno.test("Runtime - startup cache hydration avoids reset for same style hash le
     );
   } finally {
     try {
-      await Deno.remove(modulePath);
+      await Deno.remove(isolatedDir, { recursive: true });
     } catch {
       // ignore cleanup errors
     }
@@ -672,8 +676,8 @@ Deno.test("Runtime - styled.mergeClasses dedupes repeated scoped boundary class"
 Deno.test("Runtime - ClientTools rejects reserved styled key mergeClasses", () => {
   assertThrows(
     () =>
+      // @ts-ignore: testing that mergeClasses is rejected at runtime
       new Styles(import.meta.url, {
-        // @ts-ignore: testing that mergeClasses is rejected at runtime
         mergeClasses: css`
           color: blue;
         `,

@@ -82,6 +82,14 @@ export class ClientFunctionImpl<
   sourceFileUrl?: string;
   private occurrenceIndex: number;
   private importsFingerprint: string;
+  /**
+   * Records the previous filename when `_resolveFilename` performs an
+   * in-memory rename so the orphaned `.js` on disk can be deleted at
+   * the next opportunity. `_revalidateSelf` consumes and clears this.
+   * Stored only for the FIRST rename across a pass so multi-step
+   * renames (fixed-point loop) still produce a single cleanup.
+   */
+  private _pendingOldFilename: string | undefined;
 
   private _computeHashInput(): string {
     const base = this.fn.toString() + "::" + (this.sourceFileUrl ?? "");
@@ -90,44 +98,99 @@ export class ClientFunctionImpl<
   }
 
   /**
+   * Extract every identifier-looking token in the handler body. Used
+   * to scope the imports fingerprint and the emitted import lines to
+   * the symbols this handler actually references. False positives
+   * (matches inside strings or comments) are acceptable — they only
+   * over-include in the fingerprint without affecting correctness or
+   * convergence. The own function name is excluded so self-references
+   * never count.
+   *
+   * Cached per-instance because `fn.toString()` is stable for the
+   * lifetime of the instance.
+   */
+  private _cachedReferencedNames: Set<string> | undefined;
+  private _referencedNames(): Set<string> {
+    if (this._cachedReferencedNames) return this._cachedReferencedNames;
+    const out = new Set<string>();
+    const src = this.fn.toString();
+    const idRe = /[A-Za-z_$][\w$]*/g;
+    let m: RegExpExecArray | null;
+    while ((m = idRe.exec(src)) !== null) {
+      if (m[0] !== this.fnName) out.add(m[0]);
+    }
+    this._cachedReferencedNames = out;
+    return out;
+  }
+
+  /**
    * Build the imports fingerprint from the current filenames of any
-   * cross-file handlers this source file imports. Falls back to the
-   * static `importsFingerprint` set at construction time when no
-   * external imports have been registered yet (e.g. during the very
-   * first build before `import()` has run for this source). Including
-   * imported filenames in the fingerprint makes this handler's own hash
-   * (and therefore filename) change whenever any handler it imports is
-   * rebuilt with a new content hash, which busts browser cache for
-   * stale consumer bundles that referenced the old import filename.
+   * OTHER handlers this handler's emitted file references. Includes:
+   *   - in-file SIBLING handlers (registered against the same source
+   *     file) whose names appear in this handler's body.
+   *   - cross-file handlers imported via `import()` whose names appear
+   *     in this handler's body.
+   *
+   * Scoping to actually-referenced symbols is essential for in-file
+   * sibling groups: emitting every sibling into the fingerprint would
+   * create a cyclic feedback loop (each rename perturbs every other
+   * sibling's hash) that never converges to a stable filename.
+   *
+   * Falls back to the static `importsFingerprint` set at construction
+   * time when nothing relevant is registered yet.
+   *
+   * Including referenced filenames in the fingerprint makes this
+   * handler's own hash (and therefore filename) change whenever any
+   * handler it actually uses is rebuilt with a new content hash —
+   * busting browser cache for stale consumer bundles that referenced
+   * the old import filename.
    */
   private _currentImportsFingerprint(): string {
-    if (this.sourceFileUrl) {
-      const fileEntry = cache.files[this.sourceFileUrl];
-      if (fileEntry && fileEntry.externalImports.length > 0) {
-        const parts: string[] = [];
-        for (const externalKey of fileEntry.externalImports) {
-          const sep = externalKey.indexOf("::");
-          if (sep === -1) continue;
-          const importedSourceFileUrl = externalKey.slice(0, sep);
-          const importedFnName = externalKey.slice(sep + 2);
-          const importedHandlers = cache.getHandlersForSource(
-            importedSourceFileUrl,
-          );
-          for (const handler of importedHandlers) {
-            const impl = handler as ClientFunctionImpl;
-            if (impl.fnName === importedFnName) {
-              parts.push(`${importedFnName}=${impl.filename}`);
-              break;
-            }
+    if (!this.sourceFileUrl) return this.importsFingerprint;
+
+    const referenced = this._referencedNames();
+
+    const parts: string[] = [];
+    const seen = new Set<string>();
+
+    // In-file siblings + already-wired cross-file imports.
+    const registry = getImportRegistry(this.sourceFileUrl);
+    for (const [name, filename] of registry.entries()) {
+      if (name === this.fnName) continue;
+      if (!referenced.has(name)) continue;
+      if (seen.has(name)) continue;
+      seen.add(name);
+      parts.push(`${name}=${filename}`);
+    }
+
+    // Cross-file imports recorded in the cache (catches the cold-start
+    // case where `import()` has not yet wired the consumer registry).
+    const fileEntry = cache.files[this.sourceFileUrl];
+    if (fileEntry && fileEntry.externalImports.length > 0) {
+      for (const externalKey of fileEntry.externalImports) {
+        const sep = externalKey.indexOf("::");
+        if (sep === -1) continue;
+        const importedSourceFileUrl = externalKey.slice(0, sep);
+        const importedFnName = externalKey.slice(sep + 2);
+        if (seen.has(importedFnName)) continue;
+        if (!referenced.has(importedFnName)) continue;
+        const importedHandlers = cache.getHandlersForSource(
+          importedSourceFileUrl,
+        );
+        for (const handler of importedHandlers) {
+          const impl = handler as ClientFunctionImpl;
+          if (impl.fnName === importedFnName) {
+            seen.add(importedFnName);
+            parts.push(`${importedFnName}=${impl.filename}`);
+            break;
           }
-        }
-        if (parts.length > 0) {
-          parts.sort();
-          return parts.join(",");
         }
       }
     }
-    return this.importsFingerprint;
+
+    if (parts.length === 0) return this.importsFingerprint;
+    parts.sort();
+    return parts.join(",");
   }
 
   constructor(
@@ -281,6 +344,61 @@ export class ClientFunctionImpl<
   }
 
   /**
+   * Pure in-memory rename: recompute the canonical hash (body + source
+   * + current imports fingerprint) and, if it differs from the current
+   * filename, rename this handler and propagate the change to the
+   * import registry, the cache manager and the changed-handler trackers.
+   *
+   * Performs NO file IO. The orphaned old filename (if any) is recorded
+   * in `_pendingOldFilename` for the caller (`_revalidateSelf`) to
+   * clean up at write time.
+   *
+   * Returns true if a rename happened.
+   *
+   * Safe to call repeatedly in a fixed-point loop \u2014 once the hash is
+   * stable the call is a no-op.
+   */
+  _resolveFilename(): boolean {
+    if (!this.sourceFileUrl) return false;
+    const str = this._computeHashInput();
+    const newFilename = `${this.fnName}_${generateHandlerHash(str)}`;
+    if (newFilename === this.filename) return false;
+
+    const oldFilename = this.filename;
+    this.filename = newFilename;
+    // deno-lint-ignore no-explicit-any
+    (this as any)[this.fnName] =
+      `handlers.${this.filename}.call(this, event)` as unknown;
+
+    const registry = getImportRegistry(this.sourceFileUrl);
+    registry.set(this.fnName, this.filename);
+
+    cache.setCachedHandler(
+      this.sourceFileUrl,
+      this.fnName,
+      this.occurrenceIndex,
+      this.filename,
+    );
+
+    changedHandlerKeys.add(handlerKey(this.sourceFileUrl, this.fnName));
+    filesWithChangedHandlers.add(this.sourceFileUrl);
+
+    // Preserve the FIRST observed old filename across a sequence of
+    // fixed-point renames so the eventual cleanup deletes the truly
+    // orphaned bundle, not an intermediate rename target that no `.js`
+    // file ever existed under.
+    if (this._pendingOldFilename === undefined) {
+      this._pendingOldFilename = oldFilename;
+    }
+
+    console.log(
+      `Handler ${this.fnName} filename changed: ${oldFilename} -> ${this.filename}`,
+    );
+
+    return true;
+  }
+
+  /**
    * Deferred validation and build. Called at request time via
    * `ensureBuilt()`. If the source file's mtime has changed, re-hashes
    * the handler (renaming the on-disk `.js` if the content hash shifted)
@@ -311,6 +429,22 @@ export class ClientFunctionImpl<
     await revalidateExternalImports(this.sourceFileUrl, handlerDir);
 
     const mtimeChanged = cache.checkAndTrackMtimeChange(this.sourceFileUrl);
+
+    // When this source file's mtime changed, every handler registered
+    // against it potentially needs a rename — and because in-file
+    // siblings reference each other through the import registry, the
+    // dep-aware hash of any one sibling depends on the resolved
+    // filenames of all the others. Run a fixed-point rename pass over
+    // the whole group BEFORE computing this handler's own hash so the
+    // imports fingerprint reads stable, settled sibling filenames. If
+    // we skipped this, a body change in one sibling would update the
+    // consumer sibling's emitted file content (to reference the new
+    // import) but leave the consumer's own filename hash unchanged,
+    // letting the browser keep serving the cached stale bundle.
+    if (mtimeChanged) {
+      resolveSourceFileSiblingFilenames(this.sourceFileUrl);
+    }
+
     const rebuilt = await this._revalidateSelf(handlerDir, mtimeChanged);
 
     // Eagerly revalidate every sibling artifact registered against the
@@ -345,39 +479,20 @@ export class ClientFunctionImpl<
       this.needsRebuildDueToDependencyChange();
 
     if (mtimeChanged || depsChanged) {
-      // Re-hash and check if filename actually changed
-      const str = this._computeHashInput();
-      const newFilename = `${this.fnName}_${generateHandlerHash(str)}`;
+      // The fixed-point sibling pre-pass in `revalidateAndBuild` may
+      // have already renamed us. `_resolveFilename` is a no-op when the
+      // hash is already stable, so this call just handles the case
+      // where we were entered via the dep-only branch (mtime unchanged,
+      // depsChanged true) and the pre-pass therefore did not run.
+      this._resolveFilename();
 
-      if (newFilename !== this.filename) {
-        const oldFilename = this.filename;
-        this.filename = newFilename;
-        // deno-lint-ignore no-explicit-any
-        (this as any)[this.fnName] =
-          `handlers.${this.filename}.call(this, event)` as unknown;
-
-        // Update registries
-        const registry = getImportRegistry(this.sourceFileUrl);
-        registry.set(this.fnName, this.filename);
-
-        // Update cache
-        cache.setCachedHandler(
-          this.sourceFileUrl,
-          this.fnName,
-          this.occurrenceIndex,
-          this.filename,
-        );
-
-        // Track the change for dependency rebuilds
-        changedHandlerKeys.add(handlerKey(this.sourceFileUrl, this.fnName));
-        filesWithChangedHandlers.add(this.sourceFileUrl);
-
-        console.log(
-          `Handler ${this.fnName} filename changed: ${oldFilename} -> ${this.filename}`,
-        );
-
-        // Remove the old handler file from disk
-        await rm(`${handlerDir}/${oldFilename}.js`).catch(() => {});
+      // If a rename happened (here OR earlier in the pre-pass) the old
+      // on-disk file is now orphaned — remove it before writing the
+      // fresh one under the new filename.
+      if (this._pendingOldFilename) {
+        await rm(`${handlerDir}/${this._pendingOldFilename}.js`)
+          .catch(() => {});
+        this._pendingOldFilename = undefined;
       } else if (mtimeChanged) {
         // Filename unchanged, but still ensure the cache entry exists
         // (it may have been cleared by resetHashDependentState)
@@ -404,6 +519,43 @@ export class ClientFunctionImpl<
     await writeFile(`${handlerDir}/${this.filename}.js`, functionCode);
     console.log(`Handler file written: ${handlerDir}/${this.filename}.js`);
     return true;
+  }
+}
+
+/**
+ * Settle the canonical filename for every handler registered against
+ * `sourceFileUrl` via a fixed-point loop. Each iteration calls
+ * `_resolveFilename` on every sibling; when none rename in a full
+ * iteration the group has converged.
+ *
+ * Required because in-file siblings reference each other through the
+ * shared import registry, so the dep-aware hash of any sibling depends
+ * on the resolved filenames of every other sibling. Running this BEFORE
+ * a handler's `_revalidateSelf` writes its file guarantees that the
+ * imports fingerprint (and therefore the final filename hash) is
+ * computed against settled sibling filenames — otherwise a body change
+ * in one sibling would propagate into another sibling's emitted file
+ * content but fail to bust that sibling's filename hash, leaving the
+ * browser cache stuck on a stale bundle.
+ *
+ * Pure in-memory work; no file IO. Each rename strictly shifts the
+ * sibling to a fresh hash, so the loop converges quickly; the explicit
+ * iteration cap is a safety net.
+ */
+export function resolveSourceFileSiblingFilenames(
+  sourceFileUrl: string,
+): void {
+  const siblingsSet = cache.getHandlersForSource(sourceFileUrl);
+  if (siblingsSet.size === 0) return;
+  const siblings = [...siblingsSet] as ClientFunctionImpl[];
+
+  const maxIterations = siblings.length + 2;
+  for (let i = 0; i < maxIterations; i++) {
+    let anyChanged = false;
+    for (const sibling of siblings) {
+      if (sibling._resolveFilename()) anyChanged = true;
+    }
+    if (!anyChanged) return;
   }
 }
 

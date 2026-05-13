@@ -200,7 +200,7 @@ Deno.test({
     cache.files[normalizeSourceFileUrl(helperUrl)!] ??= {
       mtimeMs: 1,
       externalImports: [],
-      handlers: { sharedFn: { 0: initialHelperFilename } },
+      handlers: { sharedFn: [initialHelperFilename] },
       styles: {},
     };
     cache.files[normalizeSourceFileUrl(consumerUrl)!] ??= {
@@ -208,7 +208,7 @@ Deno.test({
       externalImports: [
         `${normalizeSourceFileUrl(helperUrl)!}::sharedFn`,
       ],
-      handlers: { consumerFn: { 0: consumerImpl.filename } },
+      handlers: { consumerFn: [consumerImpl.filename] },
       styles: {},
     };
 
@@ -253,6 +253,10 @@ Deno.test({
     });
     const _consumer = new Handlers(consumerUrl, {
       consumerFn(this: HTMLElement) {
+        // Reference the imported symbol so the build emits the import
+        // line and the imports fingerprint includes the helper's filename.
+        // @ts-ignore - sharedFn is provided by the emitted import line
+        sharedFn();
         console.log("consumer v1");
       },
     }, { imports: [helper] });
@@ -275,13 +279,13 @@ Deno.test({
     cache.files[helperKey] ??= {
       mtimeMs: 1,
       externalImports: [],
-      handlers: { sharedFn: { 0: oldHelperFilename } },
+      handlers: { sharedFn: [oldHelperFilename] },
       styles: {},
     };
     cache.files[consumerKey] ??= {
       mtimeMs: 1,
       externalImports: [`${helperKey}::sharedFn`],
-      handlers: { consumerFn: { 0: consumerImpl.filename } },
+      handlers: { consumerFn: [consumerImpl.filename] },
       styles: {},
     };
 
@@ -336,7 +340,11 @@ Deno.test({
     });
     const _consumer = new Handlers(consumerUrl, {
       consumerFn(this: HTMLElement) {
-        console.log("consumer body — does not change");
+        // Reference helper so the emitted file actually imports it and
+        // the consumer's filename hash includes helper's filename.
+        // @ts-ignore - sharedFn is provided by the emitted import line
+        sharedFn();
+        console.log("consumer body \u2014 does not change");
       },
     }, { imports: [helper] });
     void _consumer;
@@ -357,13 +365,13 @@ Deno.test({
     cache.files[helperKey] ??= {
       mtimeMs: 1,
       externalImports: [],
-      handlers: { sharedFn: { 0: oldHelperFilename } },
+      handlers: { sharedFn: [oldHelperFilename] },
       styles: {},
     };
     cache.files[consumerKey] ??= {
       mtimeMs: 1,
       externalImports: [`${helperKey}::sharedFn`],
-      handlers: { consumerFn: { 0: oldConsumerFilename } },
+      handlers: { consumerFn: [oldConsumerFilename] },
       styles: {},
     };
 
@@ -525,13 +533,13 @@ Deno.test({
     cache.files[helperKey] ??= {
       mtimeMs: 1,
       externalImports: [],
-      handlers: { sharedFn: { 0: helperBefore } },
+      handlers: { sharedFn: [helperBefore] },
       styles: {},
     };
     cache.files[consumerKey] ??= {
       mtimeMs: 1,
       externalImports: [`${helperKey}::sharedFn`],
-      handlers: { consumerFn: { 0: consumerBefore } },
+      handlers: { consumerFn: [consumerBefore] },
       styles: {},
     };
 
@@ -591,11 +599,15 @@ Deno.test({
     });
     const mid = new Handlers(midUrl, {
       midFn(this: HTMLElement) {
+        // @ts-ignore - leafFn provided by the emitted import line
+        leafFn();
         console.log("mid v1");
       },
     }, { imports: [leaf] });
     const _root = new Handlers(rootUrl, {
       rootFn(this: HTMLElement) {
+        // @ts-ignore - midFn provided by the emitted import line
+        midFn();
         console.log("root v1");
       },
     }, { imports: [mid] });
@@ -622,19 +634,19 @@ Deno.test({
     cache.files[leafKey] ??= {
       mtimeMs: 1,
       externalImports: [],
-      handlers: { leafFn: { 0: leafBefore } },
+      handlers: { leafFn: [leafBefore] },
       styles: {},
     };
     cache.files[midKey] ??= {
       mtimeMs: 1,
       externalImports: [`${leafKey}::leafFn`],
-      handlers: { midFn: { 0: midBefore } },
+      handlers: { midFn: [midBefore] },
       styles: {},
     };
     cache.files[rootKey] ??= {
       mtimeMs: 1,
       externalImports: [`${midKey}::midFn`],
-      handlers: { rootFn: { 0: rootBefore } },
+      handlers: { rootFn: [rootBefore] },
       styles: {},
     };
 
@@ -686,6 +698,8 @@ Deno.test({
     });
     const _importer = new Handlers(importerUrl, {
       importerFn(this: HTMLElement) {
+        // @ts-ignore - sharedFn provided by the emitted import line
+        sharedFn();
         console.log("importer body");
       },
     }, { imports: [helper] });
@@ -717,19 +731,19 @@ Deno.test({
     cache.files[helperKey] ??= {
       mtimeMs: 1,
       externalImports: [],
-      handlers: { sharedFn: { 0: helperBefore } },
+      handlers: { sharedFn: [helperBefore] },
       styles: {},
     };
     cache.files[importerKey] ??= {
       mtimeMs: 1,
       externalImports: [`${helperKey}::sharedFn`],
-      handlers: { importerFn: { 0: importerBefore } },
+      handlers: { importerFn: [importerBefore] },
       styles: {},
     };
     cache.files[independentKey] ??= {
       mtimeMs: 1,
       externalImports: [],
-      handlers: { independentFn: { 0: independentBefore } },
+      handlers: { independentFn: [independentBefore] },
       styles: {},
     };
 
@@ -792,6 +806,239 @@ Deno.test({
       consumerEntry.externalImports.includes(expectedImportKey),
       "consumer.externalImports should include the helper key after construction. " +
         `Got: ${JSON.stringify(consumerEntry.externalImports)}`,
+    );
+
+    await cleanupTestDirs();
+  },
+  sanitizeOps: false,
+  sanitizeResources: false,
+});
+
+// ============================================================================
+// Test Suite: in-file sibling import cascade
+// ============================================================================
+//
+// Regression coverage for a bug where multiple handlers registered
+// against the same source file referenced each other directly (via
+// closure capture in their function bodies), producing a sibling
+// import chain inside one file:
+//
+//   saveNoteSnapshotNow  <- queueNoteSnapshotSave  <- supressChange
+//
+// Editing only the leaf handler's body correctly renamed the leaf and
+// updated the consumer siblings' EMITTED FILE CONTENT to reference the
+// new import filename, but the consumer siblings' OWN filename hashes
+// did not change — so the browser served cached stale bundles whose
+// internal import statements pointed at filenames that no longer
+// existed on disk.
+//
+// Root cause: the dep-aware imports fingerprint only walked
+// `cache.files[...].externalImports` (cross-file imports), ignoring
+// in-file siblings. Additionally, ordering inside the sibling
+// revalidation pass had to be settled with a fixed-point loop so each
+// sibling's hash was computed against finalized peer filenames.
+
+Deno.test({
+  name:
+    "lazy rebuild - in-file sibling import chain cascades renames within one source file",
+  async fn() {
+    await cleanupTestDirs();
+    resetRegistries();
+
+    // All three handlers live in ONE source file. They form a chain:
+    //   leafFn  <- midFn  <- rootFn
+    const sharedUrl = await writeFakeSource("shared", "// v1");
+
+    const _shared = new Handlers(sharedUrl, {
+      leafFn(this: HTMLElement) {
+        console.log("leaf v1 body");
+      },
+      midFn(this: HTMLElement) {
+        // @ts-ignore - sibling reference resolved by build registry
+        leafFn();
+      },
+      rootFn(this: HTMLElement) {
+        // @ts-ignore - sibling reference resolved by build registry
+        midFn();
+      },
+    });
+    void _shared;
+
+    const leafImpl = getImpl(sharedUrl, "leafFn");
+    const midImpl = getImpl(sharedUrl, "midFn");
+    const rootImpl = getImpl(sharedUrl, "rootFn");
+
+    await lazyRevalidate(leafImpl);
+    await lazyRevalidate(midImpl);
+    await lazyRevalidate(rootImpl);
+
+    const leafBefore = leafImpl.filename;
+    const midBefore = midImpl.filename;
+    const rootBefore = rootImpl.filename;
+
+    // Edit the shared source file. Only the leaf's function body
+    // changes; mid and root are byte-identical.
+    await touchFakeSource(sharedUrl, "// v2");
+    const sharedKey = normalizeSourceFileUrl(sharedUrl)!;
+    cache.files[sharedKey] ??= {
+      mtimeMs: 1,
+      externalImports: [],
+      handlers: {
+        leafFn: [leafBefore],
+        midFn: [midBefore],
+        rootFn: [rootBefore],
+      },
+      styles: {},
+    };
+
+    (leafImpl as unknown as { fn: () => void }).fn = function leafFn(
+      this: HTMLElement,
+    ) {
+      console.log("leaf v2 — totally different body");
+    };
+
+    await lazyRevalidate(rootImpl);
+    await lazyRevalidate(midImpl);
+    await lazyRevalidate(leafImpl);
+
+    // All three siblings must rename so the browser cache busts at
+    // every level of the in-file chain.
+    assertNotEquals(
+      leafImpl.filename,
+      leafBefore,
+      "leaf must rename when its body changes",
+    );
+    assertNotEquals(
+      midImpl.filename,
+      midBefore,
+      "mid must rename — it imports leaf via the in-file sibling registry",
+    );
+    assertNotEquals(
+      rootImpl.filename,
+      rootBefore,
+      "root must rename — it imports mid via the in-file sibling registry",
+    );
+
+    // Emitted file content for every consumer sibling must reference
+    // the NEW filename of the sibling it imports.
+    await assertConsumerImports(
+      `${TEST_HANDLER_DIR}/${midImpl.filename}.js`,
+      leafImpl.filename,
+    );
+    await assertConsumerImports(
+      `${TEST_HANDLER_DIR}/${rootImpl.filename}.js`,
+      midImpl.filename,
+    );
+
+    // Old on-disk files must be removed so they cannot be served stale.
+    for (const oldName of [leafBefore, midBefore, rootBefore]) {
+      let gone = false;
+      try {
+        await Deno.stat(`${TEST_HANDLER_DIR}/${oldName}.js`);
+      } catch {
+        gone = true;
+      }
+      assert(gone, `old file ${oldName}.js should have been removed`);
+    }
+
+    await cleanupTestDirs();
+  },
+  sanitizeOps: false,
+  sanitizeResources: false,
+});
+
+Deno.test({
+  name:
+    "lazy rebuild - in-file sibling rename propagates through an external consumer",
+  async fn() {
+    // Models the dental dialogTemplate.tsx scenario: in-file siblings
+    // form the inner chain, and an external file consumes one of the
+    // top-level siblings. Editing the leaf sibling must cascade through
+    // the in-file chain AND across the file boundary.
+    await cleanupTestDirs();
+    resetRegistries();
+
+    const sharedUrl = await writeFakeSource("shared", "// v1");
+    const externalUrl = await writeFakeSource("external", "// v1");
+
+    const shared = new Handlers(sharedUrl, {
+      leafFn(this: HTMLElement) {
+        console.log("leaf v1");
+      },
+      midFn(this: HTMLElement) {
+        // @ts-ignore - sibling
+        leafFn();
+      },
+    });
+    const _external = new Handlers(externalUrl, {
+      externalFn(this: HTMLElement) {
+        // @ts-ignore - cross-file import
+        midFn();
+      },
+    }, { imports: [shared] });
+    void _external;
+
+    const leafImpl = getImpl(sharedUrl, "leafFn");
+    const midImpl = getImpl(sharedUrl, "midFn");
+    const externalImpl = getImpl(externalUrl, "externalFn");
+
+    await lazyRevalidate(leafImpl);
+    await lazyRevalidate(midImpl);
+    await lazyRevalidate(externalImpl);
+
+    const leafBefore = leafImpl.filename;
+    const midBefore = midImpl.filename;
+    const externalBefore = externalImpl.filename;
+
+    await touchFakeSource(sharedUrl, "// v2");
+    const sharedKey = normalizeSourceFileUrl(sharedUrl)!;
+    const externalKey = normalizeSourceFileUrl(externalUrl)!;
+    cache.files[sharedKey] ??= {
+      mtimeMs: 1,
+      externalImports: [],
+      handlers: { leafFn: [leafBefore], midFn: [midBefore] },
+      styles: {},
+    };
+    cache.files[externalKey] ??= {
+      mtimeMs: 1,
+      externalImports: [
+        `${sharedKey}::leafFn`,
+        `${sharedKey}::midFn`,
+      ],
+      handlers: { externalFn: [externalBefore] },
+      styles: {},
+    };
+
+    (leafImpl as unknown as { fn: () => void }).fn = function leafFn(
+      this: HTMLElement,
+    ) {
+      console.log("leaf v2 different body");
+    };
+
+    // Request only the external consumer — the cascade must reach all
+    // the way down through the in-file siblings to the leaf and back
+    // up through every consumer at every layer.
+    await lazyRevalidate(externalImpl);
+
+    assertNotEquals(leafImpl.filename, leafBefore, "leaf must rename");
+    assertNotEquals(
+      midImpl.filename,
+      midBefore,
+      "in-file sibling consumer must rename",
+    );
+    assertNotEquals(
+      externalImpl.filename,
+      externalBefore,
+      "cross-file consumer must rename",
+    );
+
+    await assertConsumerImports(
+      `${TEST_HANDLER_DIR}/${midImpl.filename}.js`,
+      leafImpl.filename,
+    );
+    await assertConsumerImports(
+      `${TEST_HANDLER_DIR}/${externalImpl.filename}.js`,
+      midImpl.filename,
     );
 
     await cleanupTestDirs();
