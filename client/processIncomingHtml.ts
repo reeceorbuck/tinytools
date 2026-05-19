@@ -36,6 +36,19 @@ export function processIncomingHtml(
   console.log("incoming fragment: ", fragment);
   const children = Array.from(fragment.children);
 
+  // Collect any [autofocus] elements arriving with this fragment so we can
+  // re-trigger the browser's native focus-on-load behaviour after the partial
+  // has been inserted into the live DOM. The native `autofocus` attribute is
+  // only honoured on initial document parse, so partial navigation needs to
+  // replay it manually to get the same scroll-into-view side effect.
+  const autofocusTargets: Element[] = [];
+  for (const partial of children) {
+    if (partial.hasAttribute("autofocus")) autofocusTargets.push(partial);
+    partial.querySelectorAll?.("[autofocus]").forEach((el) =>
+      autofocusTargets.push(el)
+    );
+  }
+
   const isStale = typeof options.navGeneration === "number" &&
     options.navGeneration !== getNavGeneration();
 
@@ -297,4 +310,40 @@ export function processIncomingHtml(
       }
     }
   });
+
+  // After the incoming partial has been merged into the DOM, focus any
+  // element that asked for autofocus and explicitly scroll it to the top of
+  // the scrollport. We can't rely on `focus()` alone for the scroll because:
+  //   1. The browser only honours the native `autofocus` attribute during
+  //      initial document parse, not for nodes inserted later.
+  //   2. `element.focus()` only scrolls if the element isn't already at
+  //      least partially in view — after a Suspense placeholder fill the
+  //      element may be coincidentally visible, so no scroll happens.
+  //   3. The NavigationAPI's scroll restoration runs asynchronously after
+  //      navigation success and can clobber any sync scroll we apply.
+  // Doing focus() + rAF + scrollIntoView lets restoration finish first, then
+  // pins the autofocus target to the top of the scrollport. `scroll-margin-*`
+  // CSS is respected by scrollIntoView, matching the original load behaviour.
+  // Skip if focus is already inside one of these targets (user is interacting)
+  // to avoid stealing focus mid-task.
+  if (autofocusTargets.length > 0) {
+    const active = document.activeElement;
+    const stealingOk = !active || active === document.body ||
+      !autofocusTargets.some((t) => t.contains(active));
+    if (stealingOk) {
+      const target = autofocusTargets.find((t) => t.isConnected) as
+        | HTMLElement
+        | undefined;
+      if (target) {
+        target.focus({ preventScroll: true });
+        // Defer past the current frame so NavigationAPI scroll restoration
+        // (which fires on `navigatesuccess`) doesn't override us.
+        requestAnimationFrame(() => {
+          if (target.isConnected) {
+            target.scrollIntoView({ block: "start", behavior: "auto" });
+          }
+        });
+      }
+    }
+  }
 }

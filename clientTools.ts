@@ -1349,10 +1349,18 @@ class ClientToolsClass<
       }
     }
 
-    // Capture old filenames before revalidation so we can clean up stale files
+    // Capture old filenames before revalidation so we can clean up stale
+    // files AND so we can detect filename shifts that happened indirectly
+    // via sibling fanout (where the outer revalidate() call returns false
+    // because the style/handler was already processed earlier in the pass
+    // as a sibling of another artifact sharing the same source file).
     const oldGlobalStyleFilenames = new Map<string, string>();
     for (const [name, impl] of this._globalStyles) {
       oldGlobalStyleFilenames.set(name, impl.filename);
+    }
+    const oldScopedStyleFilenames = new Map<string, string>();
+    for (const [name, impl] of this._scopedStyles) {
+      oldScopedStyleFilenames.set(name, impl.filename);
     }
 
     // Revalidate all scoped styles (own + imported)
@@ -1369,6 +1377,24 @@ class ClientToolsClass<
       const changed = await impl.revalidate();
       if (changed) {
         anyStyleChanged = true;
+      }
+    }
+
+    // Detect filename changes that occurred via sibling fanout. A style
+    // revalidated as a sibling of another artifact (e.g. when foo's
+    // revalidate fans out to bar in the same source file) will have its
+    // `filename` mutated, but the outer revalidate() call for that style
+    // returns false because it sees the style is already processed for
+    // this pass. Without this check, anyStyleChanged would stay false and
+    // the bundle filename — recomputed from per-style filename fragments —
+    // would never refresh, producing stale (non-unique) bundle names.
+    if (!anyStyleChanged) {
+      for (const [name, oldFilename] of oldScopedStyleFilenames) {
+        const impl = this._scopedStyles.get(name);
+        if (impl && impl.filename !== oldFilename) {
+          anyStyleChanged = true;
+          break;
+        }
       }
     }
 

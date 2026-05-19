@@ -12,6 +12,13 @@ import {
 function processIncomingHtml(fragment, scope = document, options = {}) {
   console.log("incoming fragment: ", fragment);
   const children = Array.from(fragment.children);
+  const autofocusTargets = [];
+  for (const partial of children) {
+    if (partial.hasAttribute("autofocus")) autofocusTargets.push(partial);
+    partial.querySelectorAll?.("[autofocus]").forEach(
+      (el) => autofocusTargets.push(el)
+    );
+  }
   const isStale = typeof options.navGeneration === "number" && options.navGeneration !== getNavGeneration();
   if (isStale && !options.bypassRouteCache) {
     const registrations = options.activeRouteRegistrations ?? (options.activeRoutePath ? [{ pathname: options.activeRoutePath }] : []);
@@ -238,6 +245,21 @@ function processIncomingHtml(fragment, scope = document, options = {}) {
       }
     }
   });
+  if (autofocusTargets.length > 0) {
+    const active = document.activeElement;
+    const stealingOk = !active || active === document.body || !autofocusTargets.some((t) => t.contains(active));
+    if (stealingOk) {
+      const target = autofocusTargets.find((t) => t.isConnected);
+      if (target) {
+        target.focus({ preventScroll: true });
+        requestAnimationFrame(() => {
+          if (target.isConnected) {
+            target.scrollIntoView({ block: "start", behavior: "auto" });
+          }
+        });
+      }
+    }
+  }
 }
 export {
   processIncomingHtml
