@@ -335,7 +335,9 @@ const styles = new tiny.Styles(import.meta.url, {
 });
 
 // Import handlers from other files
-const localHandlers = new tiny.Handlers(import.meta.url, { imports: [externalHandlers] }, {
+const localHandlers = new tiny.Handlers(import.meta.url, {
+  imports: [externalHandlers],
+}, {
   localHandler() {
     // ...
   },
