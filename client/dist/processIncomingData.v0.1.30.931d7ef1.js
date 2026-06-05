@@ -26,7 +26,6 @@ async function processIncomingData(response, options = {}) {
   for await (const chunk of response.body) {
     console.log("chunk length: ", chunk.length);
     const text = decoder.decode(chunk, { stream: true });
-    console.log("Received chunk:", text);
     if (text.length === 0) continue;
     buffer += text;
     if (buffer.includes("</update>")) {

@@ -968,8 +968,8 @@ interface HandlersConstructor {
     // deno-lint-ignore no-explicit-any
     TImports extends AnyClientToolsInstance[] = [],
   >(
-    functions: TFunctions,
     options: HandlersOptions<TImports>,
+    functions: TFunctions,
   ): ClientToolsClass<
     TFunctions & UnionOfFunctions<TImports>,
     UnionOfStyles<TImports>,
@@ -990,8 +990,8 @@ interface HandlersConstructor {
     TImports extends AnyClientToolsInstance[] = [],
   >(
     sourceFileUrl: string | URL | undefined,
-    functions: TFunctions,
     options: HandlersOptions<TImports>,
+    functions: TFunctions,
   ): ClientToolsClass<
     TFunctions & UnionOfFunctions<TImports>,
     UnionOfStyles<TImports>,
@@ -1906,33 +1906,58 @@ export const ClientTools: ClientToolsConstructor =
 
 class HandlersClass extends ClientToolsClass<{}, {}, {}> {
   constructor(
-    sourceFileUrlOrFunctions:
+    sourceFileUrlOrOptionsOrFunctions:
       | string
       | URL
       | undefined
+      // deno-lint-ignore no-explicit-any
+      | HandlersOptions<any>
       | Record<string, AnyFunction>,
     // deno-lint-ignore no-explicit-any
-    functionsOrOptions?: Record<string, AnyFunction> | HandlersOptions<any>,
-    // deno-lint-ignore no-explicit-any
-    maybeOptions?: HandlersOptions<any>,
+    optionsOrFunctions?: HandlersOptions<any> | Record<string, AnyFunction>,
+    maybeFunctions?: Record<string, AnyFunction>,
   ) {
-    // Detect whether first arg is the functions object (no sourceFileUrl provided)
-    const firstArgIsFunctions = sourceFileUrlOrFunctions !== null &&
-      sourceFileUrlOrFunctions !== undefined &&
-      typeof sourceFileUrlOrFunctions === "object" &&
-      !(sourceFileUrlOrFunctions instanceof URL);
+    // Detect whether first arg is the sourceFileUrl (string/URL/undefined) or
+    // already an object (options or functions, meaning no sourceFileUrl was
+    // provided).
+    const firstArgIsObject = sourceFileUrlOrOptionsOrFunctions !== null &&
+      sourceFileUrlOrOptionsOrFunctions !== undefined &&
+      typeof sourceFileUrlOrOptionsOrFunctions === "object" &&
+      !(sourceFileUrlOrOptionsOrFunctions instanceof URL);
 
-    const sourceFileUrl = firstArgIsFunctions
-      ? undefined
-      : sourceFileUrlOrFunctions as string | URL | undefined;
-    const functions =
-      (firstArgIsFunctions
-        ? sourceFileUrlOrFunctions
-        : functionsOrOptions) as Record<string, AnyFunction>;
+    let sourceFileUrl: string | URL | undefined;
     // deno-lint-ignore no-explicit-any
-    const options = (firstArgIsFunctions ? functionsOrOptions : maybeOptions) as
-      | HandlersOptions<any>
-      | undefined;
+    let options: HandlersOptions<any> | undefined;
+    let functions: Record<string, AnyFunction>;
+
+    if (firstArgIsObject) {
+      // No sourceFileUrl: either `(functions)` or `(options, functions)`
+      sourceFileUrl = undefined;
+      if (optionsOrFunctions === undefined) {
+        functions = sourceFileUrlOrOptionsOrFunctions as Record<
+          string,
+          AnyFunction
+        >;
+      } else {
+        // deno-lint-ignore no-explicit-any
+        options = sourceFileUrlOrOptionsOrFunctions as HandlersOptions<any>;
+        functions = optionsOrFunctions as Record<string, AnyFunction>;
+      }
+    } else {
+      sourceFileUrl = sourceFileUrlOrOptionsOrFunctions as
+        | string
+        | URL
+        | undefined;
+      if (maybeFunctions === undefined) {
+        // `(url, functions)`
+        functions = (optionsOrFunctions ?? {}) as Record<string, AnyFunction>;
+      } else {
+        // `(url, options, functions)`
+        // deno-lint-ignore no-explicit-any
+        options = optionsOrFunctions as HandlersOptions<any>;
+        functions = maybeFunctions;
+      }
+    }
 
     const resolvedUrl = normalizeSourceFileUrl(sourceFileUrl);
     if (!resolvedUrl && !cache.trustCache) {

@@ -170,11 +170,11 @@ Deno.test({
         console.log("v1");
       },
     });
-    const _consumer = new Handlers(consumerUrl, {
+    const _consumer = new Handlers(consumerUrl, { imports: [helper] }, {
       consumerFn(this: HTMLElement) {
         console.log("calls helper");
       },
-    }, { imports: [helper] });
+    });
     void _consumer;
 
     // First build — every handler is "new", so both files must be written.
@@ -251,7 +251,7 @@ Deno.test({
         console.log("v1 body");
       },
     });
-    const _consumer = new Handlers(consumerUrl, {
+    const _consumer = new Handlers(consumerUrl, { imports: [helper] }, {
       consumerFn(this: HTMLElement) {
         // Reference the imported symbol so the build emits the import
         // line and the imports fingerprint includes the helper's filename.
@@ -259,7 +259,7 @@ Deno.test({
         sharedFn();
         console.log("consumer v1");
       },
-    }, { imports: [helper] });
+    });
     void _consumer;
 
     const helperImpl = getImpl(helperUrl, "sharedFn");
@@ -338,7 +338,7 @@ Deno.test({
         console.log("v1 body");
       },
     });
-    const _consumer = new Handlers(consumerUrl, {
+    const _consumer = new Handlers(consumerUrl, { imports: [helper] }, {
       consumerFn(this: HTMLElement) {
         // Reference helper so the emitted file actually imports it and
         // the consumer's filename hash includes helper's filename.
@@ -346,7 +346,7 @@ Deno.test({
         sharedFn();
         console.log("consumer body \u2014 does not change");
       },
-    }, { imports: [helper] });
+    });
     void _consumer;
 
     const helperImpl = getImpl(helperUrl, "sharedFn");
@@ -445,11 +445,11 @@ Deno.test({
         console.log("v1");
       },
     });
-    const _consumer = new Handlers(consumerUrl, {
+    const _consumer = new Handlers(consumerUrl, { imports: [helper] }, {
       consumerFn(this: HTMLElement) {
         console.log("consumer");
       },
-    }, { imports: [helper] });
+    });
     void _consumer;
 
     const helperImpl = getImpl(helperUrl, "sharedFn");
@@ -511,11 +511,11 @@ Deno.test({
         console.log("helper-v1 body");
       },
     });
-    const _consumer = new Handlers(consumerUrl, {
+    const _consumer = new Handlers(consumerUrl, { imports: [helper] }, {
       consumerFn(this: HTMLElement) {
         console.log("consumer v1");
       },
-    }, { imports: [helper] });
+    });
     void _consumer;
 
     const helperImpl = getImpl(helperUrl, "sharedFn");
@@ -597,20 +597,20 @@ Deno.test({
         console.log("leaf v1");
       },
     });
-    const mid = new Handlers(midUrl, {
+    const mid = new Handlers(midUrl, { imports: [leaf] }, {
       midFn(this: HTMLElement) {
         // @ts-ignore - leafFn provided by the emitted import line
         leafFn();
         console.log("mid v1");
       },
-    }, { imports: [leaf] });
-    const _root = new Handlers(rootUrl, {
+    });
+    const _root = new Handlers(rootUrl, { imports: [mid] }, {
       rootFn(this: HTMLElement) {
         // @ts-ignore - midFn provided by the emitted import line
         midFn();
         console.log("root v1");
       },
-    }, { imports: [mid] });
+    });
     void _root;
 
     const leafImpl = getImpl(leafUrl, "leafFn");
@@ -696,13 +696,13 @@ Deno.test({
         console.log("helper v1");
       },
     });
-    const _importer = new Handlers(importerUrl, {
+    const _importer = new Handlers(importerUrl, { imports: [helper] }, {
       importerFn(this: HTMLElement) {
         // @ts-ignore - sharedFn provided by the emitted import line
         sharedFn();
         console.log("importer body");
       },
-    }, { imports: [helper] });
+    });
     const _independent = new Handlers(independentUrl, {
       independentFn(this: HTMLElement) {
         console.log("independent — never imports helper");
@@ -785,11 +785,11 @@ Deno.test({
         console.log("v1");
       },
     });
-    const _consumer = new Handlers(consumerUrl, {
+    const _consumer = new Handlers(consumerUrl, { imports: [helper] }, {
       consumerFn(this: HTMLElement) {
         console.log("consumer");
       },
-    }, { imports: [helper] });
+    });
     void _consumer;
 
     // Without any rebuild pass having run, the consumer's cache entry
@@ -970,12 +970,12 @@ Deno.test({
         leafFn();
       },
     });
-    const _external = new Handlers(externalUrl, {
+    const _external = new Handlers(externalUrl, { imports: [shared] }, {
       externalFn(this: HTMLElement) {
         // @ts-ignore - cross-file import
         midFn();
       },
-    }, { imports: [shared] });
+    });
     void _external;
 
     const leafImpl = getImpl(sharedUrl, "leafFn");

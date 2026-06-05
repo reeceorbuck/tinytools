@@ -18,11 +18,6 @@ export {
 } from "hono/jsx/jsx-runtime";
 import type { JSX as HonoJSX } from "hono/jsx/jsx-runtime";
 import type { ClientTools } from "./clientTools.ts";
-import type {
-  CommandEvent,
-  NavigateEvent,
-  NavigationCurrentEntryChangeEvent,
-} from "./globals.d.ts";
 
 /**
  * Brand symbol for ClientFunction types.

@@ -60,8 +60,8 @@ function getNavigationSourceForm(sourceElement) {
   return null;
 }
 function shouldBypassRouteCache(e) {
-  if (e.sourceElement instanceof Element && hasTruthyNoCacheAttr(e.sourceElement)) {
-    return true;
+  if (e.sourceElement instanceof Element && e.sourceElement.hasAttribute("data-no-cache")) {
+    return hasTruthyNoCacheAttr(e.sourceElement);
   }
   const sourceForm = getNavigationSourceForm(e.sourceElement);
   return hasTruthyNoCacheAttr(sourceForm);
@@ -139,7 +139,9 @@ navigation.addEventListener(
               e.sourceElement?.form
             );
             try {
-              const redirectAttr = (e.sourceElement instanceof HTMLFormElement ? e.sourceElement : e.sourceElement && "form" in e.sourceElement ? e.sourceElement.form : null)?.getAttribute("data-nav-redirect") ?? e.sourceElement?.getAttribute("data-nav-redirect");
+              const submitterRedirectAttr = e.sourceElement?.getAttribute("data-nav-redirect") ?? null;
+              const formRedirectAttr = (e.sourceElement instanceof HTMLFormElement ? e.sourceElement : e.sourceElement && "form" in e.sourceElement ? e.sourceElement.form : null)?.getAttribute("data-nav-redirect") ?? null;
+              const redirectAttr = submitterRedirectAttr ?? formRedirectAttr;
               console.log("Found data-nav-redirect attribute: ", redirectAttr);
               if (redirectAttr === "true") {
                 console.log(

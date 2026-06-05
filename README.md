@@ -335,11 +335,11 @@ const styles = new tiny.Styles(import.meta.url, {
 });
 
 // Import handlers from other files
-const localHandlers = new tiny.Handlers(import.meta.url, {
+const localHandlers = new tiny.Handlers(import.meta.url, { imports: [externalHandlers] }, {
   localHandler() {
     // ...
   },
-}, { imports: [externalHandlers] });
+});
 ```
 
 #### Reusing a client function inside another client function
@@ -377,13 +377,17 @@ const externalHandlers = new tiny.Handlers(import.meta.url, {
 // Module-level reference for composition inside another client function
 const { externalFunction } = externalHandlers.getFunctionReferences;
 
-export const localHandlers = new tiny.Handlers(import.meta.url, {
-  handleClick(this: HTMLElement, _e: MouseEvent) {
-    externalFunction("called from handleClick");
-    this.textContent = "done";
-  },
+export const localHandlers = new tiny.Handlers(
+  import.meta.url,
   // Required when localHandlers calls functions from externalHandlers
-}, { imports: [externalHandlers] });
+  { imports: [externalHandlers] },
+  {
+    handleClick(this: HTMLElement, _e: MouseEvent) {
+      externalFunction("called from handleClick");
+      this.textContent = "done";
+    },
+  },
+);
 ```
 
 ##### Within the same `Handlers` instance

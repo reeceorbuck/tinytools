@@ -442,11 +442,11 @@ Deno.test("Runtime - import() imported handlers return valid strings", () => {
     },
   });
 
-  const mainTools = new Handlers(import.meta.url, {
+  const mainTools = new Handlers(import.meta.url, { imports: [externalTools] }, {
     localHandler() {
       console.log("local");
     },
-  }, { imports: [externalTools] });
+  });
 
   const app = createApp(mainTools);
 
@@ -478,11 +478,11 @@ Deno.test("Runtime - import() multiple external tools", () => {
     },
   });
 
-  const mainTools = new Handlers(import.meta.url, {
+  const mainTools = new Handlers(import.meta.url, { imports: [externalA, externalB] }, {
     mainHandler() {
       console.log("main");
     },
-  }, { imports: [externalA, externalB] });
+  });
 
   const app = createApp(mainTools);
 
@@ -508,11 +508,11 @@ Deno.test("Runtime - import() throws on duplicate function names", () => {
 
   assertThrows(
     () => {
-      new Handlers(import.meta.url, {
+      new Handlers(import.meta.url, { imports: [externalTools] }, {
         duplicateName() {
           console.log("local");
         },
-      }, { imports: [externalTools] });
+      });
     },
     Error,
     "duplicateName",
@@ -530,11 +530,11 @@ Deno.test("Runtime - import() then extend() preserves all handler strings", () =
     },
   });
 
-  const parentTools = new Handlers(import.meta.url, {
+  const parentTools = new Handlers(import.meta.url, { imports: [externalTools] }, {
     parentHandler() {
       console.log("parent");
     },
-  }, { imports: [externalTools] });
+  });
 
   const componentTools = new Handlers(import.meta.url, {
     componentHandler() {

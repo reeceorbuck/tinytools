@@ -35,21 +35,21 @@ export interface NavigationHistoryEntry extends EventTarget {
   getState(): unknown;
 }
 
-export interface NavigateEvent extends Event {
-  readonly navigationType: "reload" | "push" | "replace" | "traverse";
-  readonly destination: NavigationDestination;
-  readonly canIntercept: boolean;
-  readonly userInitiated: boolean;
-  readonly hashChange: boolean;
-  readonly signal: AbortSignal;
-  readonly formData: FormData | null;
-  readonly downloadRequest: string | null;
-  readonly info: unknown;
-  readonly hasUAVisualTransition: boolean;
-  readonly sourceElement: Element | null;
-  intercept(options?: NavigationInterceptOptions): void;
-  scroll(): void;
-}
+// export interface NavigateEvent extends Event {
+//   readonly navigationType: "reload" | "push" | "replace" | "traverse";
+//   readonly destination: NavigationDestination;
+//   readonly canIntercept: boolean;
+//   readonly userInitiated: boolean;
+//   readonly hashChange: boolean;
+//   readonly signal: AbortSignal;
+//   readonly formData: FormData | null;
+//   readonly downloadRequest: string | null;
+//   readonly info: unknown;
+//   readonly hasUAVisualTransition: boolean;
+//   readonly sourceElement: Element | null;
+//   intercept(options?: NavigationInterceptOptions): void;
+//   scroll(): void;
+// }
 
 export interface NavigationDestination {
   readonly url: string;
@@ -60,10 +60,10 @@ export interface NavigationDestination {
   getState(): unknown;
 }
 
-export interface NavigationCurrentEntryChangeEvent extends Event {
-  readonly navigationType?: "reload" | "push" | "replace" | "traverse";
-  readonly from: NavigationHistoryEntry;
-}
+// export interface NavigationCurrentEntryChangeEvent extends Event {
+//   readonly navigationType?: "reload" | "push" | "replace" | "traverse";
+//   readonly from: NavigationHistoryEntry;
+// }
 
 export interface NavigationInterceptHandler {
   (event: NavigateEvent): Promise<void> | void;
@@ -164,14 +164,4 @@ export interface Navigation extends EventTarget {
     committed: Promise<NavigationHistoryEntry>;
     finished: Promise<NavigationHistoryEntry>;
   };
-}
-
-// ============================================================================
-// Invoker Commands API
-// https://open-ui.org/components/invokers.explainer/
-// ============================================================================
-
-export interface CommandEvent extends Event {
-  source: HTMLButtonElement;
-  command: string;
 }

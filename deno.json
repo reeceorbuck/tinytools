@@ -1,7 +1,7 @@
 {
   "name": "@tinytools/hono-tools",
   "description": "A lightweight enhancement layer for Hono web applications. Provides type-safe client functions, scoped styles, and enhanced JSX event handlers. Works with Deno, Bun, and Node.js.",
-  "version": "0.1.28",
+  "version": "0.1.31",
   "license": "MIT",
   "exports": {
     ".": "./mod.ts",
@@ -14,13 +14,13 @@
   },
   "tasks": {
     "build:client": "deno run -A buildClientFiles.ts",
-    "prepublish": "cd .. && deno task bump patch && cd package && deno task build:client && deno publish --allow-slow-types --allow-dirty",
+    "prepublish": "cd .. && deno task bump patch && deno task sync:npm-version && cd package && deno task build:client && deno publish --allow-slow-types --allow-dirty",
     "npm:publish": "deno task build:client && npm publish --access public",
     "test": "deno test --check --allow-env --allow-read --allow-write=./.test-build-output,./.test-client-src,./.test-lazy-rebuild,./public,./.cache --allow-run tests/"
   },
   "imports": {
     "@std/assert": "jsr:@std/assert@^1.0.19",
-    "hono": "jsr:@hono/hono@^4.12.12"
+    "hono": "jsr:@hono/hono@^4.12.23"
   },
   "compilerOptions": {
     "jsx": "react-jsx",

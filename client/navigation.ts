@@ -100,10 +100,14 @@ function getNavigationSourceForm(
 }
 
 function shouldBypassRouteCache(e: NavigateEvent) {
+  // The submitter (source element) takes priority over the form: if it
+  // explicitly sets data-no-cache (to any value), use that. Only fall back to
+  // the form when the submitter has not specified the attribute at all.
   if (
-    e.sourceElement instanceof Element && hasTruthyNoCacheAttr(e.sourceElement)
+    e.sourceElement instanceof Element &&
+    e.sourceElement.hasAttribute("data-no-cache")
   ) {
-    return true;
+    return hasTruthyNoCacheAttr(e.sourceElement);
   }
 
   const sourceForm = getNavigationSourceForm(e.sourceElement);
@@ -249,12 +253,18 @@ navigation.addEventListener(
               (e.sourceElement as HTMLButtonElement)?.form,
             );
             try {
-              const redirectAttr = (e.sourceElement instanceof HTMLFormElement
+              // Submitter (source element) takes priority over the form. Only
+              // fall back to the form's attribute when the submitter has not
+              // specified data-nav-redirect at all.
+              const submitterRedirectAttr =
+                e.sourceElement?.getAttribute("data-nav-redirect") ?? null;
+              const formRedirectAttr = (e.sourceElement instanceof
+                  HTMLFormElement
                 ? e.sourceElement
                 : e.sourceElement && "form" in e.sourceElement
                 ? (e.sourceElement as HTMLInputElement | HTMLButtonElement).form
-                : null)?.getAttribute("data-nav-redirect") ??
-                e.sourceElement?.getAttribute("data-nav-redirect");
+                : null)?.getAttribute("data-nav-redirect") ?? null;
+              const redirectAttr = submitterRedirectAttr ?? formRedirectAttr;
               console.log("Found data-nav-redirect attribute: ", redirectAttr);
               if (redirectAttr === "true") {
                 console.log(

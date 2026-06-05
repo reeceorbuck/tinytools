@@ -1269,11 +1269,11 @@ Deno.test({
     });
 
     // Create a consumer in a different file that imports the external tools
-    const _consumerTools = new Handlers(import.meta.url, {
+    const _consumerTools = new Handlers(import.meta.url, { imports: [sharedTools] }, {
       consumerFunction(this: HTMLElement) {
         console.log("consuming external");
       },
-    }, { imports: [sharedTools] });
+    });
 
     // Build
     await buildForTest({

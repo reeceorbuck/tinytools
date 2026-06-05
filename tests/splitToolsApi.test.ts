@@ -58,12 +58,10 @@ Deno.test({
       },
     });
 
-    const localHandlers = new Handlers("file:///tests/local-handlers.ts", {
+    const localHandlers = new Handlers("file:///tests/local-handlers.ts", { imports: [sharedHandlers], }, {
       localHandler: function () {
         return "local";
       },
-    }, {
-      imports: [sharedHandlers],
     });
 
     const { fn } = await imports(localHandlers);
