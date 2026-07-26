@@ -6,7 +6,7 @@
 
 /// <reference lib="dom" />
 
-import type { HandlerProxy } from "./eventHandlers.ts";
+import type { GlobalPlusHandlers } from "./eventHandlers.ts";
 
 /**
  * Extracts the handler name from an attribute value.
@@ -65,7 +65,10 @@ customElements.define(
           `[lifecycle-element] Calling mount handler "${mountHandler}"`,
         );
         console.log("this: ", this.firstChild);
-        (globalThis.handlers as HandlerProxy)[mountHandler].call(this, this);
+        (globalThis as GlobalPlusHandlers).handlers[mountHandler].call(
+          this,
+          this,
+        );
       }
     }
 
@@ -77,7 +80,10 @@ customElements.define(
         console.log(
           `[lifecycle-element] Calling unmount handler "${unmountHandler}"`,
         );
-        (globalThis.handlers as HandlerProxy)[unmountHandler].call(this, this);
+        (globalThis as GlobalPlusHandlers).handlers[unmountHandler].call(
+          this,
+          this,
+        );
       }
       this.setAttribute("mounted", "false");
     }

@@ -6,7 +6,7 @@
 
 /// <reference lib="dom" />
 
-import type { HandlerProxy } from "./eventHandlers.ts";
+import type { GlobalPlusHandlers } from "./eventHandlers.ts";
 
 /** Local typed reference to `globalThis.navigation` (Navigation API).
  * Inlined to avoid importing from another module at runtime. */
@@ -163,7 +163,7 @@ customElements.define(
         (event: Event) => {
           // Call handler for each captured child element
           for (const element of targetElements) {
-            (globalThis.handlers as HandlerProxy)[handlerName].call(
+            (globalThis as GlobalPlusHandlers).handlers[handlerName].call(
               element,
               event,
             );

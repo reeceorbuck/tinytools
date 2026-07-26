@@ -6,7 +6,6 @@
 
 import { processIncomingData } from "./processIncomingData.ts";
 import { getActiveRouteCachePath } from "./routeCache.ts";
-import { navigation } from "./navigationApi.ts";
 
 /** Tracks in-flight GET requests per pathname so rapid-fire calls abort stale ones. */
 const inflightGetRequests = new Map<string, AbortController>();

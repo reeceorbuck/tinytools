@@ -5,9 +5,6 @@
  * Currently disabled by default - can be enabled for automatic handler cleanup.
  */
 
-import type { HandlerProxy } from "./eventHandlers.ts";
-import { navigation } from "./navigationApi.ts";
-
 interface SymbolIndexedElement extends Element {
   [key: symbol]: AbortController | undefined;
 }

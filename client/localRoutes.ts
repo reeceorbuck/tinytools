@@ -13,7 +13,6 @@ import {
   markLocalTemplateContent,
   SPA_REDIRECT_ATTR,
 } from "./routeCache.ts";
-import { navigation } from "./navigationApi.ts";
 
 type QueryCondition = {
   key: string;

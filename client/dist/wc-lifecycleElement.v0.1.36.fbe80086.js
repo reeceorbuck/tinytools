@@ -33,7 +33,10 @@ customElements.define(
           `[lifecycle-element] Calling mount handler "${mountHandler}"`
         );
         console.log("this: ", this.firstChild);
-        globalThis.handlers[mountHandler].call(this, this);
+        globalThis.handlers[mountHandler].call(
+          this,
+          this
+        );
       }
     }
     disconnectedCallback() {
@@ -43,7 +46,10 @@ customElements.define(
         console.log(
           `[lifecycle-element] Calling unmount handler "${unmountHandler}"`
         );
-        globalThis.handlers[unmountHandler].call(this, this);
+        globalThis.handlers[unmountHandler].call(
+          this,
+          this
+        );
       }
       this.setAttribute("mounted", "false");
     }

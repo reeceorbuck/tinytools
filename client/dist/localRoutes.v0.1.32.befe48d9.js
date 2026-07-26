@@ -7,7 +7,6 @@ import {
   markLocalTemplateContent,
   SPA_REDIRECT_ATTR
 } from "./routeCache.v0.1.24.4c2b30e3.js";
-import { navigation } from "./navigationApi.v0.1.26.2ec47448.js";
 function parseQueryPattern(queryPattern) {
   const trimmed = queryPattern.trim();
   if (trimmed === "" || trimmed.toLowerCase() === "none") {

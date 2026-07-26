@@ -10,8 +10,6 @@ import {
   getActiveRouteCachePath,
   incrementNavGeneration,
 } from "./routeCache.ts";
-import type { NavigateEvent } from "../globals.d.ts";
-import { navigation } from "./navigationApi.ts";
 
 interface NavigationClientInfo {
   blockIntercept?: boolean;
@@ -203,56 +201,57 @@ navigation.addEventListener(
         focusReset: "manual",
         // deno-lint-ignore require-await
         async precommitHandler(controller) {
-          if (e.navigationType === "push") {
-            // This is where we can modify the URL in the address bar, to either keep as is for a POST form submission,
-            // or to clean up additional get query params that were only needed for the fetch
+          try {
+            if (e.navigationType === "push") {
+              // This is where we can modify the URL in the address bar, to either keep as is for a POST form submission,
+              // or to clean up additional get query params that were only needed for the fetch
 
-            // We are going to preserve the query params as state
-            // const currentParams = fromUrl.searchParams;
+              // We are going to preserve the query params as state
+              // const currentParams = fromUrl.searchParams;
 
-            // console.log(
-            //   "toUrl params before cleaning: ",
-            //   toUrl.searchParams.toString(),
-            // );
+              // console.log(
+              //   "toUrl params before cleaning: ",
+              //   toUrl.searchParams.toString(),
+              // );
 
-            // currentParams.forEach((value, key) => {
-            //   if (toUrl.searchParams.get(key) === null) {
-            //     toUrl.searchParams.set(key, value);
-            //   }
-            // });
-            // Dont clean if its a partial navigation
+              // currentParams.forEach((value, key) => {
+              //   if (toUrl.searchParams.get(key) === null) {
+              //     toUrl.searchParams.set(key, value);
+              //   }
+              // });
+              // Dont clean if its a partial navigation
 
-            try {
-              let cleaned = false;
+              try {
+                let cleaned = false;
 
-              const cleanUrl = new URL(toUrl);
-              [...cleanUrl.searchParams].forEach(([key, value]) => {
-                console.log("Checking param for cleaning: ", key, value);
-                if (value === "") {
-                  console.log("Removing empty param: ", key);
-                  cleanUrl.searchParams.delete(key);
-                  cleaned = true;
+                const cleanUrl = new URL(toUrl);
+                [...cleanUrl.searchParams].forEach(([key, value]) => {
+                  console.log("Checking param for cleaning: ", key, value);
+                  if (value === "") {
+                    console.log("Removing empty param: ", key);
+                    cleanUrl.searchParams.delete(key);
+                    cleaned = true;
+                  }
+                });
+                if (cleaned) {
+                  console.log("Cleaned URL: ", cleanUrl.href);
+                  displayUrl = cleanUrl;
+                  controller.redirect(displayUrl.href);
                 }
-              });
-              if (cleaned) {
-                console.log("Cleaned URL: ", cleanUrl.href);
-                displayUrl = cleanUrl;
-                controller.redirect(displayUrl.href);
+              } catch (err) {
+                console.error("Error cleaning URL: ", err);
               }
-            } catch (err) {
-              console.error("Error cleaning URL: ", err);
-            }
 
-            // Should be an attribute on the form, or the link, to indicate what to do here
-            console.log(
-              "In precommitHandler for navigation to: ",
-              e.destination.url,
-            );
-            console.log(
-              "e.sourceElement: ",
-              (e.sourceElement as HTMLButtonElement)?.form,
-            );
-            try {
+              // Should be an attribute on the form, or the link, to indicate what to do here
+              console.log(
+                "In precommitHandler for navigation to: ",
+                e.destination.url,
+              );
+              console.log(
+                "e.sourceElement: ",
+                (e.sourceElement as HTMLButtonElement)?.form,
+              );
+
               // Submitter (source element) takes priority over the form. Only
               // fall back to the form's attribute when the submitter has not
               // specified data-nav-redirect at all.
@@ -286,11 +285,11 @@ navigation.addEventListener(
                   toUrl.href,
                 );
               }
-            } catch (err) {
-              console.error("Error in pre-commit handler: ", err);
             }
+            setVariablesFromUrl(fromUrl, displayUrl);
+          } catch (err) {
+            console.error("Error in pre-commit handler: ", err);
           }
-          setVariablesFromUrl(fromUrl, displayUrl);
         },
 
         async handler() {
@@ -357,23 +356,13 @@ navigation.addEventListener(
       });
     } catch (err) {
       console.error("Error handling navigation event: ", err);
-      e.preventDefault();
+      // Going to allow the navigation to proceed as if Navigation API is not supported if there is an error in the handler
+      // Right now Safari doesnt support precommitHandler, so this is a workaround for that,
+      // But it will also suppress obvious other errors so need to be careful about that
+      // e.preventDefault();
     }
   },
 );
-
-// MOVED inside precommit handler to run earlier
-// navigation.addEventListener(
-//   "currententrychange",
-//   (e: NavigationCurrentEntryChangeEvent) => {
-//     console.log("Navigation current entry change event fired");
-//     const toUrl = new URL(globalThis.navigation.currentEntry?.url!);
-//     const fromUrl = new URL(e.from.url!);
-
-//     setVariablesFromUrl(fromUrl, toUrl);
-
-//   },
-// );
 
 function setVariablesFromUrl(fromUrl: URL, toUrl: URL) {
   const fromSplitPath = fromUrl.pathname.split("/").filter(Boolean);

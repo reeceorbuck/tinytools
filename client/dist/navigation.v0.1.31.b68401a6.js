@@ -1,10 +1,9 @@
-import { processLocalSuspenseTemplates } from "./localRoutes.v0.1.26.d6971983.js";
-import performFetchAndUpdate from "./performFetchAndUpdate.v0.1.26.cd6b0ef3.js";
+import { processLocalSuspenseTemplates } from "./localRoutes.v0.1.32.befe48d9.js";
+import performFetchAndUpdate from "./performFetchAndUpdate.v0.1.32.7886b66a.js";
 import {
   getActiveRouteCachePath,
   incrementNavGeneration
 } from "./routeCache.v0.1.24.4c2b30e3.js";
-import { navigation } from "./navigationApi.v0.1.26.2ec47448.js";
 function getNavigationClientInfo(e) {
   if (!e.info || typeof e.info !== "object") {
     return null;
@@ -110,35 +109,35 @@ navigation.addEventListener(
         focusReset: "manual",
         // deno-lint-ignore require-await
         async precommitHandler(controller) {
-          if (e.navigationType === "push") {
-            try {
-              let cleaned = false;
-              const cleanUrl = new URL(toUrl);
-              [...cleanUrl.searchParams].forEach(([key, value]) => {
-                console.log("Checking param for cleaning: ", key, value);
-                if (value === "") {
-                  console.log("Removing empty param: ", key);
-                  cleanUrl.searchParams.delete(key);
-                  cleaned = true;
+          try {
+            if (e.navigationType === "push") {
+              try {
+                let cleaned = false;
+                const cleanUrl = new URL(toUrl);
+                [...cleanUrl.searchParams].forEach(([key, value]) => {
+                  console.log("Checking param for cleaning: ", key, value);
+                  if (value === "") {
+                    console.log("Removing empty param: ", key);
+                    cleanUrl.searchParams.delete(key);
+                    cleaned = true;
+                  }
+                });
+                if (cleaned) {
+                  console.log("Cleaned URL: ", cleanUrl.href);
+                  displayUrl = cleanUrl;
+                  controller.redirect(displayUrl.href);
                 }
-              });
-              if (cleaned) {
-                console.log("Cleaned URL: ", cleanUrl.href);
-                displayUrl = cleanUrl;
-                controller.redirect(displayUrl.href);
+              } catch (err) {
+                console.error("Error cleaning URL: ", err);
               }
-            } catch (err) {
-              console.error("Error cleaning URL: ", err);
-            }
-            console.log(
-              "In precommitHandler for navigation to: ",
-              e.destination.url
-            );
-            console.log(
-              "e.sourceElement: ",
-              e.sourceElement?.form
-            );
-            try {
+              console.log(
+                "In precommitHandler for navigation to: ",
+                e.destination.url
+              );
+              console.log(
+                "e.sourceElement: ",
+                e.sourceElement?.form
+              );
               const submitterRedirectAttr = e.sourceElement?.getAttribute("data-nav-redirect") ?? null;
               const formRedirectAttr = (e.sourceElement instanceof HTMLFormElement ? e.sourceElement : e.sourceElement && "form" in e.sourceElement ? e.sourceElement.form : null)?.getAttribute("data-nav-redirect") ?? null;
               const redirectAttr = submitterRedirectAttr ?? formRedirectAttr;
@@ -162,11 +161,11 @@ navigation.addEventListener(
                   toUrl.href
                 );
               }
-            } catch (err) {
-              console.error("Error in pre-commit handler: ", err);
             }
+            setVariablesFromUrl(fromUrl, displayUrl);
+          } catch (err) {
+            console.error("Error in pre-commit handler: ", err);
           }
-          setVariablesFromUrl(fromUrl, displayUrl);
         },
         async handler() {
           try {
@@ -225,7 +224,6 @@ navigation.addEventListener(
       });
     } catch (err) {
       console.error("Error handling navigation event: ", err);
-      e.preventDefault();
     }
   }
 );

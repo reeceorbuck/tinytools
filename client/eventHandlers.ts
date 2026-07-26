@@ -7,39 +7,45 @@
 
 /// <reference lib="dom" />
 
-export type HandlerProxy = {
+type HandlerProxy = {
   // deno-lint-ignore no-explicit-any
-  [key: string]: (...args: any[]) => void | Promise<void>;
+  [key: string]: (...args: any[]) => unknown;
+};
+
+export type GlobalPlusHandlers = Omit<typeof globalThis, "handlers"> & {
+  handlers: HandlerProxy;
 };
 
 const basePath = "/handlers";
 
-(globalThis as unknown as { handlers: HandlerProxy }).handlers = new Proxy<
-  HandlerProxy
->({} as HandlerProxy, {
-  get(target, prop, receiver) {
-    if (prop in target) {
-      return Reflect.get(target, prop, receiver);
-    }
-    if (typeof prop === "symbol") {
-      return undefined;
-    }
-    const callFunctionName = prop.toString();
-    console.warn(
-      `Handler function "${callFunctionName}" not found in handlers proxy, importing...`,
-    );
-    const scriptContent = import(
-      `${basePath}/${callFunctionName}.js`
-    ).then(({ default: scriptContent }) => {
-      console.warn(`Handler function "${callFunctionName}" imported on use.`);
-      (globalThis.handlers as HandlerProxy)[callFunctionName] = scriptContent;
-      return scriptContent;
-    });
+(globalThis as GlobalPlusHandlers).handlers = new Proxy<HandlerProxy>(
+  {} as HandlerProxy,
+  {
+    get(target, prop, receiver) {
+      if (prop in target) {
+        return Reflect.get(target, prop, receiver);
+      }
+      if (typeof prop === "symbol") {
+        return undefined;
+      }
+      const callFunctionName = prop.toString();
+      console.warn(
+        `Handler function "${callFunctionName}" not found in handlers proxy, importing...`,
+      );
+      const scriptContent = import(
+        `${basePath}/${callFunctionName}.js`
+      ).then(({ default: scriptContent }) => {
+        console.warn(`Handler function "${callFunctionName}" imported on use.`);
+        (globalThis as GlobalPlusHandlers).handlers[callFunctionName] =
+          scriptContent;
+        return scriptContent;
+      });
 
-    // deno-lint-ignore no-explicit-any
-    return async function (this: any, ...args: any[]) {
-      const scriptFunction = await scriptContent;
-      return scriptFunction.call(this, ...args);
-    };
+      // deno-lint-ignore no-explicit-any
+      return async function (this: any, ...args: any[]) {
+        const scriptFunction = await scriptContent;
+        return scriptFunction.call(this, ...args);
+      };
+    },
   },
-});
+);
