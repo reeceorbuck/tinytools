@@ -12,6 +12,7 @@ import type { BlankEnv, Env } from "hono/types";
 import type { HonoOptions } from "hono/hono-base";
 import type { Context, MiddlewareHandler } from "hono";
 import { HTTPException } from "hono/http-exception";
+import { raw } from "hono/html";
 import type { Child } from "hono/jsx";
 import {
   contextStorage,
@@ -29,6 +30,7 @@ import {
   Styles,
   type ToolResolutionTarget,
 } from "./clientTools.ts";
+import { getContextTitle } from "./titled.ts";
 import type { ActivateClientFunctions } from "./jsx-runtime.ts";
 import { type ActivateScopedStyles, css } from "./scopedStyles.ts";
 import { jsxRenderer } from "hono/jsx-renderer";
@@ -346,9 +348,9 @@ function createSharedImportsMiddleware<
 >(
   ...tools: TTools
 ): MiddlewareHandler<{ Variables: { tools: CombinedTools<TTools> } }>;
-// deno-lint-ignore no-explicit-any
 function createSharedImportsMiddleware(
   ...tools: AnyClientTools[]
+  // deno-lint-ignore no-explicit-any
 ): MiddlewareHandler<any> {
   return async (c, next) => {
     if (tools.length > 0) {
@@ -361,9 +363,9 @@ function createSharedImportsMiddleware(
         ),
       );
       const currentTools = c.var.tools as BaseTools;
-      // deno-lint-ignore no-explicit-any
       c.set(
         "tools",
+        // deno-lint-ignore no-explicit-any
         await currentTools.extendWithImports(...toolsToExtend) as any,
       );
     }
@@ -725,6 +727,21 @@ function createToolsMiddleware(): MiddlewareHandler {
   };
 }
 
+async function resolveRendererChildren(children: Child) {
+  try {
+    const resolved = await children;
+    return resolved == null || typeof resolved === "boolean"
+      ? ""
+      : await resolved.toString();
+  } catch (error) {
+    if (error instanceof Promise) {
+      await error;
+      return resolveRendererChildren(children);
+    }
+    throw error;
+  }
+}
+
 /**
  * Middleware that serves pre-built package client JS files from /_tinytools/*.
  * Resolves files via import.meta.resolve so it works for both local and JSR.
@@ -762,8 +779,9 @@ function servePackageClientFiles(): MiddlewareHandler {
  * Tries hono/deno, hono/bun, then @hono/node-server in order.
  * @internal
  */
-// deno-lint-ignore no-explicit-any
+
 async function detectServeStatic(): Promise<
+  // deno-lint-ignore no-explicit-any
   (options: any) => MiddlewareHandler
 > {
   try {
@@ -931,19 +949,42 @@ function createCoreMiddleware(
     createToolsMiddleware(),
     // JSX renderer with AssetTags (features are read from context by AssetTags)
     jsxRenderer(async (
+      // deno-lint-ignore no-explicit-any
       { children, title }: any,
       c,
     ) => {
+      title ??= getContextTitle(c);
       const routeLayoutApplied = c.get(ROUTE_LAYOUT_APPLIED_KEY) === true;
 
       // Await children so route/layout rendering populates tool tracking sets
       // for AssetTags to read. Re-wrap as Promise to preserve streaming callbacks
       // (childrenToStringToBuffer drops .callbacks via string concat for isEscaped
       // strings, but preserves them through the Promise/async path).
-      const evaluatedBody = await children;
-      const body = evaluatedBody?.callbacks?.length
-        ? Promise.resolve(evaluatedBody)
-        : evaluatedBody;
+      const evaluatedChildren = await children;
+      const evaluatedBody = await resolveRendererChildren(evaluatedChildren);
+      const callbackChildren = evaluatedChildren as string & {
+        callbacks?: Parameters<typeof raw>[1];
+      };
+      const callbackBody = evaluatedBody as string & {
+        callbacks?: Parameters<typeof raw>[1];
+      };
+      const callbacks = Array.from(
+        new Set([
+          ...(callbackChildren.callbacks ?? []),
+          ...(callbackBody.callbacks ?? []),
+        ]),
+      );
+      const escapedBody = raw(callbackBody, callbacks);
+      const body = callbacks.length
+        ? Promise.resolve(escapedBody)
+        : escapedBody;
+
+      const accessedHandlerFiles = c.get("accessedHandlerFiles") as Set<string>;
+      const accessedStyleFiles = c.get("accessedStyleFiles") as Set<string>;
+      const handlerFiles = Array.from(accessedHandlerFiles);
+      const styleFiles = Array.from(accessedStyleFiles);
+      accessedHandlerFiles.clear();
+      accessedStyleFiles.clear();
 
       const sourceUrl = c.req.header("source-url");
       if (sourceUrl) {
@@ -951,7 +992,12 @@ function createCoreMiddleware(
           <update>
             <template>
               <head-update>
-                <AssetTags fullPageLoad={false} />
+                {title !== undefined && <title>{title}</title>}
+                <AssetTags
+                  accessedHandlerFiles={handlerFiles}
+                  accessedStyleFiles={styleFiles}
+                  fullPageLoad={false}
+                />
               </head-update>
               <body-update>{body}</body-update>
             </template>
@@ -978,7 +1024,10 @@ function createCoreMiddleware(
             <style>
               @layer global, unscoped, limited, normal, important, debug;
             </style>
-            <AssetTags />
+            <AssetTags
+              accessedHandlerFiles={handlerFiles}
+              accessedStyleFiles={styleFiles}
+            />
           </head>
           {routeLayoutApplied ? body : <body>{body}</body>}
         </html>
@@ -1096,7 +1145,38 @@ class TinyHono<E extends Env = BlankEnv> extends HonoBase<E> {
   }
 }
 
-export const tiny = {
+/** Public API exposed by the `tiny` singleton. */
+export type TinyApi = {
+  readonly Hono: typeof TinyHono;
+  readonly Handlers: typeof Handlers;
+  readonly Styles: typeof Styles;
+  readonly css: typeof css;
+  readonly imports: typeof importTools;
+  readonly middleware: {
+    readonly core: (options?: ClientToolsOptions) => MiddlewareHandler[];
+    readonly sharedImports: typeof createSharedImportsMiddleware;
+    readonly globalStyles: (
+      ...styles: { filename: string }[]
+    ) => MiddlewareHandler;
+    readonly navApiTools: (
+      options?: NavApiToolsOptions,
+    ) => MiddlewareHandler;
+    readonly sseTools: (options?: SseToolsOptions) => MiddlewareHandler;
+    readonly localRoutes: (
+      options?: LocalRoutesOptions,
+    ) => MiddlewareHandler;
+    readonly webComponents: (
+      options?: WebComponentsOptions,
+    ) => MiddlewareHandler;
+    readonly layout: typeof addRouteLayout;
+    readonly all: (options?: ClientToolsOptions) => MiddlewareHandler[];
+  };
+  readonly build: (
+    options?: import("./build.ts").BuildOptions,
+  ) => Promise<void>;
+};
+
+export const tiny: TinyApi = {
   Hono: TinyHono,
   Handlers,
   Styles,

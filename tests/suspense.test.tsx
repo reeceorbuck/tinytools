@@ -12,15 +12,20 @@
 
 /// <reference lib="dom" />
 
-import {
-  assert,
-  assertEquals,
-  assertStringIncludes,
-} from "@std/assert";
+import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { Hono } from "hono";
-import { tiny, addRouteLayout } from "../honoFactory.tsx";
+import { addRouteLayout, tiny } from "../honoFactory.tsx";
 import { Suspense } from "../components/Suspense.tsx";
-import type { FC, Child } from "hono/jsx";
+import type { Child, FC } from "hono/jsx";
+
+declare module "hono" {
+  interface ContextRenderer {
+    (
+      content: string | Promise<string>,
+      props?: { title?: string },
+    ): Response | Promise<Response>;
+  }
+}
 
 // ============================================================================
 // Helpers
@@ -54,6 +59,10 @@ const SlowContent: FC<{ delay?: number; content: string }> = async ({
   return <div class="resolved">{content}</div>;
 };
 
+const SlowList: FC<{ items: string[] }> = async ({ items }) => {
+  return <>{items.map((item) => <SlowContent content={item} delay={10} />)}</>;
+};
+
 /** Sync component */
 const SyncContent: FC<{ content: string }> = ({ content }) => {
   return <div class="sync">{content}</div>;
@@ -81,14 +90,16 @@ Deno.test("Suspense - streams fallback then resolved async content", async () =>
         <Suspense fallback={<div>Loading...</div>}>
           <SlowContent content="Hello World" delay={50} />
         </Suspense>,
-      )
-    );
+      ));
 
   const res = await app.request("/");
   assertEquals(res.status, 200);
 
   const chunks = await collectChunks(res);
-  assert(chunks.length >= 2, `Expected at least 2 chunks, got ${chunks.length}`);
+  assert(
+    chunks.length >= 2,
+    `Expected at least 2 chunks, got ${chunks.length}`,
+  );
 
   // First chunk contains the fallback
   assertStringIncludes(chunks[0], "suspended-");
@@ -109,8 +120,7 @@ Deno.test("Suspense - sync children render inline without streaming", async () =
         <Suspense fallback={<div>Loading...</div>}>
           <SyncContent content="Immediate" />
         </Suspense>,
-      )
-    );
+      ));
 
   const res = await app.request("/");
   assertEquals(res.status, 200);
@@ -120,7 +130,10 @@ Deno.test("Suspense - sync children render inline without streaming", async () =
   assertStringIncludes(body, "Immediate");
   assertStringIncludes(body, "sync");
   // Should NOT contain update/streaming markers
-  assert(!body.includes("<update"), "Sync children should not produce streaming updates");
+  assert(
+    !body.includes("<update"),
+    "Sync children should not produce streaming updates",
+  );
 });
 
 Deno.test("Suspense - multiple Suspense components stream independently", async () => {
@@ -136,8 +149,7 @@ Deno.test("Suspense - multiple Suspense components stream independently", async 
             <SlowContent content="Content B" delay={60} />
           </Suspense>
         </>,
-      )
-    );
+      ));
 
   const res = await app.request("/");
   assertEquals(res.status, 200);
@@ -148,7 +160,10 @@ Deno.test("Suspense - multiple Suspense components stream independently", async 
 
   // Both should have streaming update markers
   const updateCount = (body.match(/<update /g) || []).length;
-  assert(updateCount >= 2, `Expected at least 2 <update> tags, got ${updateCount}`);
+  assert(
+    updateCount >= 2,
+    `Expected at least 2 <update> tags, got ${updateCount}`,
+  );
 });
 
 Deno.test("Suspense - callbacks survive core jsxRenderer await+rewrap", async () => {
@@ -163,8 +178,7 @@ Deno.test("Suspense - callbacks survive core jsxRenderer await+rewrap", async ()
         <Suspense fallback={<p>Wait...</p>}>
           <SlowContent content="Streamed after await" delay={30} />
         </Suspense>,
-      )
-    );
+      ));
 
   const res = await app.request("/");
   const chunks = await collectChunks(res);
@@ -173,7 +187,7 @@ Deno.test("Suspense - callbacks survive core jsxRenderer await+rewrap", async ()
   assert(
     chunks.length >= 2,
     `Callbacks lost: expected >=2 chunks but got ${chunks.length}. ` +
-    `If only 1 chunk, the streaming callbacks were dropped by childrenToStringToBuffer.`,
+      `If only 1 chunk, the streaming callbacks were dropped by childrenToStringToBuffer.`,
   );
 
   const laterContent = chunks.slice(1).join("");
@@ -183,22 +197,22 @@ Deno.test("Suspense - callbacks survive core jsxRenderer await+rewrap", async ()
 Deno.test("Suspense - works inside route layout", async () => {
   const app = new Hono()
     .use(...tiny.middleware.core())
-    .use(addRouteLayout(({ children }) => (
-      <TestLayout>{children}</TestLayout>
-    )))
+    .use(addRouteLayout(({ children }) => <TestLayout>{children}</TestLayout>))
     .get("/", (c) =>
       c.render(
         <Suspense fallback={<div>Layout loading...</div>}>
           <SlowContent content="Layout resolved" delay={30} />
         </Suspense>,
-      )
-    );
+      ));
 
   const res = await app.request("/");
   assertEquals(res.status, 200);
 
   const chunks = await collectChunks(res);
-  assert(chunks.length >= 2, `Expected streaming with layout, got ${chunks.length} chunks`);
+  assert(
+    chunks.length >= 2,
+    `Expected streaming with layout, got ${chunks.length} chunks`,
+  );
 
   const body = chunks.join("");
   // Layout wrapper should be present
@@ -216,8 +230,8 @@ Deno.test("Suspense - partial navigation returns update without full page shell"
         <Suspense fallback={<div>Loading...</div>}>
           <SlowContent content="Partial content" delay={30} />
         </Suspense>,
-      )
-    );
+        { title: "Partial page title" },
+      ));
 
   const req = new Request("http://localhost/", {
     headers: { "source-url": "/previous" },
@@ -229,16 +243,109 @@ Deno.test("Suspense - partial navigation returns update without full page shell"
   // Partial navigation wraps in <update><template>...
   assertStringIncludes(body, "<update>");
   assertStringIncludes(body, "<head-update>");
+  assertStringIncludes(
+    body,
+    "<head-update><title>Partial page title</title>",
+  );
   assertStringIncludes(body, "<body-update>");
+  const bodyUpdate = body.slice(body.indexOf("<body-update>"));
+  assert(
+    !bodyUpdate.includes("<title>"),
+    "Partial title must not be emitted in body-update",
+  );
   // Should NOT contain the full <html><head><body> shell
   assert(!body.includes("<html"), "Partial nav should not have html element");
+});
+
+Deno.test("core renderer preserves pre-resolved Suspense callbacks", async () => {
+  const app = new Hono()
+    .use(...tiny.middleware.core())
+    .get("/", async (c) => {
+      const suspended = await Suspense({
+        fallback: <div>Loading...</div>,
+        children: <SlowList items={["Confirmation one", "Confirmation two"]} />,
+      });
+      return c.render(suspended);
+    });
+
+  const res = await app.request(
+    new Request("http://localhost/", {
+      headers: { "source-url": "/communicator/confirmations/previous" },
+    }),
+  );
+  assertEquals(res.status, 200);
+
+  const chunks = await collectChunks(res);
+  assert(
+    chunks.length >= 2,
+    `Expected partial Suspense completion chunk, got ${chunks.length}`,
+  );
+  assertStringIncludes(chunks[0], "Loading...");
+  assertStringIncludes(chunks.slice(1).join(""), "Confirmation one");
+  assertStringIncludes(chunks.slice(1).join(""), "Confirmation two");
+});
+
+Deno.test("partial navigation emits styles used by async components", async () => {
+  const partialStyles = new tiny.Styles(import.meta.url, {
+    partialPanel: tiny.css`
+      display: grid;
+    `,
+  });
+
+  const StyledPartial = async () => {
+    const { c, styled } = await tiny.imports(partialStyles);
+    const className = styled.partialPanel;
+    const accessedStyles = c.get("accessedStyleFiles") as Set<string>;
+    assert(
+      accessedStyles.size > 0,
+      "Style access should reach request tracking",
+    );
+    return <div class={className}>Styled partial</div>;
+  };
+
+  const app = new Hono()
+    .use(...tiny.middleware.core())
+    .get("/", (c) => c.render(<StyledPartial />));
+
+  const res = await app.request(
+    new Request("http://localhost/", {
+      headers: { "source-url": "/previous" },
+    }),
+  );
+  assertEquals(res.status, 200);
+
+  const body = await fullBody(res);
+  assertStringIncludes(body, "Styled partial");
+  assertStringIncludes(body, 'rel="stylesheet"');
+  assertStringIncludes(body, "/styles/");
+});
+
+Deno.test("partial navigation without a title omits the title update", async () => {
+  const app = new Hono()
+    .use(...tiny.middleware.core())
+    .get("/", (c) => c.render(<div>Untitled partial content</div>));
+
+  const res = await app.request(
+    new Request("http://localhost/", {
+      headers: { "source-url": "/previous" },
+    }),
+  );
+  assertEquals(res.status, 200);
+
+  const body = await fullBody(res);
+  assertStringIncludes(body, "<head-update>");
+  assert(
+    !body.includes("<title>"),
+    "A title-less partial must preserve the current document title",
+  );
 });
 
 Deno.test("Async component - renders without Suspense wrapper", async () => {
   const app = new Hono()
     .use(...tiny.middleware.core())
-    .get("/", (c) =>
-      c.render(<SlowContent content="Direct async" delay={10} />)
+    .get(
+      "/",
+      (c) => c.render(<SlowContent content="Direct async" delay={10} />),
     );
 
   const res = await app.request("/");
@@ -246,15 +353,13 @@ Deno.test("Async component - renders without Suspense wrapper", async () => {
 
   const body = await fullBody(res);
   assertStringIncludes(body, "Direct async");
-  assertStringIncludes(body, "resolved");
+  assertStringIncludes(body, '<div class="resolved">Direct async</div>');
 });
 
 Deno.test("Async component - full page has html structure", async () => {
   const app = new Hono()
     .use(...tiny.middleware.core())
-    .get("/", (c) =>
-      c.render(<SlowContent content="Structured" delay={10} />)
-    );
+    .get("/", (c) => c.render(<SlowContent content="Structured" delay={10} />));
 
   const res = await app.request("/");
   const body = await fullBody(res);

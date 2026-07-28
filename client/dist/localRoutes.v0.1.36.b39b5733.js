@@ -1,4 +1,4 @@
-import { processIncomingHtml } from "./processIncomingHtml.v0.1.28.318595ac.js";
+import { processIncomingHtml } from "./processIncomingHtml.v0.1.36.958bb7d0.js";
 import {
   getCachedRouteTemplate,
   getOrderedLocalRouteTemplates,
@@ -6,7 +6,7 @@ import {
   isRuntimeCachedRouteTemplate,
   markLocalTemplateContent,
   SPA_REDIRECT_ATTR
-} from "./routeCache.v0.1.24.4c2b30e3.js";
+} from "./routeCache.v0.1.36.b659a4ec.js";
 function parseQueryPattern(queryPattern) {
   const trimmed = queryPattern.trim();
   if (trimmed === "" || trimmed.toLowerCase() === "none") {

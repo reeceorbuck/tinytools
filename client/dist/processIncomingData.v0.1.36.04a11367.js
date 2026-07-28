@@ -1,4 +1,4 @@
-import { processIncomingHtml } from "./processIncomingHtml.v0.1.28.318595ac.js";
+import { processIncomingHtml } from "./processIncomingHtml.v0.1.36.958bb7d0.js";
 function activateScripts(container) {
   const scripts = container.querySelectorAll("script");
   scripts.forEach((script) => {
@@ -45,6 +45,10 @@ async function processIncomingData(response, options = {}) {
         if (head) {
           const headChildren = Array.from(head.children);
           await Promise.all(headChildren.map((child) => {
+            if (child.tagName === "TITLE") {
+              globalThis.document.title = child.textContent ?? "";
+              return;
+            }
             if (child instanceof HTMLScriptElement && child.src) {
               const srcAttr = child.getAttribute("src");
               const exists = globalThis.document.head.querySelector(

@@ -1,9 +1,9 @@
-import { processLocalSuspenseTemplates } from "./localRoutes.v0.1.32.befe48d9.js";
-import performFetchAndUpdate from "./performFetchAndUpdate.v0.1.32.7886b66a.js";
+import { processLocalSuspenseTemplates } from "./localRoutes.v0.1.36.b39b5733.js";
+import performFetchAndUpdate from "./performFetchAndUpdate.v0.1.36.a50aaeab.js";
 import {
   getActiveRouteCachePath,
   incrementNavGeneration
-} from "./routeCache.v0.1.24.4c2b30e3.js";
+} from "./routeCache.v0.1.36.b659a4ec.js";
 function getNavigationClientInfo(e) {
   if (!e.info || typeof e.info !== "object") {
     return null;

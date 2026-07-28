@@ -93,6 +93,11 @@ export async function processIncomingData(
         if (head) {
           const headChildren = Array.from(head.children);
           await Promise.all(headChildren.map((child) => {
+            if (child.tagName === "TITLE") {
+              globalThis.document.title = child.textContent ?? "";
+              return;
+            }
+
             // Check if the element already exists in the head
             if (child instanceof HTMLScriptElement && child.src) {
               const srcAttr = child.getAttribute("src");

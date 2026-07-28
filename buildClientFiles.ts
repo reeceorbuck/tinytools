@@ -29,6 +29,27 @@ async function computeContentHash(content: string): Promise<string> {
     .slice(0, 8);
 }
 
+export async function computeClientOutputHashes(
+  entries: ReadonlyArray<{ logicalName: string; code: string }>,
+): Promise<{ buildHash: string; outputHashes: Map<string, string> }> {
+  const sortedEntries = [...entries].sort((left, right) =>
+    left.logicalName.localeCompare(right.logicalName)
+  );
+  const sourceHashes = await Promise.all(
+    sortedEntries.map((entry) => computeContentHash(entry.code)),
+  );
+  const buildHash = await computeContentHash(sourceHashes.join("\0"));
+  const outputHashes = new Map(
+    await Promise.all(sortedEntries.map(async (entry) =>
+      [
+        entry.logicalName,
+        await computeContentHash(`${entry.code}\0${buildHash}`),
+      ] as const
+    )),
+  );
+  return { buildHash, outputHashes };
+}
+
 function parseContentHashFromOutName(outName: string): string | null {
   const match = outName.match(/\.([a-f0-9]{8})\.js$/);
   return match ? match[1] : null;
@@ -98,9 +119,10 @@ export async function buildPackageClientFiles(): Promise<void> {
     left.logicalName.localeCompare(right.logicalName)
   );
 
-  // Transpile all files and compute per-file content hashes
+  // Transpile all files before hashing. Every output hash includes the full
+  // source graph hash because import rewriting embeds dependency filenames.
   const esbuild = await getEsbuild();
-  const transpiledEntries = await Promise.all(
+  const transpiledEntriesWithoutHashes = await Promise.all(
     sourceEntries.map(async (entry) => {
       const result = await esbuild.transform(entry.sourceCode, {
         loader: entry.loader,
@@ -113,10 +135,20 @@ export async function buildPackageClientFiles(): Promise<void> {
         /(from\s+["'])([^"']+)(\.tsx?)(["'])/g,
         "$1$2.js$4",
       );
-      const contentHash = await computeContentHash(preRewriteCode);
-      return { ...entry, transpiledCode: preRewriteCode, contentHash };
+      return { ...entry, transpiledCode: preRewriteCode };
     }),
   );
+
+  const { buildHash, outputHashes } = await computeClientOutputHashes(
+    transpiledEntriesWithoutHashes.map((entry) => ({
+      logicalName: entry.logicalName,
+      code: entry.transpiledCode,
+    })),
+  );
+  const transpiledEntries = transpiledEntriesWithoutHashes.map((entry) => ({
+    ...entry,
+    contentHash: outputHashes.get(entry.logicalName)!,
+  }));
 
   // Read existing manifest to preserve filenames for unchanged files
   const existingManifest = await readExistingManifest(distDir);
@@ -141,11 +173,6 @@ export async function buildPackageClientFiles(): Promise<void> {
   const manifest = Object.fromEntries(
     manifestEntries.map(({ logicalName, outName }) => [logicalName, outName]),
   ) as Record<string, string>;
-
-  // Compute a combined build hash from all content hashes
-  const buildHash = await computeContentHash(
-    manifestEntries.map((e) => e.contentHash).join("\0"),
-  );
 
   for (const { file, outName, transpiledCode } of manifestEntries) {
     // Rewrite local imports to use built filenames
