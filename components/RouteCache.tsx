@@ -1,15 +1,24 @@
 import type { PropsWithChildren } from "hono/jsx";
+import { tiny } from "@tinytools/hono-tools";
+import { partialInsertHandlers } from "@tinytools/hono-tools/partial-insert-handlers";
+import type { PartialContentElement } from "../client/wc-partialContent.ts";
+import type { ActivatedClientFunction } from "../jsx-runtime.ts";
 
 export type RouteCacheProps = {
   path: string;
   cachePrefix: string;
   partialId: string;
   redirectTo?: string;
+  onMount?: ActivatedClientFunction<
+    (this: PartialContentElement, element: PartialContentElement) => void
+  >;
 };
 
-export function RouteCache(
+export async function RouteCache(
   props: PropsWithChildren<RouteCacheProps>,
 ) {
+  const mountHandler = props.onMount ??
+    (await tiny.imports(partialInsertHandlers)).fn.partialReplace;
   return (
     <route-cache-seed hidden>
       <template
@@ -19,14 +28,14 @@ export function RouteCache(
         data-nav-block
         data-spa-redirect={props.redirectTo}
       >
-        <partial
+        <partial-content
           id={props.partialId}
-          mode="replace"
+          onMount={mountHandler}
           data-cache-id={`${props.cachePrefix}:${props.path}`}
           data-tinytools-local-template-source="runtime"
         >
           {props.children}
-        </partial>
+        </partial-content>
       </template>
     </route-cache-seed>
   );

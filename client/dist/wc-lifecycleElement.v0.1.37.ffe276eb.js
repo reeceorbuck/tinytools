@@ -1,10 +1,4 @@
-function extractHandlerName(attrValue) {
-  const match = attrValue.match(/^handlers\.(\w+)/);
-  if (match) {
-    return match[1];
-  }
-  return attrValue;
-}
+import { runHandlerAttribute } from "./handlerAttribute.v0.1.37.2a9ef56e.js";
 customElements.define(
   "lifecycle-element",
   class extends HTMLElement {
@@ -28,28 +22,16 @@ customElements.define(
       }
       const mountAttr = this.getAttribute("onMount") ?? this.getAttribute("onmount");
       if (mountAttr) {
-        const mountHandler = extractHandlerName(mountAttr);
-        console.log(
-          `[lifecycle-element] Calling mount handler "${mountHandler}"`
-        );
+        console.log(`[lifecycle-element] Calling mount handler`);
         console.log("this: ", this.firstChild);
-        globalThis.handlers[mountHandler].call(
-          this,
-          this
-        );
+        void runHandlerAttribute(this, this, mountAttr);
       }
     }
     disconnectedCallback() {
       const unmountAttr = this.getAttribute("onUnmount") ?? this.getAttribute("onunmount");
       if (unmountAttr) {
-        const unmountHandler = extractHandlerName(unmountAttr);
-        console.log(
-          `[lifecycle-element] Calling unmount handler "${unmountHandler}"`
-        );
-        globalThis.handlers[unmountHandler].call(
-          this,
-          this
-        );
+        console.log(`[lifecycle-element] Calling unmount handler`);
+        void runHandlerAttribute(this, this, unmountAttr);
       }
       this.setAttribute("mounted", "false");
     }

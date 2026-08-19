@@ -16,6 +16,7 @@
 
 export const CLIENT_FILES = [
   "eventHandlers.ts",
+  "partialContentContext.ts",
   "navigation.ts",
   "performFetchAndUpdate.ts",
   "processIncomingData.ts",
@@ -23,8 +24,14 @@ export const CLIENT_FILES = [
   "localRoutes.ts",
   "mutationObserver.ts",
   "sse.ts",
+  "wc-partialContent.ts",
   "wc-lifecycleElement.ts",
   "wc-windowEventlistener.ts",
 ] as const;
 
 export type ClientFile = typeof CLIENT_FILES[number];
+
+export type {
+  PartialContentContext,
+  PartialContentProcessingOptions,
+} from "./partialContentContext.ts";

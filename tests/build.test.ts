@@ -1269,7 +1269,9 @@ Deno.test({
     });
 
     // Create a consumer in a different file that imports the external tools
-    const _consumerTools = new Handlers(import.meta.url, { imports: [sharedTools] }, {
+    const _consumerTools = new Handlers(import.meta.url, {
+      imports: [sharedTools],
+    }, {
       consumerFunction(this: HTMLElement) {
         console.log("consuming external");
       },
@@ -1763,58 +1765,6 @@ Deno.test({
       false,
       "The stale bundle CSS file should be cleaned up",
     );
-
-    await cleanupTestDirs();
-  },
-  sanitizeOps: false,
-  sanitizeResources: false,
-});
-
-Deno.test({
-  name:
-    "buildScriptFiles - keeps imported style asset filenames aligned with the exporting bundle",
-  async fn() {
-    await cleanupTestDirs();
-    resetRegistries();
-
-    const exporterUrl = "file:///test/exporter-styles.tsx";
-    const importerUrl = "file:///test/importer-styles.tsx";
-
-    const exporter = new Styles(exporterUrl, {
-      panel: css`
-        color: blue;
-      `,
-    });
-    const importer = new Styles(importerUrl, {}, { imports: [exporter] });
-
-    const originalExporterBundle = exporter._styleFilenames.get("panel");
-    assertExists(originalExporterBundle);
-    assertEquals(importer._styleFilenames.get("panel"), originalExporterBundle);
-
-    const exporterStyle = exporter._styles.get("panel");
-    assertExists(exporterStyle);
-    exporterStyle.filename = "panel_imported_changed";
-    changedStyleKeys.add(`${exporterUrl}::panel`);
-
-    await buildForTest({
-      clientDir: TEST_CLIENT_DIR,
-      publicDir: TEST_PUBLIC_DIR,
-      handlerDir: TEST_HANDLER_DIR,
-      stylesDir: TEST_STYLES_DIR,
-    });
-
-    const refreshedExporterBundle = exporter._styleFilenames.get("panel");
-    assertExists(refreshedExporterBundle);
-    assertNotEquals(refreshedExporterBundle, originalExporterBundle);
-    assertEquals(
-      importer._styleFilenames.get("panel"),
-      refreshedExporterBundle,
-      "Imported styles should keep pointing at the exporter bundle filename",
-    );
-
-    const styleFiles = await listFiles(TEST_STYLES_DIR);
-    assertEquals(styleFiles.includes(`${refreshedExporterBundle}.css`), true);
-    assertEquals(styleFiles.includes(`${originalExporterBundle}.css`), false);
 
     await cleanupTestDirs();
   },

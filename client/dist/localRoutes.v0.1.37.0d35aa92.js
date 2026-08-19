@@ -1,4 +1,4 @@
-import { processIncomingHtml } from "./processIncomingHtml.v0.1.36.958bb7d0.js";
+import { processIncomingHtml } from "./processIncomingHtml.v0.1.37.a29bcfe9.js";
 import {
   getCachedRouteTemplate,
   getOrderedLocalRouteTemplates,
@@ -6,7 +6,14 @@ import {
   isRuntimeCachedRouteTemplate,
   markLocalTemplateContent,
   SPA_REDIRECT_ATTR
-} from "./routeCache.v0.1.36.b659a4ec.js";
+} from "./routeCache.v0.1.37.978c108f.js";
+function interpolateLocalRouteValue(value, params) {
+  let interpolated = value;
+  for (const [key, replacement] of Object.entries(params)) {
+    interpolated = interpolated.replaceAll(`$[${key}]`, replacement);
+  }
+  return interpolated.replace(/\$\[[^\]]+\]/g, "");
+}
 function parseQueryPattern(queryPattern) {
   const trimmed = queryPattern.trim();
   if (trimmed === "" || trimmed.toLowerCase() === "none") {
@@ -140,24 +147,17 @@ function processLocalSuspenseTemplates(destinationUrl, formData, currentPathname
     while (node) {
       if (node.nodeType === Node.TEXT_NODE) {
         if (node.textContent) {
-          let text = node.textContent;
-          for (const [key, value] of Object.entries(params)) {
-            text = text.replace(new RegExp(`\\$\\[${key}\\]`, "g"), value);
-          }
-          node.textContent = text;
+          node.textContent = interpolateLocalRouteValue(
+            node.textContent,
+            params
+          );
         }
       } else if (node.nodeType === Node.ELEMENT_NODE) {
         const el = node;
         if (el.hasAttributes()) {
           for (const attr of Array.from(el.attributes)) {
             if (typeof attr.value === "string" && attr.value.includes("$[")) {
-              let newVal = attr.value;
-              for (const [key, value] of Object.entries(params)) {
-                newVal = newVal.replace(
-                  new RegExp(`\\$\\[${key}\\]`, "g"),
-                  value
-                );
-              }
+              const newVal = interpolateLocalRouteValue(attr.value, params);
               if (newVal !== attr.value) {
                 el.setAttribute(attr.name, newVal);
               }
@@ -214,5 +214,6 @@ function processLocalSuspenseTemplates(destinationUrl, formData, currentPathname
   return block;
 }
 export {
+  interpolateLocalRouteValue,
   processLocalSuspenseTemplates
 };

@@ -1,4 +1,4 @@
-import { processIncomingData } from "./processIncomingData.v0.1.36.04a11367.js";
+import { processIncomingData } from "./processIncomingData.v0.1.37.b43f15ae.js";
 const currentUrl = new URL(globalThis.location.href);
 const sseIdCookie = document.cookie.split("; ").find((cookie) => cookie.startsWith("sseId="))?.split("=")[1];
 console.log("Open browser SSE ID cookie: ", sseIdCookie);

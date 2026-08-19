@@ -80,6 +80,13 @@ export const AssetTags: FC<AssetTagsProps> = ({
 
   return (
     <>
+      {(hasNavigation || hasSse || hasLocalRoutes) && (
+        <script
+          src={`${P}/${getClientFileName("wc-partialContent.js")}`}
+          type="module"
+        />
+      )}
+
       {/* Navigation and partial page update scripts */}
       {fullPageLoad && hasNavigation && (
         <>
@@ -120,11 +127,11 @@ export const AssetTags: FC<AssetTagsProps> = ({
         <>
           <script
             src={`${P}/${getClientFileName("wc-lifecycleElement.js")}`}
-            defer
+            type="module"
           />
           <script
             src={`${P}/${getClientFileName("wc-windowEventlistener.js")}`}
-            defer
+            type="module"
           />
         </>
       )}

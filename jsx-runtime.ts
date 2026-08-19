@@ -18,6 +18,7 @@ export {
 } from "hono/jsx/jsx-runtime";
 import type { JSX as HonoJSX } from "hono/jsx/jsx-runtime";
 import type { ClientTools } from "./clientTools.ts";
+import type { PartialContentElement } from "./client/wc-partialContent.ts";
 
 /**
  * Brand symbol for ClientFunction types.
@@ -137,6 +138,22 @@ export type ActivateClientFunctions<T> =
   }
   & {
     /**
+     * Compose activated handlers that execute independently without waiting
+     * for one another.
+     */
+    multiHandler(
+      ...handlers: ActivatedClientFunction[]
+    ): ActivatedClientFunction;
+
+    /**
+     * Compose activated handlers in order. Each handler is awaited, and later
+     * handlers are skipped when an earlier handler returns false.
+     */
+    multiHandlerSync(
+      ...handlers: ActivatedClientFunction[]
+    ): ActivatedClientFunction;
+
+    /**
      * Activate local component functions and merge them with context fn.
      * Returns a single proxy that should be used for all handler references in the component.
      */
@@ -186,6 +203,10 @@ type ClientEventHandler<E extends Event> =
 
 type ClientEventHandlerWithThis<E extends Event, T = HTMLElement> =
   | ActivatedClientFunction<(this: T, event: E) => void>
+  | undefined;
+
+type ClientLifecycleHandler<T extends HTMLElement> =
+  | ActivatedClientFunction<(this: T, element: T) => void>
   | undefined;
 
 // Define your global overrides here - now requiring branded ClientFunction types
@@ -340,10 +361,12 @@ type ElementEventOverrides = Omit<
 
 type DisallowLifecycleEvents = {
   /**
-   * Only <lifecycle-element> can use these.
+   * Only lifecycle custom elements can use these.
    * Using them on normal elements should be a type error.
    */
-  onMount?: ForbiddenProp<"Only <lifecycle-element> can use onMount">;
+  onMount?: ForbiddenProp<
+    "Only <lifecycle-element> and <partial-content> can use onMount"
+  >;
   onUnmount?: ForbiddenProp<"Only <lifecycle-element> can use onUnmount">;
 };
 
@@ -474,6 +497,16 @@ export namespace JSX {
         & {
           onMount?: ClientEventHandler<Event>;
           onUnmount?: ClientEventHandler<Event>;
+        };
+
+      /** Incoming partial content processed by an app-owned mount handler. */
+      "partial-content":
+        & ApplyOverrides<
+          HonoJSX.IntrinsicElements["div"],
+          ElementEventOverridesNoWindowOnly
+        >
+        & {
+          onMount: ClientLifecycleHandler<PartialContentElement>;
         };
     };
 }

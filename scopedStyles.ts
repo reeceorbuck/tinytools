@@ -32,6 +32,8 @@ export type ScopedStyleBoundaryMode =
   | "selectors"
   | "none";
 
+export type ScopedStyleContentMode = "scope-root" | "direct";
+
 export type ScopedStyleLayer =
   | "global"
   | "unscoped"
@@ -52,6 +54,7 @@ export interface ScopedStyleScopeConfig {
 export interface ScopedStyleDefinition {
   css: string;
   scope: ScopedStyleScopeConfig;
+  contentMode?: ScopedStyleContentMode;
   layer?: ScopedStyleLayer;
 }
 
@@ -67,10 +70,12 @@ function createScopedStyleDefinition(
   cssContent: string,
   scope: ScopedStyleScopeConfig,
   options: ScopedStyleOptions = {},
+  contentMode: ScopedStyleContentMode = "scope-root",
 ): ScopedStyleDefinition {
   return {
     css: cssContent,
     scope,
+    contentMode,
     layer: options.layer,
   };
 }
@@ -121,7 +126,18 @@ export function unscoped(
   return createScopedStyleDefinition(cssContent, { mode: "none" }, options);
 }
 
-export const setCustomScope = {
+export const setCustomScope: {
+  toSelectors: typeof scopedTo;
+  toBoundary(
+    cssContent: string,
+    options?: ScopedStyleOptions,
+  ): ScopedStyleDefinition;
+  direct(
+    cssContent: string,
+    options?: ScopedStyleOptions,
+  ): ScopedStyleDefinition;
+  unscoped: typeof unscoped;
+} = {
   toSelectors: scopedTo,
   toBoundary(
     cssContent: string,
@@ -133,6 +149,17 @@ export const setCustomScope = {
       options,
     );
   },
+  direct(
+    cssContent: string,
+    options: ScopedStyleOptions = {},
+  ): ScopedStyleDefinition {
+    return createScopedStyleDefinition(
+      cssContent,
+      { mode: "boundary" },
+      options,
+      "direct",
+    );
+  },
   unscoped,
 };
 
@@ -141,12 +168,14 @@ export function normalizeScopedStyleInput(
 ): {
   cssContent: string;
   scope: ScopedStyleScopeConfig;
+  contentMode: ScopedStyleContentMode;
   layer: ScopedStyleLayer | undefined;
 } {
   if (typeof input === "string") {
     return {
       cssContent: input,
       scope: { ...defaultScopeConfig },
+      contentMode: "scope-root",
       layer: undefined,
     };
   }
@@ -154,6 +183,7 @@ export function normalizeScopedStyleInput(
   return {
     cssContent: input.css,
     scope: normalizeScopeConfig(input.scope),
+    contentMode: input.contentMode ?? "scope-root",
     layer: input.layer,
   };
 }
@@ -175,6 +205,7 @@ export interface ScopedStyleEntry {
   filename: string;
   sourceFileUrl?: string;
   scope: ScopedStyleScopeConfig;
+  contentMode: ScopedStyleContentMode;
   layer: ScopedStyleLayer;
   buildCssLayerContent(): string;
   buildCssContent(): string;
@@ -250,8 +281,8 @@ export class ScopedStyleImpl {
   cssContent: string;
   filename: string;
   sourceFileUrl?: string;
-  isGlobal: boolean;
   scope: ScopedStyleScopeConfig;
+  contentMode: ScopedStyleContentMode;
   layer: ScopedStyleLayer;
   private occurrenceIndex = 0;
   private hashInput: string = "";
@@ -261,27 +292,23 @@ export class ScopedStyleImpl {
     styleName: string,
     cssContent: string,
     sourceFileUrl?: string,
-    isGlobal = false,
     scope: ScopedStyleScopeConfig = defaultScopeConfig,
     layer?: ScopedStyleLayer,
+    contentMode: ScopedStyleContentMode = "scope-root",
   ) {
     const normalizedSourceFileUrl = normalizeSourceFileUrl(sourceFileUrl);
     const normalizedScope = normalizeScopeConfig(scope);
     const resolvedLayer = layer ??
-      (isGlobal
-        ? "global"
-        : normalizedScope.mode === "none"
+      (normalizedScope.mode === "none"
         ? "unscoped"
         : normalizedScope.mode === "selectors"
         ? "limited"
         : "normal");
-    const hashInput = isGlobal
-      ? `${cssContent}::${
-        normalizedSourceFileUrl ?? ""
-      }::layer:${resolvedLayer}`
-      : `${cssContent}::${serializeScopeConfig(normalizedScope)}::${
-        normalizedSourceFileUrl ?? ""
-      }::layer:${resolvedLayer}`;
+    const hashInput = `${cssContent}::${
+      serializeScopeConfig(normalizedScope)
+    }::content:${contentMode}::${
+      normalizedSourceFileUrl ?? ""
+    }::layer:${resolvedLayer}`;
 
     // Get the occurrence index for this name in this file (0 for first, 1 for second, etc.)
     const occurrenceIndex = normalizedSourceFileUrl
@@ -333,8 +360,8 @@ export class ScopedStyleImpl {
     this.cssContent = cssContent;
     this.filename = resolvedFilename;
     this.sourceFileUrl = normalizedSourceFileUrl;
-    this.isGlobal = isGlobal;
     this.scope = normalizedScope;
+    this.contentMode = contentMode;
     this.layer = resolvedLayer;
     this.occurrenceIndex = occurrenceIndex;
     this.hashInput = hashInput;
@@ -358,12 +385,11 @@ export class ScopedStyleImpl {
   }
 
   buildCssLayerContent(): string {
-    if (this.isGlobal) {
-      return this.cssContent;
-    }
-
     const scopeEnd = this.buildScopeEndSelector();
-    return `@scope (.${this.filename}) to (${scopeEnd}) {:scope {${this.cssContent}}}`;
+    const content = this.contentMode === "direct"
+      ? this.cssContent
+      : `:scope {${this.cssContent}}`;
+    return `@scope (.${this.filename}) to (${scopeEnd}) {${content}}`;
   }
 
   buildCssContent(): string {

@@ -1,4 +1,4 @@
-import { processIncomingHtml } from "./processIncomingHtml.v0.1.36.958bb7d0.js";
+import { processIncomingHtml } from "./processIncomingHtml.v0.1.37.a29bcfe9.js";
 function activateScripts(container) {
   const scripts = container.querySelectorAll("script");
   scripts.forEach((script) => {
@@ -35,10 +35,14 @@ async function processIncomingData(response, options = {}) {
         if (!updateContent.trim()) continue;
         const fullUpdate = updateContent + "</update>";
         console.log(
-          "Chunk parsed and processed (update length):",
-          fullUpdate.length
+          "Chunk parsed and processed (update):",
+          fullUpdate
         );
         const updateFragment = globalThis.document.createRange().createContextualFragment(fullUpdate);
+        const updateElement = updateFragment.querySelector("update");
+        if (!updateElement) continue;
+        document.body.append(...updateElement.childNodes);
+        continue;
         const headTemplate = updateFragment.querySelector("template");
         const headSearchRoot = headTemplate ? headTemplate.content : updateFragment;
         const head = headSearchRoot.querySelector("head-update");

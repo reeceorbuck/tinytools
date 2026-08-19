@@ -119,6 +119,28 @@ export function resolveToolAccessFromChain(
   prop: PropertyKey,
   onUsage?: (type: ToolUsageType, filename: string) => void,
 ): unknown {
+  if (
+    mode === "function" &&
+    (prop === "multiHandler" || prop === "multiHandlerSync")
+  ) {
+    return (...handlerReferences: string[]) => {
+      for (const reference of handlerReferences) {
+        if (!/^handlers\.\w+\.call\(this, event\)$/.test(reference)) {
+          throw new Error(
+            `Cannot compose invalid handler reference: ${reference}`,
+          );
+        }
+      }
+
+      if (prop === "multiHandler") return handlerReferences.join(";");
+
+      const calls = handlerReferences.map((reference) =>
+        `if(await ${reference}===false)return;`
+      ).join("");
+      return `void (async()=>{${calls}})()`;
+    };
+  }
+
   if (mode === "style" && prop === "mergeClasses") {
     return (...classNames: Array<string | null | undefined | false>) =>
       mergeClassNames(...classNames);
@@ -865,8 +887,6 @@ export interface ClientToolsOptions<
   TFunctions extends Record<string, AnyFunction> = {},
   // deno-lint-ignore ban-types
   TStyles extends Record<string, ScopedStyleInput> = {},
-  // deno-lint-ignore ban-types
-  TGlobalStyles extends Record<string, ScopedStyleInput> = {},
   // deno-lint-ignore no-explicit-any
   TImports extends ClientToolsClass<any, any, any>[] = [],
 > {
@@ -874,8 +894,6 @@ export interface ClientToolsOptions<
   functions?: TFunctions;
   /** Scoped styles to define */
   styles?: ForbidReservedStyledKeys<TStyles>;
-  /** Global styles to define (not wrapped in @scope) */
-  globalStyles?: TGlobalStyles;
   /** Other ClientTools instances to import functions and styles from */
   imports?: TImports;
 }
@@ -888,43 +906,40 @@ export interface HandlersOptions<
   imports?: TImports;
 }
 
-export interface StylesOptions<
-  // deno-lint-ignore no-explicit-any
-  TImports extends AnyClientToolsInstance[] = [],
-> {
-  /** Mark all defined styles as global styles */
-  global?: boolean;
-  /** Other TinyTools instances to import functions and styles from */
-  imports?: TImports;
-}
-
 /** Infer result type for ClientToolsOptions */
 export type InferClientToolsOptions<T> = T extends ClientToolsOptions<
   infer TFunctions,
   infer TStyles,
-  infer TGlobalStyles,
   infer TImports
 >
   // deno-lint-ignore no-explicit-any
   ? TImports extends ClientToolsClass<any, any, any>[] ? ClientToolsClass<
       TFunctions & UnionOfFunctions<TImports>,
       TStyles & UnionOfStyles<TImports>,
-      TGlobalStyles
+      {}
     >
-  : ClientToolsClass<TFunctions, TStyles, TGlobalStyles>
+  : ClientToolsClass<TFunctions, TStyles, {}>
   : never;
 
-/** Helper to extract union of functions from an array of ClientTools (works with both tuples and arrays) */
+// deno-lint-ignore no-explicit-any
+type FunctionsFromTool<T> = T extends ClientToolsClass<infer F, any, any> ? F
+  : {};
+
+// deno-lint-ignore no-explicit-any
+type StylesFromTool<T> = T extends ClientToolsClass<any, infer S, any> ? S
+  : {};
+
+/** Helper to accumulate functions from an array of ClientTools (works with both tuples and arrays) */
 // deno-lint-ignore no-explicit-any
 type UnionOfFunctions<T extends ClientToolsClass<any, any, any>[]> =
-  T[number] extends ClientToolsClass<infer F, unknown, unknown> ? F
-    : Record<PropertyKey, never>;
+  [T[number]] extends [never] ? {}
+    : UnionToIntersection<FunctionsFromTool<T[number]>>;
 
-/** Helper to extract union of styles from an array of ClientTools (works with both tuples and arrays) */
+/** Helper to accumulate styles from an array of ClientTools (works with both tuples and arrays) */
 // deno-lint-ignore no-explicit-any
 type UnionOfStyles<T extends ClientToolsClass<any, any, any>[]> =
-  T[number] extends ClientToolsClass<unknown, infer S, unknown> ? S
-    : Record<PropertyKey, never>;
+  [T[number]] extends [never] ? {}
+    : UnionToIntersection<StylesFromTool<T[number]>>;
 
 /**
  * Constructor interface for ClientTools that enables type inference from options.
@@ -941,17 +956,15 @@ interface ClientToolsConstructor {
     TFunctions extends Record<string, AnyFunction> = {},
     // deno-lint-ignore ban-types
     TStyles extends Record<string, ScopedStyleInput> = {},
-    // deno-lint-ignore ban-types
-    TGlobalStyles extends Record<string, ScopedStyleInput> = {},
     // deno-lint-ignore no-explicit-any
     TImports extends ClientToolsClass<any, any, any>[] = [],
   >(
     sourceFileUrl: string | URL,
-    options: ClientToolsOptions<TFunctions, TStyles, TGlobalStyles, TImports>,
+    options: ClientToolsOptions<TFunctions, TStyles, TImports>,
   ): ClientToolsClass<
     TFunctions & UnionOfFunctions<TImports>,
     TStyles & UnionOfStyles<TImports>,
-    TGlobalStyles
+    {}
   >;
 }
 
@@ -1008,34 +1021,6 @@ interface StylesConstructor {
     styles: ForbidReservedStyledKeys<TStyles>,
   ): ClientToolsClass<{}, TStyles, {}>;
 
-  new <
-    // deno-lint-ignore ban-types
-    TStyles extends Record<string, ScopedStyleInput> = {},
-    // deno-lint-ignore no-explicit-any
-    TImports extends AnyClientToolsInstance[] = [],
-  >(
-    styles: ForbidReservedStyledKeys<TStyles>,
-    options: { global: true; imports?: TImports },
-  ): ClientToolsClass<
-    UnionOfFunctions<TImports>,
-    UnionOfStyles<TImports>,
-    TStyles
-  >;
-
-  new <
-    // deno-lint-ignore ban-types
-    TStyles extends Record<string, ScopedStyleInput> = {},
-    // deno-lint-ignore no-explicit-any
-    TImports extends AnyClientToolsInstance[] = [],
-  >(
-    styles: ForbidReservedStyledKeys<TStyles>,
-    options: StylesOptions<TImports>,
-  ): ClientToolsClass<
-    UnionOfFunctions<TImports>,
-    TStyles & UnionOfStyles<TImports>,
-    {}
-  >;
-
   // Overloads with sourceFileUrl
   new <
     // deno-lint-ignore ban-types
@@ -1044,36 +1029,6 @@ interface StylesConstructor {
     sourceFileUrl: string | URL | undefined,
     styles: ForbidReservedStyledKeys<TStyles>,
   ): ClientToolsClass<{}, TStyles, {}>;
-
-  new <
-    // deno-lint-ignore ban-types
-    TStyles extends Record<string, ScopedStyleInput> = {},
-    // deno-lint-ignore no-explicit-any
-    TImports extends AnyClientToolsInstance[] = [],
-  >(
-    sourceFileUrl: string | URL | undefined,
-    styles: ForbidReservedStyledKeys<TStyles>,
-    options: { global: true; imports?: TImports },
-  ): ClientToolsClass<
-    UnionOfFunctions<TImports>,
-    UnionOfStyles<TImports>,
-    TStyles
-  >;
-
-  new <
-    // deno-lint-ignore ban-types
-    TStyles extends Record<string, ScopedStyleInput> = {},
-    // deno-lint-ignore no-explicit-any
-    TImports extends AnyClientToolsInstance[] = [],
-  >(
-    sourceFileUrl: string | URL | undefined,
-    styles: ForbidReservedStyledKeys<TStyles>,
-    options: StylesOptions<TImports>,
-  ): ClientToolsClass<
-    UnionOfFunctions<TImports>,
-    TStyles & UnionOfStyles<TImports>,
-    {}
-  >;
 }
 
 /**
@@ -1123,6 +1078,10 @@ class ClientToolsClass<
   // deno-lint-ignore ban-types
   AccumulatedGlobalStyles = {},
 > {
+  private static readonly RESERVED_FUNCTION_KEYS = new Set<string>([
+    "multiHandler",
+    "multiHandlerSync",
+  ]);
   private static readonly RESERVED_STYLED_KEYS = new Set<string>([
     "mergeClasses",
   ]);
@@ -1148,8 +1107,6 @@ class ClientToolsClass<
     string,
     ClientToolsClass<any, any, any>
   >();
-  /** Stores ScopedStyleImpl instances for global styles (not exposed on styled) */
-  private _globalStyles = new Map<string, ScopedStyleImpl>();
   /** Tracks imported ClientTools instances for cascading ensureBuilt() */
   // deno-lint-ignore no-explicit-any
   private _importedTools: ClientToolsClass<any, any, any>[] = [];
@@ -1159,7 +1116,7 @@ class ClientToolsClass<
   constructor(
     sourceFileUrl: string | URL | undefined,
     // deno-lint-ignore no-explicit-any
-    options?: ClientToolsOptions<any, any, any, any>,
+    options?: ClientToolsOptions<any, any, any>,
   ) {
     this.sourceFileUrl = normalizeSourceFileUrl(sourceFileUrl) ??
       (typeof sourceFileUrl === "string"
@@ -1182,12 +1139,7 @@ class ClientToolsClass<
 
       // Process styles
       if (options.styles) {
-        this._processStyles(options.styles, false);
-      }
-
-      // Process global styles
-      if (options.globalStyles) {
-        this._processStyles(options.globalStyles, true);
+        this._processStyles(options.styles);
       }
     }
 
@@ -1207,6 +1159,12 @@ class ClientToolsClass<
     );
 
     for (const [fnName, fn] of Object.entries(fns)) {
+      if (ClientToolsClass.RESERVED_FUNCTION_KEYS.has(fnName)) {
+        throw new Error(
+          `Cannot define function '${fnName}': this key is reserved by fn API.`,
+        );
+      }
+
       // Check for duplicate from imports
       if (this._clientFunctions.has(fnName)) {
         throw new Error(
@@ -1354,10 +1312,6 @@ class ClientToolsClass<
     // via sibling fanout (where the outer revalidate() call returns false
     // because the style/handler was already processed earlier in the pass
     // as a sibling of another artifact sharing the same source file).
-    const oldGlobalStyleFilenames = new Map<string, string>();
-    for (const [name, impl] of this._globalStyles) {
-      oldGlobalStyleFilenames.set(name, impl.filename);
-    }
     const oldScopedStyleFilenames = new Map<string, string>();
     for (const [name, impl] of this._scopedStyles) {
       oldScopedStyleFilenames.set(name, impl.filename);
@@ -1366,14 +1320,6 @@ class ClientToolsClass<
     // Revalidate all scoped styles (own + imported)
     let anyStyleChanged = false;
     for (const [, impl] of this._scopedStyles) {
-      const changed = await impl.revalidate();
-      if (changed) {
-        anyStyleChanged = true;
-      }
-    }
-
-    // Revalidate global styles too
-    for (const [, impl] of this._globalStyles) {
       const changed = await impl.revalidate();
       if (changed) {
         anyStyleChanged = true;
@@ -1455,25 +1401,6 @@ class ClientToolsClass<
       }
     }
 
-    // Build individual global style files
-    for (const [name, impl] of this._globalStyles) {
-      const oldFilename = oldGlobalStyleFilenames.get(name);
-      await this._ensureStyleFileBuilt(stylesDir, impl);
-      // If revalidate changed the filename, the old file on disk is stale
-      if (oldFilename && oldFilename !== impl.filename) {
-        await rm(`${stylesDir}/${oldFilename}.css`).catch(
-          () => {},
-        );
-      }
-      const staleFilename = impl.staleFilenameForCleanup;
-      if (staleFilename && staleFilename !== impl.filename) {
-        await rm(`${stylesDir}/${staleFilename}.css`).catch(
-          () => {},
-        );
-      }
-      impl.markCurrentFilenameAsClean();
-    }
-
     // Every artifact for each source file whose mtime changed has been
     // eagerly revalidated inside `revalidateAndBuild` / `revalidate`
     // (including siblings that live in other `ClientTools` instances),
@@ -1546,66 +1473,36 @@ class ClientToolsClass<
     );
   }
 
-  private async _ensureStyleFileBuilt(
-    stylesDir: string,
-    style: ScopedStyleImpl,
-  ): Promise<void> {
-    const filePath = `${stylesDir}/${style.filename}.css`;
-    const fileExists = await fsStat(filePath).then(() => true).catch(
-      () => false,
-    );
-
-    if (fileExists) {
-      const styleKey = style.sourceFileUrl
-        ? `${style.sourceFileUrl}::${style.styleName}`
-        : "";
-      if (!styleKey || !changedStyleKeys.has(styleKey)) return;
-    }
-
-    await mkdir(stylesDir, { recursive: true });
-    const cssContent = style.buildCssContent();
-    await writeFile(filePath, cssContent);
-    console.log(`Style file written: ${filePath}`);
-  }
-
   /** Internal helper to process style definitions */
   private _processStyles<T extends Record<string, ScopedStyleInput | string>>(
     styles: T,
-    isGlobal: boolean,
   ): void {
     for (const [styleName, styleInput] of Object.entries(styles)) {
-      if (
-        !isGlobal &&
-        ClientToolsClass.RESERVED_STYLED_KEYS.has(styleName)
-      ) {
+      if (ClientToolsClass.RESERVED_STYLED_KEYS.has(styleName)) {
         throw new Error(
           `Cannot define style '${styleName}': this key is reserved by styled API.`,
         );
       }
 
-      const { cssContent, scope, layer } = normalizeScopedStyleInput(
-        styleInput,
-      );
+      const { cssContent, scope, contentMode, layer } =
+        normalizeScopedStyleInput(
+          styleInput,
+        );
       const normalizedCss = normalizeCssWhitespace(cssContent);
 
       const instance = new ScopedStyleImpl(
         styleName,
         normalizedCss,
         this.sourceFileUrl,
-        isGlobal,
         scope,
         layer,
+        contentMode,
       );
 
-      if (isGlobal) {
-        this.styleFilenames.set(styleName, instance.filename);
-        this._globalStyles.set(styleName, instance);
-      } else {
-        (this as Record<string, unknown>)[styleName] = instance;
-        this.styleFilenames.set(styleName, instance.filename);
-        this._scopedStyles.set(styleName, instance);
-        this._ownStyleNames.add(styleName);
-      }
+      (this as Record<string, unknown>)[styleName] = instance;
+      this.styleFilenames.set(styleName, instance.filename);
+      this._scopedStyles.set(styleName, instance);
+      this._ownStyleNames.add(styleName);
     }
   }
 
@@ -1623,6 +1520,12 @@ class ClientToolsClass<
 
     // Import functions
     for (const [fnName, instance] of externalClientFunctions) {
+      if (ClientToolsClass.RESERVED_FUNCTION_KEYS.has(fnName)) {
+        throw new Error(
+          `Cannot import ClientFunction '${fnName}' from '${externalSourceUrl}': this key is reserved by fn API.`,
+        );
+      }
+
       if (this._clientFunctions.has(fnName)) {
         throw new Error(
           `Cannot import ClientFunction '${fnName}' from '${externalSourceUrl}': ` +
@@ -1728,24 +1631,6 @@ class ClientToolsClass<
       );
     }
     return result;
-  }
-
-  /**
-   * Get all global styles as an array for use with tiny.middleware.globalStyles().
-   * Returns an array of ScopedStyleImpl instances that were defined with globalStyles.
-   *
-   * @example
-   * ```ts
-   * const globalTools = new tiny.Styles(import.meta.url, {
-   *   globalStyles: css`body { font-family: sans-serif; }`,
-   * }, { global: true });
-   *
-   * // Pass to middleware:
-   * app.use(tiny.middleware.globalStyles(...globalTools.globalStyles));
-   * ```
-   */
-  get globalStyles(): ScopedStyleImpl[] {
-    return Array.from(this._globalStyles.values());
   }
 
   // deno-lint-ignore no-explicit-any
@@ -1988,10 +1873,7 @@ class StylesClass extends ClientToolsClass<{}, {}, {}> {
       | URL
       | undefined
       | Record<string, ScopedStyleInput>,
-    // deno-lint-ignore no-explicit-any
-    stylesOrOptions?: Record<string, ScopedStyleInput> | StylesOptions<any>,
-    // deno-lint-ignore no-explicit-any
-    maybeOptions?: StylesOptions<any>,
+    stylesArg?: Record<string, ScopedStyleInput>,
   ) {
     // Detect whether first arg is the styles object (no sourceFileUrl provided)
     const firstArgIsStyles = sourceFileUrlOrStyles !== null &&
@@ -1999,18 +1881,18 @@ class StylesClass extends ClientToolsClass<{}, {}, {}> {
       typeof sourceFileUrlOrStyles === "object" &&
       !(sourceFileUrlOrStyles instanceof URL);
 
+    if ((firstArgIsStyles && stylesArg !== undefined) || arguments.length > 2) {
+      throw new TypeError("tiny.Styles does not accept constructor options.");
+    }
+
     const sourceFileUrl = firstArgIsStyles
       ? undefined
       : sourceFileUrlOrStyles as string | URL | undefined;
     const styles =
-      (firstArgIsStyles ? sourceFileUrlOrStyles : stylesOrOptions) as Record<
+      (firstArgIsStyles ? sourceFileUrlOrStyles : stylesArg) as Record<
         string,
         ScopedStyleInput
       >;
-    // deno-lint-ignore no-explicit-any
-    const options = (firstArgIsStyles ? stylesOrOptions : maybeOptions) as
-      | StylesOptions<any>
-      | undefined;
 
     const resolvedUrl = normalizeSourceFileUrl(sourceFileUrl);
     if (!resolvedUrl && !cache.trustCache) {
@@ -2027,12 +1909,7 @@ class StylesClass extends ClientToolsClass<{}, {}, {}> {
       );
     }
 
-    super(
-      sourceFileUrl,
-      options?.global
-        ? { globalStyles: styles, imports: options.imports }
-        : { styles, imports: options?.imports },
-    );
+    super(sourceFileUrl, { styles });
   }
 }
 

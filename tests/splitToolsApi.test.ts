@@ -27,24 +27,23 @@ Deno.test({
       `,
     });
 
-    const { styled } = await imports(styles);
+    const componentStyles = new Styles(
+      "file:///tests/split-component-styles.ts",
+      {
+        component: css`
+          display: block;
+        `,
+      },
+    );
+
+    const { fn, styled } = await imports(styles, componentStyles);
     assertEquals(styled.panel.includes("panel_"), true);
+    assertEquals(styled.component.includes("component_"), true);
+    // @ts-expect-error Style-only imports must not expose arbitrary handlers.
+    fn.missingHandler;
+    // @ts-expect-error Imported styles must not expose arbitrary style names.
+    styled.missingStyle;
   },
-});
-
-Deno.test("split tools api - global styles use global option", () => {
-  const styles = new Styles("file:///tests/split-global.ts", {
-    reset: css`
-      body {
-        margin: 0;
-      }
-    `,
-  }, { global: true });
-
-  const globalCss = styles.globalStyles[0]?.buildCssContent() ?? "";
-  assertEquals(styles.globalStyles.length, 1);
-  assertEquals(globalCss.includes("@layer global"), true);
-  assertEquals(globalCss.includes("@scope"), false);
 });
 
 Deno.test({
@@ -58,7 +57,9 @@ Deno.test({
       },
     });
 
-    const localHandlers = new Handlers("file:///tests/local-handlers.ts", { imports: [sharedHandlers], }, {
+    const localHandlers = new Handlers("file:///tests/local-handlers.ts", {
+      imports: [sharedHandlers],
+    }, {
       localHandler: function () {
         return "local";
       },
@@ -94,7 +95,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "split tools api - styles can import other styles as a barrel",
+  name: "split tools api - separate style tools engage together",
   sanitizeOps: false,
   sanitizeResources: false,
   async fn() {
@@ -110,12 +111,10 @@ Deno.test({
       `,
     });
 
-    const barrelStyles = new Styles("file:///tests/barrel-styles.ts", {
+    const buttonStyles = new Styles("file:///tests/button-styles.ts", {
       button: css`
         color: white;
       `,
-    }, {
-      imports: [baseStyles, accentStyles],
     });
 
     const handlers = new Handlers("file:///tests/barrel-handlers.ts", {
@@ -124,7 +123,12 @@ Deno.test({
       },
     });
 
-    const { fn, styled } = await imports(barrelStyles, handlers);
+    const { fn, styled } = await imports(
+      baseStyles,
+      accentStyles,
+      buttonStyles,
+      handlers,
+    );
     assertEquals(String(fn.clickHandler).includes("handlers."), true);
     assertEquals(styled.button.includes("button_"), true);
     assertEquals(styled.panel.includes("panel_"), true);

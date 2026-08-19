@@ -40,7 +40,6 @@ performance.mark("import:@tinytools/hono-tools:start");
 
 // Core setup and middleware exports
 export {
-  addGlobalStyles,
   addRouteLayout,
   type BaseTools,
   type ClientToolsOptions,
@@ -65,8 +64,11 @@ export {
   type HandlersOptions,
   imports,
   Styles,
-  type StylesOptions,
 } from "./clientTools.ts";
+export type {
+  PartialContentContext,
+  PartialContentProcessingOptions,
+} from "./client/partialContentContext.ts";
 
 // Registry exports (used by build process)
 export { handlers } from "./clientFunctions.ts";

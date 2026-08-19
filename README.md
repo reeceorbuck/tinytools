@@ -128,14 +128,6 @@ const routeStyles = new tiny.Styles(import.meta.url, {
   ),
 });
 
-const globalStyles = new tiny.Styles(import.meta.url, {
-  appTheme: setCustomScope.unscoped(css`
-    :root {
-      color-scheme: light;
-    }
-  `),
-}, { global: true });
-
 // Create Hono app with tools using middleware
 const app = new Hono()
   .use(...tiny.middleware.all())
@@ -161,6 +153,12 @@ export default app;
 > Scope helper methods are exposed under `setCustomScope` (for example
 > `setCustomScope.toSelectors(..., [".scopeBoundary>*"])`). Direct named imports
 > of `scopedTo*`/`unscoped` are no longer part of the top-level API.
+
+> Use `setCustomScope.direct(cssContent)` for content that must be emitted
+> directly inside `@scope` instead of inside the generated `:scope` rule. This
+> supports name-defining at-rules such as `@keyframes`; those names remain
+> global according to CSS scoping rules, so they should be chosen to avoid
+> collisions.
 
 > All scoped styles automatically include two additional scope limits:
 > `[data-scope-boundary~="<generated-style-class>"]` and
@@ -196,9 +194,6 @@ each connected client's `sseId` plus recent route paths.
 
 **`tiny.middleware.webComponents()`** - Enables lifecycle and window-event web
 components.
-
-**`tiny.middleware.globalStyles(...styles)`** - Ensures `globalStyles` assets
-are included on every request.
 
 **`tiny.middleware.layout(renderFn)`** - Adds a layout wrapper for sub-routes.
 
@@ -255,11 +250,6 @@ const app = new Hono()
 const routeTools = new Hono()
   .use(...tiny.middleware.core())
   .use(tiny.middleware.sharedImports(globalHandlers, routeStyles));
-
-const themedApp = new Hono()
-  .use(...tiny.middleware.core())
-  .use(tiny.middleware.sharedImports(globalHandlers))
-  .use(tiny.middleware.globalStyles(...globalStyles.globalStyles));
 ```
 
 #### `withAncestors<T>`
@@ -547,20 +537,60 @@ Declarative partial page updates.
 
 ```tsx
 import { Partial } from "@tinytools/hono-tools/components";
+import {
+  partialInsertHandlers,
+} from "@tinytools/hono-tools/partial-insert-handlers";
 
-// Replace content
-<Partial id="user-profile" mode="replace">
-  <UserProfile user={user} />
-</Partial>
+const app = new Hono()
+  .use(...tiny.middleware.core())
+  .use(tiny.middleware.sharedImports(partialInsertHandlers));
 
-// Merge content
-<Partial id="message-list" mode="merge-content" new="append">
-  <Message message={newMessage} />
-</Partial>
-
-// Update attributes only
-<Partial id="submit-btn" mode="attributes" disabled="true" />
+app.get("/profile", (c) => {
+  const { fn } = c.var.tools;
+  return (
+    <Partial
+      id="user-profile"
+      onMount={fn.partialReplace}
+    >
+      <UserProfile />
+    </Partial>
+  );
+});
 ```
+
+Available handlers are `partialReplace`, `partialDelete`, `partialBlast`,
+`partialAttributes`, `partialMergeContent`, `partialRouteCache`, and
+`partialAutofocus`. Every partial requires an `onMount` handler.
+
+The server renders `<partial-content>`. Navigation and SSE processing only add
+incoming elements to the document; the custom element invokes `onMount` from its
+`connectedCallback`. Insertion handlers find the live element using the partial
+content's own `id`.
+
+Features can be composed at the application boundary. Imported handlers are
+included in generated modules, so an app handler can opt into cache writes and
+autofocus before choosing its insertion behavior:
+
+```tsx
+const { partialRouteCache, partialAutofocus, partialReplace } =
+  partialInsertHandlers.getFunctionReferences;
+
+const appPartials = new tiny.Handlers(
+  import.meta.url,
+  { imports: [partialInsertHandlers] },
+  {
+    replaceWithFeatures: function () {
+      if (partialRouteCache.call(this) === false) return;
+      partialAutofocus.call(this);
+      return partialReplace.call(this);
+    },
+  },
+);
+```
+
+Route-cache reads remain part of Navigation/local-route processing. Cache
+creation, outgoing capture, stale-response storage, and cached-template updates
+are performed by `partialRouteCache` only when the app includes it.
 
 ### Client Module (`@tinytools/hono-tools/client`)
 

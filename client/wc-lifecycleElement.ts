@@ -6,19 +6,7 @@
 
 /// <reference lib="dom" />
 
-import type { GlobalPlusHandlers } from "./eventHandlers.ts";
-
-/**
- * Extracts the handler name from an attribute value.
- * Handles both plain names and full expressions like "handlers.handleMount_6fec3866(this, event)"
- */
-function extractHandlerName(attrValue: string): string {
-  const match = attrValue.match(/^handlers\.(\w+)/);
-  if (match) {
-    return match[1];
-  }
-  return attrValue;
-}
+import { runHandlerAttribute } from "./handlerAttribute.ts";
 
 /**
  * A web component that calls client functions when mounted or unmounted from the DOM.
@@ -60,15 +48,9 @@ customElements.define(
       const mountAttr = this.getAttribute("onMount") ??
         this.getAttribute("onmount");
       if (mountAttr) {
-        const mountHandler = extractHandlerName(mountAttr);
-        console.log(
-          `[lifecycle-element] Calling mount handler "${mountHandler}"`,
-        );
+        console.log(`[lifecycle-element] Calling mount handler`);
         console.log("this: ", this.firstChild);
-        (globalThis as GlobalPlusHandlers).handlers[mountHandler].call(
-          this,
-          this,
-        );
+        void runHandlerAttribute(this, this, mountAttr);
       }
     }
 
@@ -76,14 +58,8 @@ customElements.define(
       const unmountAttr = this.getAttribute("onUnmount") ??
         this.getAttribute("onunmount");
       if (unmountAttr) {
-        const unmountHandler = extractHandlerName(unmountAttr);
-        console.log(
-          `[lifecycle-element] Calling unmount handler "${unmountHandler}"`,
-        );
-        (globalThis as GlobalPlusHandlers).handlers[unmountHandler].call(
-          this,
-          this,
-        );
+        console.log(`[lifecycle-element] Calling unmount handler`);
+        void runHandlerAttribute(this, this, unmountAttr);
       }
       this.setAttribute("mounted", "false");
     }

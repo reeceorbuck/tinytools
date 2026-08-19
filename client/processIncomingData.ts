@@ -76,11 +76,16 @@ export async function processIncomingData(
 
         const fullUpdate = updateContent + "</update>";
         console.log(
-          "Chunk parsed and processed (update length):",
-          fullUpdate.length,
+          "Chunk parsed and processed (update):",
+          fullUpdate,
         );
+
         const updateFragment = globalThis.document.createRange()
           .createContextualFragment(fullUpdate);
+        const updateElement = updateFragment.querySelector("update");
+        if (!updateElement) continue;
+        document.body.append(...updateElement.childNodes);
+        continue;
 
         // Handle case where content is wrapped in <template> tags
         // Template content is stored in .content, not as direct children

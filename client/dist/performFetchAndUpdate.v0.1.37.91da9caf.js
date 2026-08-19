@@ -1,5 +1,5 @@
-import { processIncomingData } from "./processIncomingData.v0.1.36.04a11367.js";
-import { getActiveRouteCachePath } from "./routeCache.v0.1.36.b659a4ec.js";
+import { processIncomingData } from "./processIncomingData.v0.1.37.b43f15ae.js";
+import { getActiveRouteCachePath } from "./routeCache.v0.1.37.978c108f.js";
 const inflightGetRequests = /* @__PURE__ */ new Map();
 async function performFetchAndUpdate(destinationUrl, fromUrl, toUrl, formData, requestMethod = formData ? "post" : "get", options = {}) {
   const method = requestMethod.toLowerCase() === "post" ? "post" : "get";

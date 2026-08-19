@@ -9,7 +9,8 @@
     "./jsx-dev-runtime": "./jsx-dev-runtime.ts",
     "./build": "./build.ts",
     "./components": "./components/mod.ts",
-    "./client": "./client/mod.ts"
+    "./client": "./client/mod.ts",
+    "./partial-insert-handlers": "./partialInsertHandlers.ts"
   },
   "tasks": {
     "build:client": "deno run -A buildClientFiles.ts",

@@ -25,6 +25,17 @@ type ParsedQueryPattern = {
   logic: "and" | "or";
 };
 
+export function interpolateLocalRouteValue(
+  value: string,
+  params: Readonly<Record<string, string>>,
+): string {
+  let interpolated = value;
+  for (const [key, replacement] of Object.entries(params)) {
+    interpolated = interpolated.replaceAll(`$[${key}]`, replacement);
+  }
+  return interpolated.replace(/\$\[[^\]]+\]/g, "");
+}
+
 /**
  * Parses a query pattern string into an array of query conditions.
  * Supports:
@@ -235,24 +246,17 @@ export function processLocalSuspenseTemplates(
     while (node) {
       if (node.nodeType === Node.TEXT_NODE) {
         if (node.textContent) {
-          let text = node.textContent;
-          for (const [key, value] of Object.entries(params)) {
-            text = text.replace(new RegExp(`\\$\\[${key}\\]`, "g"), value);
-          }
-          node.textContent = text;
+          node.textContent = interpolateLocalRouteValue(
+            node.textContent,
+            params,
+          );
         }
       } else if (node.nodeType === Node.ELEMENT_NODE) {
         const el = node as Element;
         if (el.hasAttributes()) {
           for (const attr of Array.from(el.attributes)) {
             if (typeof attr.value === "string" && attr.value.includes("$[")) {
-              let newVal = attr.value;
-              for (const [key, value] of Object.entries(params)) {
-                newVal = newVal.replace(
-                  new RegExp(`\\$\\[${key}\\]`, "g"),
-                  value,
-                );
-              }
+              const newVal = interpolateLocalRouteValue(attr.value, params);
               if (newVal !== attr.value) {
                 el.setAttribute(attr.name, newVal);
               }

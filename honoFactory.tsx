@@ -13,7 +13,7 @@ import type { HonoOptions } from "hono/hono-base";
 import type { Context, MiddlewareHandler } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { raw } from "hono/html";
-import type { Child } from "hono/jsx";
+import type { Child, PropsWithChildren } from "hono/jsx";
 import {
   contextStorage,
   getContext as honoGetContext,
@@ -31,7 +31,10 @@ import {
   type ToolResolutionTarget,
 } from "./clientTools.ts";
 import { getContextTitle } from "./titled.ts";
-import type { ActivateClientFunctions } from "./jsx-runtime.ts";
+import type {
+  ActivateClientFunctions,
+  ActivatedClientFunction,
+} from "./jsx-runtime.ts";
 import { type ActivateScopedStyles, css } from "./scopedStyles.ts";
 import { jsxRenderer } from "hono/jsx-renderer";
 import { AssetTags } from "./components/AssetTags.tsx";
@@ -369,40 +372,6 @@ function createSharedImportsMiddleware(
         await currentTools.extendWithImports(...toolsToExtend) as any,
       );
     }
-    await next();
-  };
-}
-
-/**
- * Middleware to add global styles to the accessed styles for every request.
- * This ensures the style's CSS files are included in AssetTags on every page.
- *
- * Use this with styles defined using `globalStyles` option in ClientTools.
- *
- * @param styles - One or more ScopedStyleImpl instances (from globalStyles option)
- *
- * @example
- * ```ts
- * const globalTools = new tiny.Styles(import.meta.url, {
- *   globalStyles: css`body { font-family: sans-serif; }`,
- * }, { global: true });
- *
- * const app = new Hono()
- *   .use(...tiny.middleware.core())
- *   .use(tiny.middleware.sharedImports(globalTools))
- *   .use(tiny.middleware.globalStyles(...globalTools.globalStyles));
- * ```
- */
-export function addGlobalStyles(
-  ...styles: { filename: string }[]
-): MiddlewareHandler {
-  return async (c, next) => {
-    const accessedStyleFiles = c.get("accessedStyleFiles") as Set<string> ||
-      new Set<string>();
-    for (const style of styles) {
-      accessedStyleFiles.add(style.filename + ".css");
-    }
-    c.set("accessedStyleFiles", accessedStyleFiles);
     await next();
   };
 }
@@ -899,6 +868,49 @@ function isLikelyAssetRequestPath(path: string): boolean {
   return /\.[a-z0-9]{1,8}$/i.test(lastSegment);
 }
 
+const headHandler = new Handlers(import.meta.url, {
+  importIntoHead: async function (this: HTMLTemplateElement) {
+    const head = this.content;
+    if (head) {
+      const headChildren = Array.from(head.children);
+      await Promise.all(headChildren.map((child) => {
+        if (child.tagName === "TITLE") {
+          globalThis.document.title = child.textContent ?? "";
+          return;
+        }
+
+        // Check if the element already exists in the head
+        if (child instanceof HTMLScriptElement && child.src) {
+          const srcAttr = child.getAttribute("src");
+          const exists = globalThis.document.head.querySelector(
+            `script[src="${srcAttr}"]`,
+          );
+          if (exists) return;
+        } else if (
+          child instanceof HTMLLinkElement &&
+          child.rel === "stylesheet" &&
+          child.href
+        ) {
+          const hrefAttr = child.getAttribute("href");
+          const exists = globalThis.document.head.querySelector(
+            `link[rel="stylesheet"][href="${hrefAttr}"]`,
+          );
+          if (exists) return;
+          // Return a promise that resolves when stylesheet loads
+          return new Promise<void>((resolve, reject) => {
+            child.onload = () => resolve();
+            child.onerror = () =>
+              reject(new Error(`Failed to load stylesheet: ${hrefAttr}`));
+            globalThis.document.head.appendChild(child);
+          });
+        }
+        globalThis.document.head.appendChild(child);
+      }));
+      this.remove();
+    }
+  },
+});
+
 /**
  * Create the core middleware array.
  * Sets up static file serving, context storage, tools tracking, and JSX rendering.
@@ -956,6 +968,8 @@ function createCoreMiddleware(
       title ??= getContextTitle(c);
       const routeLayoutApplied = c.get(ROUTE_LAYOUT_APPLIED_KEY) === true;
 
+      const { fn } = await tiny.imports(headHandler);
+
       // Await children so route/layout rendering populates tool tracking sets
       // for AssetTags to read. Re-wrap as Promise to preserve streaming callbacks
       // (childrenToStringToBuffer drops .callbacks via string concat for isEscaped
@@ -989,19 +1003,34 @@ function createCoreMiddleware(
       const sourceUrl = c.req.header("source-url");
       if (sourceUrl) {
         return (
-          <update>
-            <template>
-              <head-update>
+          <>
+            {
+              /* <update>
+              <template>
+                <head-update>
+                  {title !== undefined && <title>{title}</title>}
+                  <AssetTags
+                    accessedHandlerFiles={handlerFiles}
+                    accessedStyleFiles={styleFiles}
+                    fullPageLoad={false}
+                  />
+                </head-update>
+                <body-update>{body}</body-update>
+              </template>
+            </update> */
+            }
+            <update>
+              <NewPartial onLoad={fn.importIntoHead}>
                 {title !== undefined && <title>{title}</title>}
                 <AssetTags
                   accessedHandlerFiles={handlerFiles}
                   accessedStyleFiles={styleFiles}
                   fullPageLoad={false}
                 />
-              </head-update>
-              <body-update>{body}</body-update>
-            </template>
-          </update>
+              </NewPartial>
+              {body}
+            </update>
+          </>
         );
       }
 
@@ -1155,9 +1184,6 @@ export type TinyApi = {
   readonly middleware: {
     readonly core: (options?: ClientToolsOptions) => MiddlewareHandler[];
     readonly sharedImports: typeof createSharedImportsMiddleware;
-    readonly globalStyles: (
-      ...styles: { filename: string }[]
-    ) => MiddlewareHandler;
     readonly navApiTools: (
       options?: NavApiToolsOptions,
     ) => MiddlewareHandler;
@@ -1203,12 +1229,7 @@ export const tiny: TinyApi = {
     },
 
     /**
-     * Add one or more global style assets to every request so AssetTags always
-     * includes their CSS files.
-     *
-     * Use this with styles defined using the `globalStyles` option in ClientTools.
-     *
-     * @param styles - One or more global styles from `tools.globalStyles`
+     * Extend the request tools context with handlers and styles.
      *
      * @example
      * ```ts
@@ -1218,26 +1239,6 @@ export const tiny: TinyApi = {
      * ```
      */
     sharedImports: createSharedImportsMiddleware,
-
-    /**
-     * Add one or more global style assets to every request so AssetTags always
-     * includes their CSS files.
-     *
-     * Use this with styles defined using the `globalStyles` option in ClientTools.
-     *
-     * @param styles - One or more global styles from `tools.globalStyles`
-     *
-     * @example
-     * ```ts
-     * const app = new Hono()
-     *   .use(...tiny.middleware.core())
-     *   .use(tiny.middleware.sharedImports(tools))
-     *   .use(tiny.middleware.globalStyles(...tools.globalStyles))
-     * ```
-     */
-    globalStyles(...styles: { filename: string }[]): MiddlewareHandler {
-      return addGlobalStyles(...styles);
-    },
 
     /**
      * Enable SPA navigation with partial page updates and lazy event handler loading.
@@ -1404,4 +1405,47 @@ function createAllMiddleware(
     createFeatureMiddleware("localRoutes"),
     createFeatureMiddleware("webComponents"),
   ];
+}
+
+const partialLogic = new tiny.Handlers(import.meta.url, {
+  passLoadEvent: function (this: HTMLElement) {
+    const precedingTemplate = this.previousElementSibling;
+    if (precedingTemplate && precedingTemplate.tagName === "TEMPLATE") {
+      precedingTemplate.dispatchEvent(new Event("load"));
+      this.remove();
+    } else {
+      console.error(
+        "No preceding template found for loadPartialTemplate handler.",
+      );
+    }
+  },
+});
+
+type PartialInsertHandler = ActivatedClientFunction<
+  (this: HTMLTemplateElement, event: Event) => void
+>;
+
+export async function NewPartial(
+  props: PropsWithChildren<{
+    onLoad: PartialInsertHandler;
+    groupName?: string;
+    [attribute: string]: unknown;
+  }>,
+) {
+  const { onLoad, groupName, children, ...attributes } = props;
+  const { fn } = await tiny.imports(partialLogic);
+  return (
+    <>
+      <template onLoad={onLoad} group-name={groupName} {...attributes}>
+        {children}
+      </template>
+      <link
+        rel="modulepreload"
+        href={`/handlers/${
+          partialLogic._handlerFilenames.get("passLoadEvent")
+        }.js`}
+        onLoad={fn.passLoadEvent}
+      />
+    </>
+  );
 }

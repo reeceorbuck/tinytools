@@ -12,7 +12,30 @@ import { HtmlEscapedCallbackPhase, resolveCallback } from "hono/utils/html";
 import type { HtmlEscapedString } from "hono/utils/html";
 import type { Child, FC, PropsWithChildren } from "hono/jsx";
 import { getContext } from "hono/context-storage";
-import { getClientFileName } from "../client/dist/manifest.ts";
+import { tiny } from "@tinytools/hono-tools";
+import { partialInsertHandlers } from "../partialInsertHandlers copy.ts";
+import type { PartialContentElement } from "../client/wc-partialContent.ts";
+import type { ActivatedClientFunction } from "../jsx-runtime.ts";
+import { NewPartial } from "../honoFactory.tsx";
+import { renderToReadableStream } from "hono/jsx/dom/server";
+
+export type PartialMountHandler = ActivatedClientFunction<
+  (this: PartialContentElement, event: Event) => void
+>;
+
+export type PartialInsertHandler = ActivatedClientFunction<
+  (this: HTMLTemplateElement, event: Event) => void
+>;
+
+export type SuspenseProps = PropsWithChildren<{
+  // deno-lint-ignore no-explicit-any
+  fallback: any;
+}>;
+
+export type CustomSuspenseProps = SuspenseProps & {
+  onMount?: PartialMountHandler;
+  onLoad: PartialInsertHandler;
+};
 
 const childrenToString = async (
   children: Child[],
@@ -70,14 +93,10 @@ let suspenseCounter = 0;
  * });
  * ```
  */
-export const Suspense: FC<
-  PropsWithChildren<
-    // deno-lint-ignore no-explicit-any
-    { fallback: any }
-  >
-> = async ({
+export const CustomSuspense: FC<CustomSuspenseProps> = async ({
   children,
   fallback,
+  onLoad,
 }) => {
   if (!children) {
     return fallback?.toString() ?? "";
@@ -160,15 +179,27 @@ export const Suspense: FC<
               ))
               .join("");
 
-            let html = buffer
-              ? ""
-              : `<update id="u${index}"><template><head-update>${headUpdate}</head-update><body-update><partial id="suspended-${index}" mode="blast">${content}</partial></body-update></template></update>${
-                sourceUrl === undefined
-                  ? `<script type="module" id="s${index}">import{processIncomingHtml}from'/_tinytools/${
-                    getClientFileName("processIncomingHtml.js")
-                  }';const u=document.getElementById('u${index}'),t=u.querySelector('template').content;t.querySelector('head-update').childNodes.forEach(c=>document.head.appendChild(c.cloneNode(true)));processIncomingHtml(t.querySelector('body-update'));u.remove();document.getElementById('s${index}').remove()</script>`
-                  : ""
-              }`;
+            // let html = buffer
+            //   ? ""
+            //   : sourceUrl === undefined
+            //   ? `${headUpdate}<partial-content id="suspended-${index}" onMount="${onMount}">${content}</partial-content>`
+            //   : `<update id="u${index}"><template><head-update>${headUpdate}</head-update><body-update><partial-content id="suspended-${index}" onMount="${onMount}">${content}</partial-content></body-update></template></update>`;
+
+            let html = buffer ? "" : await renderToReadableStream(
+              <update>
+                <NewPartial
+                  id={`suspended-${index}`}
+                  onLoad={onLoad}
+                >
+                  {raw(content)}
+                </NewPartial>
+              </update>,
+            ).then((stream) => stream.getReader().read()).then((result) => {
+              const decoder = new TextDecoder();
+              const string = decoder.decode(result.value);
+              console.log("Rendered string: ", string);
+              return string;
+            });
 
             const callbacks = htmlArray
               .map((html) => (html as HtmlEscapedString).callbacks || [])
@@ -194,4 +225,10 @@ export const Suspense: FC<
   } else {
     return raw(resArray.join(""));
   }
+};
+
+export const Suspense: FC<SuspenseProps> = async (props) => {
+  const { fn } = await tiny.imports(partialInsertHandlers);
+  return await CustomSuspense({ ...props, onLoad: fn.partialBlast }) ??
+    raw("");
 };

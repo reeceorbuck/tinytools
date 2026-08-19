@@ -84,12 +84,6 @@ Deno.test("tiny.middleware.core - creates middleware array", () => {
   assertExists(middleware.length);
 });
 
-Deno.test("tiny.middleware.globalStyles - creates middleware handler", () => {
-  const middleware = tiny.middleware.globalStyles({ filename: "theme" });
-
-  assertEquals(typeof middleware, "function");
-});
-
 Deno.test("Hono with tiny.middleware.core and sharedImports - has correct types", () => {
   const app = new Hono()
     .use(...tiny.middleware.core())

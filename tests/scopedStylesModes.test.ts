@@ -11,10 +11,10 @@ import {
 
 Deno.test("scoped styles - plain css uses boundary default", () => {
   const tools = new Styles("file:///tests/scoped-default.ts", {
-      panel: css`
-        color: red;
-      `,
-    });
+    panel: css`
+      color: red;
+    `,
+  });
 
   const style = tools._styles.get("panel");
   const content = style?.buildCssContent() ?? "";
@@ -26,10 +26,10 @@ Deno.test("scoped styles - plain css uses boundary default", () => {
 
 Deno.test("scoped styles - setCustomScope.toBoundary uses boundary end", () => {
   const tools = new Styles("file:///tests/scoped-boundary.ts", {
-      panel: setCustomScope.toBoundary(css`
-        color: red;
-      `),
-    });
+    panel: setCustomScope.toBoundary(css`
+      color: red;
+    `),
+  });
 
   const style = tools._styles.get("panel");
   const content = style?.buildCssContent() ?? "";
@@ -41,13 +41,13 @@ Deno.test("scoped styles - setCustomScope.toBoundary uses boundary end", () => {
 
 Deno.test("scoped styles - scopedTo uses custom selectors", () => {
   const tools = new Styles("file:///tests/scoped-to.ts", {
-      panel: scopedTo(
-        css`
-          color: red;
-        `,
-        [".break", "[data-stop]"],
-      ),
-    });
+    panel: scopedTo(
+      css`
+        color: red;
+      `,
+      [".break", "[data-stop]"],
+    ),
+  });
 
   const style = tools._styles.get("panel");
   const content = style?.buildCssContent() ?? "";
@@ -63,14 +63,17 @@ Deno.test("scoped styles - scopedTo uses custom selectors", () => {
 });
 
 Deno.test("scoped styles - scopedTo supports child selectors directly", () => {
-  const tools = new Styles("file:///tests/scoped-to-children-with-selector.ts", {
-        panel: scopedTo(
-          css`
-            color: red;
-          `,
-          [".break>*", "[data-stop]>*"],
-        ),
-      });
+  const tools = new Styles(
+    "file:///tests/scoped-to-children-with-selector.ts",
+    {
+      panel: scopedTo(
+        css`
+          color: red;
+        `,
+        [".break>*", "[data-stop]>*"],
+      ),
+    },
+  );
 
   const style = tools._styles.get("panel");
   const content = style?.buildCssContent() ?? "";
@@ -89,10 +92,10 @@ Deno.test("scoped styles - scopedTo supports child selectors directly", () => {
 
 Deno.test("scoped styles - global token boundary is exact", () => {
   const tools = new Styles("file:///tests/scoped-global-token.ts", {
-      panel: css`
-        color: red;
-      `,
-    });
+    panel: css`
+      color: red;
+    `,
+  });
 
   const style = tools._styles.get("panel");
   const content = style?.buildCssContent() ?? "";
@@ -102,10 +105,10 @@ Deno.test("scoped styles - global token boundary is exact", () => {
 
 Deno.test("scoped styles - ClientTools.generatedStyleNames exposes generated class string", () => {
   const tools = new Styles("file:///tests/scoped-styled-accessor.ts", {
-      panel: css`
-        color: red;
-      `,
-    });
+    panel: css`
+      color: red;
+    `,
+  });
 
   const className = tools.generatedStyleNames.get("panel") ?? "";
   assertEquals(className.includes("panel_"), true);
@@ -114,10 +117,10 @@ Deno.test("scoped styles - ClientTools.generatedStyleNames exposes generated cla
 
 Deno.test("scoped styles - unscoped uses explicit data boundary tokens", () => {
   const tools = new Styles("file:///tests/scoped-none.ts", {
-      panel: unscoped(css`
-        color: red;
-      `),
-    });
+    panel: unscoped(css`
+      color: red;
+    `),
+  });
 
   const style = tools._styles.get("panel");
   const content = style?.buildCssContent() ?? "";
@@ -129,28 +132,63 @@ Deno.test("scoped styles - unscoped uses explicit data boundary tokens", () => {
   assertEquals(content.includes(".scopeBoundary"), false);
 });
 
+Deno.test("scoped styles - direct emits content directly inside @scope", () => {
+  const tools = new Styles("file:///tests/scoped-direct.ts", {
+    animations: setCustomScope.direct(css`
+      @keyframes appear {
+        from {
+          opacity: 0;
+        }
+        to {
+          opacity: 1;
+        }
+      }
+    `),
+  });
+
+  const content = tools._styles.get("animations")?.buildCssContent() ?? "";
+  assertEquals(content.includes("@layer normal"), true);
+  assertEquals(content.includes("@scope (."), true);
+  assertEquals(content.includes("{@keyframes appear"), true);
+  assertEquals(content.includes(":scope {@keyframes appear"), false);
+});
+
+Deno.test("scoped styles - direct content mode participates in style hash", () => {
+  const sharedCss = css`
+    color: red;
+  `;
+  const tools = new Styles("file:///tests/scoped-direct-hash.ts", {
+    wrapped: sharedCss,
+    direct: setCustomScope.direct(sharedCss),
+  });
+
+  const wrappedHash = tools._styles.get("wrapped")?.filename.split("_").at(-1);
+  const directHash = tools._styles.get("direct")?.filename.split("_").at(-1);
+  assertEquals(wrappedHash === directHash, false);
+});
+
 Deno.test("scoped styles - setCustomScope methods accept custom layer", () => {
   const tools = new Styles("file:///tests/scoped-custom-layer.ts", {
-      selectorsLayer: setCustomScope.toSelectors(
-        css`
-          color: red;
-        `,
-        [".break"],
-        { layer: "debug" },
-      ),
-      boundaryLayer: setCustomScope.toBoundary(
-        css`
-          color: blue;
-        `,
-        { layer: "important" },
-      ),
-      unscopedLayer: setCustomScope.unscoped(
-        css`
-          color: green;
-        `,
-        { layer: "limited" },
-      ),
-    });
+    selectorsLayer: setCustomScope.toSelectors(
+      css`
+        color: red;
+      `,
+      [".break"],
+      { layer: "debug" },
+    ),
+    boundaryLayer: setCustomScope.toBoundary(
+      css`
+        color: blue;
+      `,
+      { layer: "important" },
+    ),
+    unscopedLayer: setCustomScope.unscoped(
+      css`
+        color: green;
+      `,
+      { layer: "limited" },
+    ),
+  });
 
   const selectorsCss = tools._styles.get("selectorsLayer")?.buildCssContent() ??
     "";
@@ -162,20 +200,6 @@ Deno.test("scoped styles - setCustomScope methods accept custom layer", () => {
   assertEquals(selectorsCss.includes("@layer debug"), true);
   assertEquals(boundaryCss.includes("@layer important"), true);
   assertEquals(unscopedCss.includes("@layer limited"), true);
-});
-
-Deno.test("scoped styles - globalStyles default to global layer", () => {
-  const tools = new Styles("file:///tests/scoped-global-layer.ts", {
-      reset: css`
-        body {
-          margin: 0;
-        }
-      `,
-    }, { global: true });
-
-  const globalCss = tools.globalStyles[0]?.buildCssContent() ?? "";
-  assertEquals(globalCss.includes("@layer global"), true);
-  assertEquals(globalCss.includes("@scope"), false);
 });
 
 Deno.test("scoped styles - mergeClassNames dedupes repeated classes", () => {

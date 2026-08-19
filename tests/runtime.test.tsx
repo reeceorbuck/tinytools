@@ -248,6 +248,30 @@ Deno.test("Runtime - AssetTags renders versioned package client asset URLs", asy
   assertEquals(html.includes("/_tinytools/eventHandlers.js"), false);
 });
 
+Deno.test("Runtime - web component assets render as ES modules", async () => {
+  const app = new Hono()
+    .use(...tiny.middleware.core())
+    .use(tiny.middleware.webComponents());
+
+  app.get("/", (c) => c.render(<lifecycle-element />));
+
+  const response = await app.fetch(new Request("http://localhost/"));
+  const html = await response.text();
+
+  assertStringIncludes(
+    html,
+    `src="/_tinytools/${
+      getClientFileName("wc-lifecycleElement.js")
+    }" type="module"`,
+  );
+  assertStringIncludes(
+    html,
+    `src="/_tinytools/${
+      getClientFileName("wc-windowEventlistener.js")
+    }" type="module"`,
+  );
+});
+
 // ============================================================================
 // Test Suite: Basic handler string output
 // ============================================================================
@@ -442,11 +466,15 @@ Deno.test("Runtime - import() imported handlers return valid strings", () => {
     },
   });
 
-  const mainTools = new Handlers(import.meta.url, { imports: [externalTools] }, {
-    localHandler() {
-      console.log("local");
+  const mainTools = new Handlers(
+    import.meta.url,
+    { imports: [externalTools] },
+    {
+      localHandler() {
+        console.log("local");
+      },
     },
-  });
+  );
 
   const app = createApp(mainTools);
 
@@ -478,7 +506,9 @@ Deno.test("Runtime - import() multiple external tools", () => {
     },
   });
 
-  const mainTools = new Handlers(import.meta.url, { imports: [externalA, externalB] }, {
+  const mainTools = new Handlers(import.meta.url, {
+    imports: [externalA, externalB],
+  }, {
     mainHandler() {
       console.log("main");
     },
@@ -530,7 +560,9 @@ Deno.test("Runtime - import() then extend() preserves all handler strings", () =
     },
   });
 
-  const parentTools = new Handlers(import.meta.url, { imports: [externalTools] }, {
+  const parentTools = new Handlers(import.meta.url, {
+    imports: [externalTools],
+  }, {
     parentHandler() {
       console.log("parent");
     },
@@ -616,36 +648,6 @@ Deno.test("Runtime - extend() parent styles return style class names", () => {
   assertExists(app);
 });
 
-Deno.test("Runtime - import() styles return style class names", () => {
-  const externalStyle = css`
-    color: green;
-  `;
-  const externalTools = new Styles(import.meta.url, { externalStyle });
-
-  const mainStyle = css`
-    color: purple;
-  `;
-  const mainTools = new Styles(import.meta.url, {
-    mainStyle,
-  }, { imports: [externalTools] });
-
-  const app = createApp(mainTools);
-
-  app.get("/test", (c) => {
-    const { styled } = c.var.tools;
-
-    assertEquals(typeof styled.externalStyle, "string");
-    assertEquals(typeof styled.mainStyle, "string");
-
-    assertExists(styled.externalStyle, "External style should return a value");
-    assertExists(styled.mainStyle, "Main style should return a value");
-
-    return c.text("OK");
-  });
-
-  assertExists(app);
-});
-
 Deno.test("Runtime - styled.mergeClasses dedupes repeated scoped boundary class", () => {
   const first = css`
     color: blue;
@@ -676,14 +678,78 @@ Deno.test("Runtime - styled.mergeClasses dedupes repeated scoped boundary class"
 Deno.test("Runtime - ClientTools rejects reserved styled key mergeClasses", () => {
   assertThrows(
     () =>
-      // @ts-ignore: testing that mergeClasses is rejected at runtime
       new Styles(import.meta.url, {
+        // @ts-ignore: testing that mergeClasses is rejected at runtime
         mergeClasses: css`
           color: blue;
         `,
       }),
     Error,
     "Cannot define style 'mergeClasses'",
+  );
+});
+
+Deno.test("Runtime - fn multiHandler APIs emit concrete handler calls", () => {
+  const tools = new Handlers(import.meta.url, {
+    firstHandler() {},
+    secondHandler() {},
+    thirdHandler() {},
+  });
+
+  const app = createApp(tools);
+
+  app.get("/test", (c) => {
+    const { fn } = c.var.tools;
+    const independent = fn.multiHandler(
+      fn.firstHandler,
+      fn.secondHandler,
+      fn.thirdHandler,
+    ) as unknown as string;
+    const sequential = fn.multiHandlerSync(
+      fn.firstHandler,
+      fn.secondHandler,
+      fn.thirdHandler,
+    ) as unknown as string;
+
+    assertEquals(typeof independent, "string");
+    assertEquals(independent.includes("await"), false);
+    assertStringIncludes(independent, `.call(this, event);handlers.`);
+    assert(
+      independent.indexOf("firstHandler_") <
+        independent.indexOf("secondHandler_"),
+    );
+    assert(
+      independent.indexOf("secondHandler_") <
+        independent.indexOf("thirdHandler_"),
+    );
+    assertStringIncludes(sequential, "void (async()=>{");
+    assertStringIncludes(sequential, `await handlers.firstHandler_`);
+    assertStringIncludes(sequential, `await handlers.secondHandler_`);
+    assertStringIncludes(sequential, `await handlers.thirdHandler_`);
+
+    return c.text("OK");
+  });
+
+  assertExists(app);
+});
+
+Deno.test("Runtime - ClientTools rejects reserved function key multiHandler", () => {
+  assertThrows(
+    () =>
+      // @ts-ignore: testing that multiHandler is rejected at runtime
+      new Handlers(import.meta.url, { multiHandler() {} }),
+    Error,
+    "Cannot define function 'multiHandler'",
+  );
+});
+
+Deno.test("Runtime - ClientTools rejects reserved function key multiHandlerSync", () => {
+  assertThrows(
+    () =>
+      // @ts-ignore: testing that multiHandlerSync is rejected at runtime
+      new Handlers(import.meta.url, { multiHandlerSync() {} }),
+    Error,
+    "Cannot define function 'multiHandlerSync'",
   );
 });
 

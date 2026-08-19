@@ -248,7 +248,7 @@ Declares regions of the page that can be independently updated:
 ```tsx
 import { Partial } from "@tinytools/hono-tools/components";
 
-<Partial id="user-info" mode="replace">
+<Partial id="user-info" onMount={fn.partialReplace}>
   <UserCard user={user} />
 </Partial>;
 ```

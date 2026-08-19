@@ -12,10 +12,16 @@
 
 /// <reference lib="dom" />
 
-import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertMatch,
+  assertStringIncludes,
+} from "@std/assert";
 import { Hono } from "hono";
 import { addRouteLayout, tiny } from "../honoFactory.tsx";
-import { Suspense } from "../components/Suspense.tsx";
+import { CustomSuspense, Suspense } from "../components/Suspense.tsx";
+import type { PartialContentElement } from "../client/wc-partialContent.ts";
 import type { Child, FC } from "hono/jsx";
 
 declare module "hono" {
@@ -59,8 +65,18 @@ const SlowContent: FC<{ delay?: number; content: string }> = async ({
   return <div class="resolved">{content}</div>;
 };
 
-const SlowList: FC<{ items: string[] }> = async ({ items }) => {
-  return <>{items.map((item) => <SlowContent content={item} delay={10} />)}</>;
+const SlowList: FC<{ items: string[] }> = ({ items }) => {
+  return (
+    <>
+      {items.map((item) => (
+        <SlowContent
+          key={item}
+          content={item}
+          delay={10}
+        />
+      ))}
+    </>
+  );
 };
 
 /** Sync component */
@@ -77,6 +93,12 @@ const TestLayout: FC<{ children: Child }> = ({ children }) => {
     </div>
   );
 };
+
+const customSuspenseHandlers = new tiny.Handlers(import.meta.url, {
+  customSuspenseMount: function (this: PartialContentElement) {
+    this.replaceWith(...Array.from(this.children));
+  },
+});
 
 // ============================================================================
 // Tests
@@ -107,9 +129,38 @@ Deno.test("Suspense - streams fallback then resolved async content", async () =>
 
   // Later chunk(s) contain the resolved content
   const laterContent = chunks.slice(1).join("");
-  assertStringIncludes(laterContent, "<update");
+  assertStringIncludes(laterContent, "<partial-content");
+  assert(
+    !laterContent.includes("processIncomingHtml"),
+    "Full-page Suspense should mount through the partial-content lifecycle",
+  );
   assertStringIncludes(laterContent, "Hello World");
   assertStringIncludes(laterContent, "resolved");
+});
+
+Deno.test("CustomSuspense - streams with the supplied mount handler", async () => {
+  const app = new Hono()
+    .use(...tiny.middleware.core())
+    .use(tiny.middleware.sharedImports(customSuspenseHandlers))
+    .get("/", (c) => {
+      const { fn } = c.var.tools;
+      return c.render(
+        <CustomSuspense
+          fallback={<div>Loading custom...</div>}
+          onMount={fn.customSuspenseMount}
+        >
+          <SlowContent content="Custom content" delay={20} />
+        </CustomSuspense>,
+      );
+    });
+
+  const body = await fullBody(await app.request("/"));
+
+  assertStringIncludes(body, "Custom content");
+  assertMatch(
+    body,
+    /onMount="handlers\.customSuspenseMount_[a-z0-9]+\.call\(this, event\)"/,
+  );
 });
 
 Deno.test("Suspense - sync children render inline without streaming", async () => {
@@ -158,11 +209,11 @@ Deno.test("Suspense - multiple Suspense components stream independently", async 
   assertStringIncludes(body, "Content A");
   assertStringIncludes(body, "Content B");
 
-  // Both should have streaming update markers
-  const updateCount = (body.match(/<update /g) || []).length;
+  // Both should have independently mounted streaming partials
+  const partialCount = (body.match(/<partial-content /g) || []).length;
   assert(
-    updateCount >= 2,
-    `Expected at least 2 <update> tags, got ${updateCount}`,
+    partialCount >= 2,
+    `Expected at least 2 <partial-content> tags, got ${partialCount}`,
   );
 });
 
@@ -265,6 +316,7 @@ Deno.test("core renderer preserves pre-resolved Suspense callbacks", async () =>
         fallback: <div>Loading...</div>,
         children: <SlowList items={["Confirmation one", "Confirmation two"]} />,
       });
+      assert(suspended !== null);
       return c.render(suspended);
     });
 
