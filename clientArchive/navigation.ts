@@ -1,26 +1,54 @@
-import { processLocalSuspenseTemplates } from "./localRoutes.v0.1.37.0d35aa92.js";
-import performFetchAndUpdate from "./performFetchAndUpdate.v0.1.37.91da9caf.js";
+/**
+ * Navigation client script for @tinytools/hono-tools
+ *
+ * Intercepts browser navigation events and performs partial page updates.
+ */
+
+import { processLocalSuspenseTemplates } from "./localRoutes.ts";
+import performFetchAndUpdate from "./performFetchAndUpdate.ts";
 import {
   getActiveRouteCachePath,
-  incrementNavGeneration
-} from "./routeCache.v0.1.37.978c108f.js";
-function getNavigationClientInfo(e) {
+  incrementNavGeneration,
+} from "./routeCache.ts";
+
+interface NavigationClientInfo {
+  blockIntercept?: boolean;
+  onlyUpdateUrl?: boolean;
+}
+
+function getNavigationClientInfo(
+  e: NavigateEvent,
+): NavigationClientInfo | null {
   if (!e.info || typeof e.info !== "object") {
     return null;
   }
-  return e.info;
+
+  return e.info as NavigationClientInfo;
 }
-function normalizePathname(pathname) {
+
+function normalizePathname(pathname: string) {
   if (pathname === "/") {
     return pathname;
   }
+
   return pathname.replace(/\/+$/, "");
 }
-function getNavigationMethod(e) {
+
+function getNavigationMethod(e: NavigateEvent): "get" | "post" {
   if (e.sourceElement instanceof HTMLFormElement) {
-    return (e.sourceElement.method || "get").toLowerCase() === "post" ? "post" : "get";
+    return (e.sourceElement.method || "get").toLowerCase() === "post"
+      ? "post"
+      : "get";
   }
-  if (e.sourceElement instanceof HTMLButtonElement || e.sourceElement instanceof HTMLInputElement) {
+
+  if (
+    e.sourceElement instanceof HTMLButtonElement ||
+    e.sourceElement instanceof HTMLInputElement
+  ) {
+    // Prefer an explicitly set formmethod; otherwise fall back to the
+    // owning form's method. button.formMethod returns "" when the
+    // formmethod content attribute is missing/invalid, so we must check
+    // the attribute directly rather than the IDL getter alone.
     const explicit = e.sourceElement.getAttribute("formmethod");
     if (explicit) {
       return explicit.toLowerCase() === "post" ? "post" : "get";
@@ -31,65 +59,109 @@ function getNavigationMethod(e) {
     }
     return "get";
   }
+
   if (e.sourceElement && "form" in e.sourceElement) {
-    const form = e.sourceElement.form;
+    const form = (e.sourceElement as HTMLInputElement | HTMLButtonElement).form;
     if (form) {
       return (form.method || "get").toLowerCase() === "post" ? "post" : "get";
     }
   }
+
   return e.formData ? "post" : "get";
 }
-function hasTruthyNoCacheAttr(element) {
+
+function hasTruthyNoCacheAttr(element: Element | null) {
   if (!element || !element.hasAttribute("data-no-cache")) {
     return false;
   }
+
   const rawValue = element.getAttribute("data-no-cache");
   if (rawValue === null || rawValue === "") {
     return true;
   }
+
   return rawValue.toLowerCase() !== "false";
 }
-function getNavigationSourceForm(sourceElement) {
+
+function getNavigationSourceForm(
+  sourceElement: EventTarget | null,
+): HTMLFormElement | null {
   if (sourceElement instanceof HTMLFormElement) {
     return sourceElement;
   }
+
   if (sourceElement && "form" in sourceElement) {
-    return sourceElement.form;
+    return (sourceElement as HTMLInputElement | HTMLButtonElement).form;
   }
+
   return null;
 }
-function shouldBypassRouteCache(e) {
-  if (e.sourceElement instanceof Element && e.sourceElement.hasAttribute("data-no-cache")) {
+
+function shouldBypassRouteCache(e: NavigateEvent) {
+  // The submitter (source element) takes priority over the form: if it
+  // explicitly sets data-no-cache (to any value), use that. Only fall back to
+  // the form when the submitter has not specified the attribute at all.
+  if (
+    e.sourceElement instanceof Element &&
+    e.sourceElement.hasAttribute("data-no-cache")
+  ) {
     return hasTruthyNoCacheAttr(e.sourceElement);
   }
+
   const sourceForm = getNavigationSourceForm(e.sourceElement);
   return hasTruthyNoCacheAttr(sourceForm);
 }
+
 navigation.addEventListener(
   "navigate",
   (e) => {
+    console.log("Old navigation event deactivated");
+    return;
     try {
       const navigationInfo = getNavigationClientInfo(e);
       const fromUrl = new URL(globalThis.location.href);
       const toUrl = new URL(e.destination.url);
       const fetchUrl = new URL(toUrl);
       let displayUrl = new URL(toUrl);
-      if (e.sourceElement && e.sourceElement.hasAttribute("data-no-intercept") || toUrl.origin !== fromUrl.origin || navigationInfo?.blockIntercept) {
+
+      // If info has blockIntercept, don't intercept
+      // If different origin, dont intercept, just let it happen
+      // If a tag contains an attribute data-no-intercept, don't intercept
+      if (
+        (e.sourceElement &&
+          e.sourceElement.hasAttribute("data-no-intercept")) ||
+        toUrl.origin !== fromUrl.origin ||
+        navigationInfo?.blockIntercept
+      ) {
         console.log(
-          "Navigation no intercept"
+          "Navigation no intercept",
         );
+        // This return means there will be a full page navigation, instead of intercepting
         return;
       }
-      const isSameDocumentHashNavigation = normalizePathname(toUrl.pathname) === normalizePathname(fromUrl.pathname) && toUrl.search === fromUrl.search && toUrl.hash !== "";
+
+      const isSameDocumentHashNavigation = normalizePathname(toUrl.pathname) ===
+          normalizePathname(fromUrl.pathname) &&
+        toUrl.search === fromUrl.search &&
+        toUrl.hash !== "";
+      // && toUrl.hash !== fromUrl.hash;
       if (isSameDocumentHashNavigation) {
         console.log(
-          "Navigation hash-only update, skipping SPA intercept for native anchor behavior."
+          "Navigation hash-only update, skipping SPA intercept for native anchor behavior.",
         );
         return;
       }
+
       console.log("e.sourceElement: ", e.sourceElement);
-      const partialAttr = e.sourceElement?.getAttribute("data-nav-partial") ?? (e.sourceElement instanceof HTMLFormElement ? e.sourceElement : e.sourceElement && "form" in e.sourceElement ? e.sourceElement.form : null)?.getAttribute("data-nav-partial");
+
+      const partialAttr = e.sourceElement?.getAttribute("data-nav-partial") ??
+        (e.sourceElement instanceof HTMLFormElement
+          ? e.sourceElement
+          : e.sourceElement && "form" in e.sourceElement
+          ? (e.sourceElement as HTMLInputElement | HTMLButtonElement).form
+          : null)?.getAttribute("data-nav-partial");
       console.log("Found data-nav-partial attribute: ", partialAttr);
+
       if (partialAttr) {
         const partialUrl = new URL(partialAttr, toUrl.href);
         if (!partialUrl.search && toUrl.search) {
@@ -105,14 +177,55 @@ navigation.addEventListener(
       if (bypassRouteCache) {
         console.log("Route cache bypass enabled via data-no-cache");
       }
+
+      // if (
+      //   e.formData ||
+      //   e.sourceElement instanceof HTMLFormElement ||
+      //   (e.sourceElement && "form" in e.sourceElement)
+      // ) {
+      //   const form = e.sourceElement as HTMLFormElement;
+      //   if (form.hasAttribute("data-update-url")) {
+      //     console.log(
+      //       "Navigation event is a form submission, but has data-update-url, so intercept with url update",
+      //     );
+      //   } else {
+      //     e.preventDefault();
+      //     console.log(
+      //       "Navigation event prevented due to form submission, ie. fetch but no url or query param change: ",
+      //       e,
+      //     );
+      //     await performFetchAndUpdate(toUrl, fromUrl, e.formData);
+      //     return;
+      //   }
+      // }
+
       e.intercept({
         focusReset: "manual",
         // deno-lint-ignore require-await
         async precommitHandler(controller) {
           try {
             if (e.navigationType === "push") {
+              // This is where we can modify the URL in the address bar, to either keep as is for a POST form submission,
+              // or to clean up additional get query params that were only needed for the fetch
+
+              // We are going to preserve the query params as state
+              // const currentParams = fromUrl.searchParams;
+
+              // console.log(
+              //   "toUrl params before cleaning: ",
+              //   toUrl.searchParams.toString(),
+              // );
+
+              // currentParams.forEach((value, key) => {
+              //   if (toUrl.searchParams.get(key) === null) {
+              //     toUrl.searchParams.set(key, value);
+              //   }
+              // });
+              // Dont clean if its a partial navigation
+
               try {
                 let cleaned = false;
+
                 const cleanUrl = new URL(toUrl);
                 [...cleanUrl.searchParams].forEach(([key, value]) => {
                   console.log("Checking param for cleaning: ", key, value);
@@ -130,35 +243,48 @@ navigation.addEventListener(
               } catch (err) {
                 console.error("Error cleaning URL: ", err);
               }
+
+              // Should be an attribute on the form, or the link, to indicate what to do here
               console.log(
                 "In precommitHandler for navigation to: ",
-                e.destination.url
+                e.destination.url,
               );
               console.log(
                 "e.sourceElement: ",
-                e.sourceElement?.form
+                (e.sourceElement as HTMLButtonElement)?.form,
               );
-              const submitterRedirectAttr = e.sourceElement?.getAttribute("data-nav-redirect") ?? null;
-              const formRedirectAttr = (e.sourceElement instanceof HTMLFormElement ? e.sourceElement : e.sourceElement && "form" in e.sourceElement ? e.sourceElement.form : null)?.getAttribute("data-nav-redirect") ?? null;
+
+              // Submitter (source element) takes priority over the form. Only
+              // fall back to the form's attribute when the submitter has not
+              // specified data-nav-redirect at all.
+              const submitterRedirectAttr =
+                e.sourceElement?.getAttribute("data-nav-redirect") ?? null;
+              const formRedirectAttr = (e.sourceElement instanceof
+                  HTMLFormElement
+                ? e.sourceElement
+                : e.sourceElement && "form" in e.sourceElement
+                ? (e.sourceElement as HTMLInputElement | HTMLButtonElement).form
+                : null)?.getAttribute("data-nav-redirect") ?? null;
               const redirectAttr = submitterRedirectAttr ?? formRedirectAttr;
               console.log("Found data-nav-redirect attribute: ", redirectAttr);
               if (redirectAttr === "true") {
                 console.log(
-                  "data-nav-redirect is true, keeping current URL in address bar"
+                  "data-nav-redirect is true, keeping current URL in address bar",
                 );
                 displayUrl = new URL(fromUrl);
                 controller.redirect(displayUrl.href);
               } else if (redirectAttr) {
                 displayUrl = new URL(
                   redirectAttr,
-                  globalThis.location.href
+                  globalThis.location.href,
                 );
+                // displayUrl.searchParams.delete("date_input"); <-- example of deleting a query param after use
                 console.log("redirecting to custom URL: ", displayUrl.href);
                 controller.redirect(displayUrl.href);
               } else {
                 console.log(
                   "No data-nav-redirect attribute, proceeding with normal url update to: ",
-                  toUrl.href
+                  toUrl.href,
                 );
               }
             }
@@ -167,19 +293,24 @@ navigation.addEventListener(
             console.error("Error in pre-commit handler: ", err);
           }
         },
+
         async handler() {
           try {
             console.log("In navigation handler for fetchUrl: ", fetchUrl.href);
             const navigationMethod = getNavigationMethod(e);
             const localRouteUrl = fetchUrl;
-            const cacheCurrentPath = navigationMethod === "get" ? getActiveRouteCachePath(fromUrl.pathname) : void 0;
+            const cacheCurrentPath = navigationMethod === "get"
+              ? getActiveRouteCachePath(fromUrl.pathname)
+              : undefined;
             if (navigationInfo?.onlyUpdateUrl) {
               console.log(
-                "Navigation event onlyUpdateUrl, no fetch performed."
+                "Navigation event onlyUpdateUrl, no fetch performed.",
               );
               return;
             }
+
             const navGeneration = incrementNavGeneration();
+
             try {
               const block = processLocalSuspenseTemplates(
                 localRouteUrl,
@@ -188,54 +319,64 @@ navigation.addEventListener(
                 navigationMethod,
                 {
                   allowRuntimeCache: !bypassRouteCache,
-                  bypassRouteCache
-                }
+                  bypassRouteCache,
+                },
               );
               if (block) {
                 console.log(
-                  "Blocking navigation for this local route due to template."
+                  "Blocking navigation for this local route due to template.",
                 );
                 return;
               }
             } catch (err) {
               console.error("Error in processLocalSuspenseTemplates: ", err);
             }
+
             if (e.sourceElement?.hasAttribute("data-local-only")) {
               console.log(
-                "Navigation event is local only, no fetch performed."
+                "Navigation event is local only, no fetch performed.",
               );
               return;
             }
+
             console.log(
-              `NAV: Fetching from ${fetchUrl.href}, updating url to ${toUrl.href}`
+              `NAV: Fetching from ${fetchUrl.href}, updating url to ${toUrl.href}`,
             );
+
             return await performFetchAndUpdate(
               fetchUrl,
               fromUrl,
               displayUrl,
               e.formData,
               navigationMethod,
-              { bypassRouteCache, navGeneration }
+              { bypassRouteCache, navGeneration },
             );
           } catch (err) {
             console.error("Error in navigation handler: ", err);
           }
-        }
+        },
       });
     } catch (err) {
       console.error("Error handling navigation event: ", err);
+      // Going to allow the navigation to proceed as if Navigation API is not supported if there is an error in the handler
+      // Right now Safari doesnt support precommitHandler, so this is a workaround for that,
+      // But it will also suppress obvious other errors so need to be careful about that
+      // e.preventDefault();
     }
-  }
+  },
 );
-function setVariablesFromUrl(fromUrl, toUrl) {
+
+function setVariablesFromUrl(fromUrl: URL, toUrl: URL) {
   const fromSplitPath = fromUrl.pathname.split("/").filter(Boolean);
   const toSplitPath = toUrl.pathname.split("/").filter(Boolean);
   toSplitPath.forEach((partPath, i) => {
+    // Only update path variables if they have changed
     if (partPath !== fromSplitPath[i]) {
       document.documentElement.style.setProperty(`--path-${i}`, partPath);
     }
   });
   if (fromSplitPath.length > toSplitPath.length) {
+    // Remove extra path parts
     for (let i = toSplitPath.length; i < fromSplitPath.length; i++) {
       document.documentElement.style.removeProperty(`--path-${i}`);
     }
@@ -247,22 +388,22 @@ function setVariablesFromUrl(fromUrl, toUrl) {
       return {
         key,
         from: fromParams.get(key),
-        to: value || null
+        to: value || null,
       };
-    }
+    },
   ).concat(
     fromParams.entries().toArray().map(([key, value]) => {
       if (toUrl.searchParams.has(key)) return null;
       return {
         key,
         from: value || null,
-        to: null
+        to: null,
       };
-    })
+    }),
   ).filter((change) => change !== null);
   const changeMap = new Map(paramChanges.map(({ key, ...rest }) => [
     key,
-    rest
+    rest,
   ]));
   changeMap.forEach(({ to }, key) => {
     if (!to) document.documentElement.style.removeProperty(`--param-${key}`);

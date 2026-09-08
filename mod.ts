@@ -47,6 +47,7 @@ export {
   type InferTools,
   type LocalRoutesOptions,
   type NavApiToolsOptions,
+  type PartialAbortableHTMLElement,
   type RouteLayoutProps,
   type SseToolsOptions,
   tiny,
@@ -68,9 +69,15 @@ export {
 export type {
   PartialContentContext,
   PartialContentProcessingOptions,
-} from "./client/partialContentContext.ts";
+} from "./clientArchive/partialContentContext.ts";
 
 // Registry exports (used by build process)
+export {
+  eventHandlerBody,
+  type Events,
+  type HandlerReference,
+  type HandlerReferences,
+} from "./eventAttributes.ts";
 export { handlers } from "./clientFunctions.ts";
 export {
   css,

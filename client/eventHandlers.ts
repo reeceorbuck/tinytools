@@ -49,3 +49,21 @@ const basePath = "/handlers";
     },
   },
 );
+
+(globalThis as GlobalPlusHandlers).handlers.fn = function (
+  this: HTMLElement,
+  e: Event,
+) {
+  const handlerName = this.getAttribute("tt-handler-" + e.type);
+  if (!handlerName) {
+    console.error(
+      `No handler found for event type "${e.type}" on element:`,
+      this,
+    );
+    return;
+  }
+  return (globalThis as GlobalPlusHandlers).handlers[handlerName].call(
+    this,
+    e,
+  );
+};

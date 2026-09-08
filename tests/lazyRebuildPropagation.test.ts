@@ -497,6 +497,47 @@ Deno.test({
 });
 
 Deno.test({
+  name: "lazy rebuild - sibling changes do not leak into the next pass",
+  async fn() {
+    await cleanupTestDirs();
+    resetRegistries();
+
+    const sourceUrl = await writeFakeSource("siblings", "// v1");
+    new Handlers(sourceUrl, {
+      activateClientRoutes(this: HTMLElement) {
+        console.log("activate", this.tagName);
+      },
+      suspendClientRoutes(this: HTMLElement) {
+        console.log("suspend", this.tagName);
+      },
+    });
+
+    const activateImpl = getImpl(sourceUrl, "activateClientRoutes");
+    const suspendImpl = getImpl(sourceUrl, "suspendClientRoutes");
+    await lazyRevalidate(activateImpl);
+
+    await touchFakeSource(sourceUrl, "// v2");
+    (suspendImpl as unknown as { fn: () => void }).fn =
+      function suspendClientRoutes(this: HTMLElement) {
+        console.log("suspend changed", this.tagName);
+      };
+    await lazyRevalidate(activateImpl);
+
+    const rebuilt = await lazyRevalidate(activateImpl);
+
+    assertEquals(
+      rebuilt,
+      false,
+      "an unchanged handler must not rebuild because a sibling changed in a completed pass",
+    );
+
+    await cleanupTestDirs();
+  },
+  sanitizeOps: false,
+  sanitizeResources: false,
+});
+
+Deno.test({
   name:
     "lazy rebuild - editing only the consumer file does not rehash the imported helper",
   async fn() {

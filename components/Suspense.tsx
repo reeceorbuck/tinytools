@@ -13,11 +13,12 @@ import type { HtmlEscapedString } from "hono/utils/html";
 import type { Child, FC, PropsWithChildren } from "hono/jsx";
 import { getContext } from "hono/context-storage";
 import { tiny } from "@tinytools/hono-tools";
-import { partialInsertHandlers } from "../partialInsertHandlers copy.ts";
+import { partialInsertHandlers } from "../handlers/partialInsertHandlers.ts";
 import type { PartialContentElement } from "../client/wc-partialContent.ts";
 import type { ActivatedClientFunction } from "../jsx-runtime.ts";
-import { NewPartial } from "../honoFactory.tsx";
+import { headHandler, NewPartial } from "../honoFactory.tsx";
 import { renderToReadableStream } from "hono/jsx/dom/server";
+import { AssetTags } from "./AssetTags.tsx";
 
 export type PartialMountHandler = ActivatedClientFunction<
   (this: PartialContentElement, event: Event) => void
@@ -168,37 +169,35 @@ export const CustomSuspense: FC<CustomSuspenseProps> = async ({
               );
             }
 
-            const headUpdate = Array.from(
-              accessedHandlerFiles || [],
-              // deno-lint-ignore jsx-key
-            ).map((file) => <script src={`/handlers/${file}`} type="module" />)
-              .join("") + Array.from(
-                accessedStyleFiles || [],
-              ).map((file) => (
-                <link rel="stylesheet" href={`/styles/${file}`} />
-              ))
-              .join("");
-
-            // let html = buffer
-            //   ? ""
-            //   : sourceUrl === undefined
-            //   ? `${headUpdate}<partial-content id="suspended-${index}" onMount="${onMount}">${content}</partial-content>`
-            //   : `<update id="u${index}"><template><head-update>${headUpdate}</head-update><body-update><partial-content id="suspended-${index}" onMount="${onMount}">${content}</partial-content></body-update></template></update>`;
-
+            const { fn } = await tiny.imports(headHandler);
             let html = buffer ? "" : await renderToReadableStream(
-              <update>
+              <>
+                {((accessedHandlerFiles?.size || 0) +
+                      (accessedStyleFiles?.size || 0)) > 0 &&
+                  (
+                    <NewPartial onLoad={fn.importIntoHead}>
+                      <AssetTags
+                        accessedHandlerFiles={accessedHandlerFiles}
+                        accessedStyleFiles={accessedStyleFiles}
+                        fullPageLoad={false}
+                      />
+                    </NewPartial>
+                  )}
                 <NewPartial
                   id={`suspended-${index}`}
                   onLoad={onLoad}
                 >
                   {raw(content)}
                 </NewPartial>
-              </update>,
+              </>,
             ).then((stream) => stream.getReader().read()).then((result) => {
               const decoder = new TextDecoder();
               const string = decoder.decode(result.value);
               console.log("Rendered string: ", string);
-              return string;
+              if (sourceUrl === undefined) {
+                return string;
+              }
+              return `<update>${string}</update>`;
             });
 
             const callbacks = htmlArray

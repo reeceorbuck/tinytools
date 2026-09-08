@@ -13,7 +13,7 @@ import type { HonoOptions } from "hono/hono-base";
 import type { Context, MiddlewareHandler } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { raw } from "hono/html";
-import type { Child, PropsWithChildren } from "hono/jsx";
+import type { Child } from "hono/jsx";
 import {
   contextStorage,
   getContext as honoGetContext,
@@ -31,18 +31,26 @@ import {
   type ToolResolutionTarget,
 } from "./clientTools.ts";
 import { getContextTitle } from "./titled.ts";
-import type {
-  ActivateClientFunctions,
-  ActivatedClientFunction,
-} from "./jsx-runtime.ts";
+import type { ActivateClientFunctions } from "./jsx-runtime.ts";
 import { type ActivateScopedStyles, css } from "./scopedStyles.ts";
 import { jsxRenderer } from "hono/jsx-renderer";
 import { AssetTags } from "./components/AssetTags.tsx";
+import { NewPartial } from "./components/NewPartial.tsx";
 import type { JSX } from "hono/jsx/jsx-runtime";
 import { clientFiles } from "./client/dist/manifest.ts";
 import { addStream, removeStream, trackConnectedClients } from "./sse.ts";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import type { PartialAbortableHTMLElement } from "./client/wc-lifecycleAbortable.ts";
+import {
+  createEvents,
+  createHandlerReferences,
+  type Events,
+  type HandlerReferences,
+} from "./eventAttributes.ts";
+
+export type { PartialAbortableHTMLElement };
+export { NewPartial };
 
 /** URL prefix for package-provided client scripts */
 export const TINYTOOLS_CLIENT_PREFIX = "/_tinytools";
@@ -112,6 +120,8 @@ type ExtractAllStyles<T> = T extends { __styles: infer S } ? S : object;
  * When intersected, these phantom properties merge correctly.
  */
 interface RawToolsType<TFunctions, TStyles> {
+  readonly events: Events<TFunctions>;
+  readonly handlers: HandlerReferences<TFunctions>;
   /** Phantom property for type merging - stores function types */
   readonly __functions: TFunctions;
   /** Phantom property for type merging - stores style types */
@@ -148,6 +158,14 @@ type MergedToolsAccess<
   TAccumulatedStyles,
   TLocalTools extends AnyClientTools[],
 > = {
+  readonly handlers: HandlerReferences<
+    & TAccumulatedFunctions
+    & UnionToIntersection<ExtractFunctions<TLocalTools[number]>>
+  >;
+  readonly events: Events<
+    & TAccumulatedFunctions
+    & UnionToIntersection<ExtractFunctions<TLocalTools[number]>>
+  >;
   readonly __functions:
     & TAccumulatedFunctions
     & UnionToIntersection<ExtractFunctions<TLocalTools[number]>>;
@@ -481,6 +499,23 @@ export function addRouteLayout<
     c: Context,
   ) => JSX.Element | Promise<JSX.Element>,
 ): MiddlewareHandler {
+  return createRouteLayout<V>(LayoutComponent, false);
+}
+
+export function addPartialRouteLayout<
+  V extends Record<string, unknown> = Record<string, never>,
+>(
+  LayoutComponent: Parameters<typeof addRouteLayout>[0],
+): MiddlewareHandler {
+  return createRouteLayout<V>(LayoutComponent, true);
+}
+
+function createRouteLayout<
+  V extends Record<string, unknown>,
+>(
+  LayoutComponent: Parameters<typeof addRouteLayout>[0],
+  renderOnPartial: boolean,
+): MiddlewareHandler {
   // deno-lint-ignore no-explicit-any
   return jsxRenderer(async ({ children, Layout, title }: any, c: any) => {
     const sourceUrl = !!c.req.header("source-url");
@@ -492,7 +527,7 @@ export function addRouteLayout<
     await children;
 
     // Partial navigation - return children inside Layout without our route layout
-    if (sourceUrl) {
+    if (sourceUrl && !renderOnPartial) {
       return <Layout title={title}>{children}</Layout>;
     }
 
@@ -533,6 +568,8 @@ export type withAncestors<TAncestors extends AnyClientTools[]> = {
 
 /** Internal type for the tools proxy object */
 interface ToolsProxy {
+  events: Events<unknown>;
+  handlers: HandlerReferences<unknown>;
   fn: unknown;
   styled: unknown;
   extendWithImports(...localTools: AnyClientTools[]): Promise<ToolsProxy>;
@@ -641,6 +678,12 @@ function createToolsMiddleware(): MiddlewareHandler {
       functionsProxy: unknown,
       stylesProxy: unknown,
     ): ToolsProxy => ({
+      handlers: createHandlerReferences((name) =>
+        (functionsProxy as Record<string, unknown>)[name]
+      ),
+      events: createEvents((name) =>
+        (functionsProxy as Record<string, unknown>)[name]
+      ),
       get fn() {
         return functionsProxy;
       },
@@ -868,7 +911,7 @@ function isLikelyAssetRequestPath(path: string): boolean {
   return /\.[a-z0-9]{1,8}$/i.test(lastSegment);
 }
 
-const headHandler = new Handlers(import.meta.url, {
+export const headHandler = new Handlers(import.meta.url, {
   importIntoHead: async function (this: HTMLTemplateElement) {
     const head = this.content;
     if (head) {
@@ -908,6 +951,20 @@ const headHandler = new Handlers(import.meta.url, {
       }));
       this.remove();
     }
+  },
+  cacheRoute: function (this: HTMLTemplateElement) {
+    // Do two things with the content
+    // 1. Append it to the body
+    // 2. Cache it separately for future partial navigation requests
+    const content = this.content;
+    console.log("cacheRoute content: ", content);
+    if (content) {
+      const Children = Array.from(content.children);
+      Children.forEach((child) => {
+        document.body.appendChild(child);
+      });
+    }
+    this.remove();
   },
 });
 
@@ -984,7 +1041,7 @@ function createCoreMiddleware(
       };
       const callbacks = Array.from(
         new Set([
-          ...(callbackChildren.callbacks ?? []),
+          ...(callbackChildren?.callbacks ?? []),
           ...(callbackBody.callbacks ?? []),
         ]),
       );
@@ -1028,7 +1085,9 @@ function createCoreMiddleware(
                   fullPageLoad={false}
                 />
               </NewPartial>
-              {body}
+              <NewPartial onLoad={fn.cacheRoute}>
+                {body}
+              </NewPartial>
             </update>
           </>
         );
@@ -1195,6 +1254,7 @@ export type TinyApi = {
       options?: WebComponentsOptions,
     ) => MiddlewareHandler;
     readonly layout: typeof addRouteLayout;
+    readonly partialLayout: typeof addPartialRouteLayout;
     readonly all: (options?: ClientToolsOptions) => MiddlewareHandler[];
   };
   readonly build: (
@@ -1349,6 +1409,7 @@ export const tiny: TinyApi = {
      * ```
      */
     layout: addRouteLayout,
+    partialLayout: addPartialRouteLayout,
 
     /**
      * Enable all features: navigation, SSE, local routes, and web components.
@@ -1400,52 +1461,10 @@ function createAllMiddleware(
 ): MiddlewareHandler[] {
   return [
     ...createCoreMiddleware(options),
-    createFeatureMiddleware("navigation"),
-    createSseFeatureMiddleware(),
-    createFeatureMiddleware("localRoutes"),
+    // createFeatureMiddleware("navigation"),
+    // createSseFeatureMiddleware(),
+    // createFeatureMiddleware("localRoutes"),
     createFeatureMiddleware("webComponents"),
   ];
 }
 
-const partialLogic = new tiny.Handlers(import.meta.url, {
-  passLoadEvent: function (this: HTMLElement) {
-    const precedingTemplate = this.previousElementSibling;
-    if (precedingTemplate && precedingTemplate.tagName === "TEMPLATE") {
-      precedingTemplate.dispatchEvent(new Event("load"));
-      this.remove();
-    } else {
-      console.error(
-        "No preceding template found for loadPartialTemplate handler.",
-      );
-    }
-  },
-});
-
-type PartialInsertHandler = ActivatedClientFunction<
-  (this: HTMLTemplateElement, event: Event) => void
->;
-
-export async function NewPartial(
-  props: PropsWithChildren<{
-    onLoad: PartialInsertHandler;
-    groupName?: string;
-    [attribute: string]: unknown;
-  }>,
-) {
-  const { onLoad, groupName, children, ...attributes } = props;
-  const { fn } = await tiny.imports(partialLogic);
-  return (
-    <>
-      <template onLoad={onLoad} group-name={groupName} {...attributes}>
-        {children}
-      </template>
-      <link
-        rel="modulepreload"
-        href={`/handlers/${
-          partialLogic._handlerFilenames.get("passLoadEvent")
-        }.js`}
-        onLoad={fn.passLoadEvent}
-      />
-    </>
-  );
-}

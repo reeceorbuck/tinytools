@@ -7,7 +7,12 @@
  */
 
 export { AssetTags } from "./AssetTags.tsx";
-export { ActivateOnLoadHandler } from "./ActivateOnLoadHandler.tsx";
+export { ClientRoutes } from "./ClientRoutes.tsx";
+export {
+  ActivateLifecycleHandlers,
+  ActivateOnLoadHandler,
+  BuildFromTemplateElement,
+} from "./ActivateOnLoadHandler.tsx";
 export { RouteCache } from "./RouteCache.tsx";
 export type { RouteCacheProps } from "./RouteCache.tsx";
 export { CustomSuspense, Suspense } from "./Suspense.tsx";
@@ -16,5 +21,6 @@ export type {
   PartialMountHandler,
   SuspenseProps,
 } from "./Suspense.tsx";
-export { Partial } from "./Partial.tsx";
+// export { Partial } from "./Partial.tsx";
+export { NewPartial } from "../honoFactory.tsx";
 export type { PartialProps } from "./Partial.tsx";

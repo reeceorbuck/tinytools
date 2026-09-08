@@ -8,14 +8,40 @@
  * @module
  */
 
-export {
-  Fragment,
-  jsx,
-  jsxAttr,
-  jsxEscape,
-  jsxs,
-  jsxTemplate,
+export { Fragment, jsxEscape, jsxTemplate } from "hono/jsx/jsx-runtime";
+import {
+  jsx as honoJsx,
+  jsxAttr as honoJsxAttr,
+  jsxTemplate as honoJsxTemplate,
 } from "hono/jsx/jsx-runtime";
+import {
+  type HandlerReference,
+  handlerReferenceAttributes,
+} from "./eventAttributes.ts";
+
+export const jsx: typeof honoJsx = (tag, props, key) => {
+  if (typeof tag !== "string" || !props) return honoJsx(tag, props, key);
+  let expanded = props;
+  for (const [name, value] of Object.entries(props)) {
+    const attributes = handlerReferenceAttributes(name, value);
+    if (!attributes) continue;
+    if (expanded === props) expanded = { ...props };
+    delete expanded[name];
+    Object.assign(expanded, attributes);
+  }
+  return honoJsx(tag, expanded, key);
+};
+
+export const jsxs: typeof honoJsx = jsx;
+
+export const jsxAttr: typeof honoJsxAttr = (name, value) => {
+  const attributes = handlerReferenceAttributes(name, value);
+  if (!attributes) return honoJsxAttr(name, value);
+  const [eventAttribute, handlerAttribute] = Object.entries(attributes);
+  return honoJsxTemplate`${
+    honoJsxAttr(...eventAttribute as [string, string])
+  } ${honoJsxAttr(...handlerAttribute as [string, string])}`;
+};
 import type { JSX as HonoJSX } from "hono/jsx/jsx-runtime";
 import type { ClientTools } from "./clientTools.ts";
 import type { PartialContentElement } from "./client/wc-partialContent.ts";
@@ -199,10 +225,12 @@ export type IsClientFunction<T> = T extends ClientFunction<infer _F> ? true
  */
 type ClientEventHandler<E extends Event> =
   | ActivatedClientFunction<(this: any, event: E) => void>
+  | HandlerReference<string, (event: E) => unknown>
   | undefined;
 
 type ClientEventHandlerWithThis<E extends Event, T = HTMLElement> =
   | ActivatedClientFunction<(this: T, event: E) => void>
+  | HandlerReference<string, (this: T, event: E) => unknown>
   | undefined;
 
 type ClientLifecycleHandler<T extends HTMLElement> =
@@ -440,7 +468,7 @@ type ElementEventOverridesNoWindowOnly =
   & ElementEventOverrides
   & DisallowWindowOnlyEvents;
 
-type WindowEventOverrides = Pick<
+type WindowEventTypes = Pick<
   GlobalOverrides,
   | "onNavigate"
   | "onNavigateSuccess"
@@ -457,6 +485,13 @@ type WindowEventOverrides = Pick<
   | "onBeforeUnload"
   | "onUnload"
 >;
+
+type WindowEventOverrides = {
+  [Name in keyof WindowEventTypes]: Exclude<
+    WindowEventTypes[Name],
+    HandlerReference<string, unknown>
+  >;
+};
 
 type ApplyOverrides<TBase, TOverrides> =
   & Omit<TBase, keyof TOverrides>
@@ -495,8 +530,8 @@ export namespace JSX {
           ElementEventOverridesNoWindowOnly
         >
         & {
-          onMount?: ClientEventHandler<Event>;
-          onUnmount?: ClientEventHandler<Event>;
+          onMount?: ActivatedClientFunction<(event: Event) => void>;
+          onUnmount?: ActivatedClientFunction<(event: Event) => void>;
         };
 
       /** Incoming partial content processed by an app-owned mount handler. */

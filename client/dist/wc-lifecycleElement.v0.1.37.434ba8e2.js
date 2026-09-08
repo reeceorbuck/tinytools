@@ -1,4 +1,4 @@
-import { runHandlerAttribute } from "./handlerAttribute.v0.1.37.2a9ef56e.js";
+import { runHandlerAttribute } from "./handlerAttribute.v0.1.37.6f52ccea.js";
 customElements.define(
   "lifecycle-element",
   class extends HTMLElement {
@@ -28,6 +28,7 @@ customElements.define(
       }
     }
     disconnectedCallback() {
+      this.dispatchEvent(new Event("suspend"));
       const unmountAttr = this.getAttribute("onUnmount") ?? this.getAttribute("onunmount");
       if (unmountAttr) {
         console.log(`[lifecycle-element] Calling unmount handler`);

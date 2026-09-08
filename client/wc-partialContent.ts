@@ -1,20 +1,12 @@
 /// <reference lib="dom" />
 
 import { runHandlerAttribute } from "./handlerAttribute.ts";
-import {
-  getPartialContentContext,
-  type PartialContentContext,
-} from "./partialContentContext.ts";
 export type {
   PartialContentContext,
   PartialContentProcessingOptions,
-} from "./partialContentContext.ts";
+} from "../clientArchive/partialContentContext.ts";
 
 export class PartialContentElement extends HTMLElement {
-  get partialContext(): PartialContentContext | undefined {
-    return getPartialContentContext(this);
-  }
-
   connectedCallback() {
     if (this.getAttribute("mounted") === "true") return;
     this.setAttribute("mounted", "true");

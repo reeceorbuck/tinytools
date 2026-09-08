@@ -21,7 +21,6 @@ import {
 import { Hono } from "hono";
 import { addRouteLayout, tiny } from "../honoFactory.tsx";
 import { CustomSuspense, Suspense } from "../components/Suspense.tsx";
-import type { PartialContentElement } from "../client/wc-partialContent.ts";
 import type { Child, FC } from "hono/jsx";
 
 declare module "hono" {
@@ -95,7 +94,7 @@ const TestLayout: FC<{ children: Child }> = ({ children }) => {
 };
 
 const customSuspenseHandlers = new tiny.Handlers(import.meta.url, {
-  customSuspenseMount: function (this: PartialContentElement) {
+  customSuspenseMount: function (this: HTMLTemplateElement) {
     this.replaceWith(...Array.from(this.children));
   },
 });
@@ -103,6 +102,26 @@ const customSuspenseHandlers = new tiny.Handlers(import.meta.url, {
 // ============================================================================
 // Tests
 // ============================================================================
+
+Deno.test("core renderer accepts nullish children without losing the stream", async () => {
+  for (const value of [null, undefined]) {
+    for (const asyncChildren of [false, true]) {
+      const app = new Hono().use(...tiny.middleware.core());
+      app.get("/empty", (context) =>
+        context.render(asyncChildren ? Promise.resolve(value!) : value!));
+      for (const partial of [false, true]) {
+        const response = await app.request("/empty", {
+          headers: partial ? { "source-url": "http://localhost/previous" } : {},
+        });
+        assertEquals(response.status, 200);
+        const body = await fullBody(response);
+        assertStringIncludes(body, partial ? "<update>" : "<body></body>");
+        assertEquals(body.includes("undefined"), false);
+        assertEquals(body.includes("null"), false);
+      }
+    }
+  }
+});
 
 Deno.test("Suspense - streams fallback then resolved async content", async () => {
   const app = new Hono()
@@ -147,7 +166,7 @@ Deno.test("CustomSuspense - streams with the supplied mount handler", async () =
       return c.render(
         <CustomSuspense
           fallback={<div>Loading custom...</div>}
-          onMount={fn.customSuspenseMount}
+          onLoad={fn.customSuspenseMount}
         >
           <SlowContent content="Custom content" delay={20} />
         </CustomSuspense>,

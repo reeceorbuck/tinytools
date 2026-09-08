@@ -1,11 +1,5 @@
-import { runHandlerAttribute } from "./handlerAttribute.v0.1.37.2a9ef56e.js";
-import {
-  getPartialContentContext
-} from "./partialContentContext.v0.1.37.cd97d5bb.js";
+import { runHandlerAttribute } from "./handlerAttribute.v0.1.37.6f52ccea.js";
 class PartialContentElement extends HTMLElement {
-  get partialContext() {
-    return getPartialContentContext(this);
-  }
   connectedCallback() {
     if (this.getAttribute("mounted") === "true") return;
     this.setAttribute("mounted", "true");

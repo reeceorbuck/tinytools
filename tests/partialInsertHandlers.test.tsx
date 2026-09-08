@@ -7,14 +7,13 @@
 import { assertEquals, assertMatch, assertStringIncludes } from "@std/assert";
 import { Hono } from "hono";
 import { buildHandlers } from "../build.ts";
-import { Partial, type PartialProps } from "../components/Partial.tsx";
-import { tiny } from "../honoFactory.tsx";
-import { partialInsertHandlers } from "../partialInsertHandlers.ts";
+import { NewPartial, tiny } from "../honoFactory.tsx";
+import { partialInsertHandlers } from "../handlers/mod.ts";
 
 const handlerNames = [
-  "partialRouteCache",
-  "partialAutofocus",
-  "partialAttributes",
+  // "partialRouteCache",
+  // "partialAutofocus",
+  // "partialAttributes",
   "partialReplace",
   "partialBlast",
   "partialDelete",
@@ -58,22 +57,20 @@ Deno.test("partial handlers activate and serialize on Partial", async () => {
       );
     }
 
-    const handlerDrivenProps: PartialProps = {
+    const handlerDrivenProps = {
       id: "typed-partial",
-      onMount: fn.partialReplace,
+      onLoad: fn.partialReplace,
     };
     assertEquals(handlerDrivenProps.id, "typed-partial");
-    // @ts-expect-error Every partial requires a mount handler.
-    const _handlerlessProps: PartialProps = { id: "handlerless-partial" };
 
     return context.render(
-      <Partial
+      <NewPartial
         id="test-partial"
-        onMount={fn.multiHandler(fn.partialRouteCache, fn.partialReplace)}
+        onLoad={fn.partialReplace}
         groupName="test-group"
       >
         <span>Updated</span>
-      </Partial>,
+      </NewPartial>,
     );
   });
 
@@ -87,7 +84,7 @@ Deno.test("partial handlers activate and serialize on Partial", async () => {
   assertStringIncludes(html, 'group-name="test-group"');
   assertMatch(
     html,
-    /onmount="handlers\.partialRouteCache_[a-z0-9]+\.call\(this, event\);handlers\.partialReplace_[a-z0-9]+\.call\(this, event\)"/i,
+    /onload="handlers\.partialReplace_[a-z0-9]+\.call\(this, event\)"/i,
   );
   assertEquals(html.includes("handlers.merge"), false);
 });

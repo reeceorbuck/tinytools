@@ -26,9 +26,19 @@ import {
 } from "./scopedStyles.ts";
 import { tryGetContext } from "hono/context-storage";
 import type { Context } from "hono";
+import {
+  createEvents,
+  createHandlerReferences,
+  type Events,
+  type HandlerReferences,
+} from "./eventAttributes.ts";
 
 // Import shared registries from registry modules
-import { changedHandlerKeys, ClientFunctionImpl } from "./clientFunctions.ts";
+import {
+  changedHandlerKeys,
+  ClientFunctionImpl,
+  filesWithChangedHandlers,
+} from "./clientFunctions.ts";
 import {
   mkdirSync,
   readFileSync,
@@ -492,6 +502,9 @@ class ClientToolsCacheManager {
     if (this.passDepth === 0) {
       this.sourceFileMtimeMemo.clear();
       this.filesWithMtimeChange.clear();
+      changedHandlerKeys.clear();
+      filesWithChangedHandlers.clear();
+      changedStyleKeys.clear();
       this.processedHandlersThisPass = new WeakSet();
       this.processedStylesThisPass = new WeakSet();
     }
@@ -792,6 +805,10 @@ type ExtendResult<
   // deno-lint-ignore no-explicit-any
   TLocalTools extends ClientTools<any, any, any>,
 > = {
+  events: Events<TAccumulatedFunctions & ExtractFunctions<TLocalTools>>;
+  handlers: HandlerReferences<
+    TAccumulatedFunctions & ExtractFunctions<TLocalTools>
+  >;
   fn: ActivateClientFunctions<
     TAccumulatedFunctions & ExtractFunctions<TLocalTools>
   >;
@@ -813,6 +830,8 @@ type ExtendResult<
  * Provides access to functions and styles, plus extendWithImports() method.
  */
 export interface ActivatedClientTools<TFunctions, TStyles> {
+  events: Events<TFunctions>;
+  handlers: HandlerReferences<TFunctions>;
   /**
    * Access to activated client functions.
    */
@@ -863,6 +882,8 @@ type ForbidReservedStyledKeys<T extends Record<string, ScopedStyleInput>> =
 
 /** Result type for the engage() method on ClientTools */
 type EngageResult<TFunctions, TStyles> = {
+  readonly events: Events<TFunctions>;
+  readonly handlers: HandlerReferences<TFunctions>;
   readonly fn: ActivateClientFunctions<TFunctions>;
   readonly styled: ActivateScopedStyles<TStyles>;
   readonly c: Context;
@@ -1656,6 +1677,10 @@ class ClientToolsClass<
     });
 
     return {
+      events: createEvents((name) => (fn as Record<string, unknown>)[name]),
+      handlers: createHandlerReferences<AccumulatedFunctions>((name) =>
+        (fn as Record<string, unknown>)[name]
+      ),
       // deno-lint-ignore no-explicit-any
       fn: fn as any,
       // deno-lint-ignore no-explicit-any

@@ -21,6 +21,276 @@ handlers. Works with **Deno**, **Bun**, and **Node.js**.
   reloads
 - **Server-Sent Events** - Real-time server-to-client updates (experimental)
 
+## Client Route Templates
+
+`ClientRoutes` renders local content when a navigation matches a `client-route`.
+Paths use the browser's `URLPattern` syntax, including named parameters and
+wildcards. Optional query rules further restrict a match:
+
+```tsx
+import { ClientRoutes } from "@tinytools/hono-tools/components";
+
+<ClientRoutes>
+  <client-route path="/patients/:id" query="tab=notes&preview=*">
+    <p data-patient="$[id]">Loading notes for $[name]...</p>
+  </client-route>
+  <client-route path="/help/:topic" query="" data-nav-block>
+    <p>Help topic: $[topic]</p>
+  </client-route>
+</ClientRoutes>;
+```
+
+All matching routes render in declaration order; matching containers cooperate
+with core navigation. `data-nav-block` suppresses the server fetch only when
+that route's path and query both match. Without it, local content can serve as a
+loading state while the server response is fetched. Use your usual partial
+components inside a route to replace existing content instead of appending it.
+
+Routes default to `method="get"`; use `method="post"` for submission loading
+states. Method matching uses the same resolver as the server fetch, including
+the submit button's `formmethod` override. A method mismatch neither renders
+content nor blocks the fetch.
+
+| Query rule                    | Meaning                                   |
+| ----------------------------- | ----------------------------------------- |
+| No `query` attribute          | Accept any query string                   |
+| `query=""` or `query="none"`  | Require no query parameters               |
+| `key=value`                   | First value of the key equals `value`     |
+| `key!=value`                  | First value differs, or the key is absent |
+| `key=*`                       | Key exists, including an empty value      |
+| `key=null` or `key=undefined` | Key is absent                             |
+| `key=`                        | Key exists with an empty first value      |
+| `a=1&b=2`                     | Both conditions match                     |
+| `a=1\|b=2`                    | Either condition matches                  |
+
+AND binds more tightly than OR: `a=1&b=2|c=3` means `(a=1 AND b=2) OR c=3`. Keys
+and values use URL query decoding (`+` means a space); encode literal `&` and
+`|` as `%26` and `%7C`. An encoded `%2A` matches a literal asterisk rather than
+testing existence. Invalid rules disable that route with a console warning.
+Routes are read on each navigation, so adding or changing a route inside an
+active `ClientRoutes` template does not require reactivating the container.
+Disconnected containers do not participate in navigation.
+
+`$[name]` placeholders in text and attributes receive named path captures and
+decoded query values. Query values override same-named path captures; repeated
+query keys consistently use their first value. Path captures retain URLPattern's
+encoded representation. Missing values become empty strings. Matching and
+interpolation use the resolved fetch URL, including `data-nav-partial`
+overrides.
+
+For POST routes, submitted form values override query values and path captures.
+Repeated form keys use their first value, and values are converted to strings.
+For example, `$[pair-id]` and `$[send-as]` can populate a sending-state partial
+from the submitted fields. Query rules still inspect the URL, not the form body.
+
+Each match clones the authored content, including nested templates, so routes
+can render repeatedly without consuming or modifying their source. Replacement
+is single-pass and literal: values containing `$&` or `$[other]` are not
+expanded again. Values are assigned through DOM text and attribute APIs, not
+parsed as HTML. This is not a URL or script sanitizer: do not substitute
+untrusted values into event handlers, scripts, styles, or unconstrained
+URL-valued attributes. This component does not reactivate archived suspense
+templates or the archived route cache.
+
+Routes can declare `from-partial-id` to capture an element's child content into
+their insertion template (`template[for-partial-id]`). This is built into
+`ClientRoutes`: there is no callback attribute, handler lookup, or leave event.
+Capture occurs when the source URL matches `from-path` (or `path` when omitted),
+using the route's query rules, independently of the destination request method.
+Capture moves the actual child nodes into the insertion template synchronously
+in the navigation listener, leaving the target empty. Destination rendering
+runs in `intercept({ handler })`, after navigation event dispatch finishes.
+Routes with `from-partial-id` move their stored nodes into a cloned insertion
+wrapper; ordinary authored routes clone their content. Stored nodes are not
+interpolated, so user-entered `$[name]` text remains literal.
+`from-path="*"` accepts every source pathname. Routes without
+`from-partial-id` do not capture content.
+
+Add `fallback` to a loading route to suppress it when any matching route has
+`data-nav-block`. Other matching routes still render normally. Set
+`interpolate="false"` to clone literal content without expanding `$[name]`.
+
+### Partial Cache
+
+Opt a replacement partial into the template-based navigation cache:
+
+```tsx
+<NewPartial id="thirdPanelContent" cache={true} onLoad={fn.partialReplace}>
+  <PatientDetails />
+</NewPartial>;
+```
+
+Registration reuses a sibling `ClientRoutes` container, or inserts one beside
+the target if none exists. It adds an ordinary GET `client-route`, containing
+the partial's insertion template and load trigger, with `data-nav-block`.
+There is no separate cache lookup or restoration path in navigation or partial
+replacement. Pages without cached partials receive no cache handlers or markup.
+
+`ClientRoutes` moves the route's `from-partial-id` target's children into its
+insertion template. Registered cache routes use an active-path marker inside
+the target to avoid overwriting inactive caches. An active cache stays mounted
+when the destination matches its path pattern or descends from a matching path.
+Path ancestry uses complete segments: `/trial/a` is within `/trial`, but
+`/trial-other` is not. Sibling child navigation therefore leaves parents mounted
+without blocking uncached child requests. Leaving the branch captures the active
+parent even when the source URL is a deeper child. Restore matching remains
+unchanged and does not turn an exact parent route into a wildcard.
+Returning moves those same nodes through the original insertion handler,
+preserving node identity, live form values, and attached event listeners.
+Only the route wrapper and load trigger are cloned. Detaching and reconnecting
+nodes still triggers lifecycle callbacks; focus and running embedded content
+are not guaranteed to survive. The target is empty while fetching unless an
+authored route provides a loading state. Capture does not roll back if a later
+listener cancels navigation or the request fails.
+
+An exact parent path already protects its descendants. Assign parent and child
+partials distinct route paths; a layout and child registered at the same path
+cannot be distinguished by URL ancestry. For an explicit pattern spanning
+several routes, `cache` also accepts a URLPattern:
+
+```tsx
+<NewPartial
+  id="thirdPanelContent"
+  cache="/trials/cache-test{/:type(a|b)}?"
+  onLoad={fn.partialReplace}
+>
+  <CacheTrial />
+</NewPartial>;
+```
+
+Navigation within that scope leaves the outer panel mounted without blocking
+an uncached child request. Leaving the scope moves the outer content intact;
+its child routers leave their nodes in place for that move. On restoration,
+child routers reconnect and select cached content for the current URL.
+There are no shared phase queues or depth sorting. Reconnect handling is
+idempotent and does not add duplicate navigation listeners.
+
+With `cache={true}`, matching uses the exact request pathname as a literal
+URLPattern; a string provides the pattern explicitly. Both ignore query
+strings and hashes. A restore blocks the entire GET fetch, even when only one
+panel was cached; choose scopes whose cached content suffices for the route.
+A parent whose stored child content cannot satisfy the destination is a cache
+miss, allowing the normal server request. POST,
+URL-only, and non-intercepted navigations do not restore GET cache routes. Mark
+authored loading routes `fallback` if they should yield to blocking routes.
+
+Use `partialReplace` from the `handlers` export. Eviction and SSE updates to
+stored content are not implemented. This cache is separate from the archived
+runtime cache.
+
+## CSP-Friendly Event Attributes
+
+With TinyTools configured as your JSX runtime, handler references can be used
+directly on native event attributes:
+
+```tsx
+const { handlers } = await tiny.imports(buttonHandlers);
+
+return (
+  <button onClick={handlers.handleClick} onMouseOver={handlers.handleHover}>
+    CSP alternative
+  </button>
+);
+```
+
+This preserves definition navigation and event-parameter type checking. The JSX
+runtime expands each reference into the same attribute pair as `events()`.
+Ordinary JSX, development JSX, and Deno's `jsx: "precompile"` are supported.
+Configure `jsxImportSource` as `@tinytools/hono-tools` (or your local
+`tinytools` alias), not `hono/jsx`. Components receive references unchanged and
+can forward them to intrinsic elements rendered with the TinyTools runtime.
+
+`events()` is an opt-in alternative to `fn`; existing inline handlers are
+unchanged. It accepts native DOM event names (lowercase, without `on`) and
+handler references or names from the tools passed to `tiny.imports()`:
+
+```tsx
+const { fn, handlers, events } = await tiny.imports(buttonHandlers);
+
+return (
+  <>
+    <button onClick={fn.handleClick}>Original</button>
+    <button
+      {...events({
+        click: handlers.handleClick,
+        mouseover: handlers.handleHover,
+      })}
+    >
+      CSP alternative
+    </button>
+  </>
+);
+```
+
+`handlers` is a mapped collection that preserves Go to Definition navigation to
+the original handler properties. References carry the literal handler name and
+function signature, so same-signature handlers with unimported names are
+rejected. The runtime also rejects a reference whose name resolves to a
+different generated handler ID in the receiving tools. References are opaque
+values, not callable server functions. Direct attributes use the imported
+reference's resolved ID; `events()` additionally validates that reference
+against its own imported tools. Existing `onClick={fn.handleClick}` remains
+unchanged.
+
+References and string names autocomplete from the imported tools, including
+their declared dependencies. `events({ click: "handleClick" })` remains
+supported and emits the same HTML. Unknown names, raw functions, `fn`
+expressions, and incompatible event parameter types are rejected. For example, a
+`KeyboardEvent` handler cannot be assigned to `click`. As with the existing JSX
+handlers, the receiving element's `this` type is not checked by the spread
+helper.
+
+Each binding emits `tt-handler-click="handleClick_<hash>"` and `onclick` with
+exactly this body, shared across all event types and handler names:
+
+```text
+handlers.fn.call(this,event)
+```
+
+Only accessed handler files are tracked for loading, just as with `fn`. The
+handler receives the element as `this` and the native event as its argument. Use
+`event.preventDefault()` to cancel a native default action, before awaiting in
+an async handler. The current shared body does not return the dispatcher's
+result, so returning `false` from the handler alone does not cancel the action.
+
+The body is exported as `eventHandlerBody`. Derive the hash from that exact
+string, not its HTML-escaped representation:
+
+```ts
+import { eventHandlerBody } from "@tinytools/hono-tools";
+
+const digest = await crypto.subtle.digest(
+  "SHA-256",
+  new TextEncoder().encode(eventHandlerBody),
+);
+const hash = btoa(String.fromCharCode(...new Uint8Array(digest)));
+const policy =
+  `script-src 'self'; script-src-attr 'unsafe-hashes' 'sha256-${hash}'`;
+```
+
+Merge these directives into your application's CSP. This does not authorize old
+`fn` inline attributes or other inline scripts, nor does it configure CSP
+headers for you. The standard `'unsafe-hashes'` keyword is required for hashed
+event attributes. Any injected markup can reuse an authorized body, so continue
+to sanitize untrusted HTML, including `tt-handler-*` attributes.
+
+This first alternative handles native DOM events, one handler per event.
+Synthetic TinyTools lifecycle hooks such as `mount` and `unmount`, and handlers
+invoked by custom components instead of native event dispatch, should continue
+using `fn`. This includes the custom hooks on `window-event-listener`.
+
+For a standalone comparison, run from the package directory:
+
+```sh
+deno run -A tests/fixtures/events-csp.tsx
+```
+
+Open `http://127.0.0.1:3047/` to compare both approaches, or
+`http://127.0.0.1:3047/?csp` to enable the single-hash policy. In the latter
+mode, the original `fn` button is deliberately blocked. The fixture serves its
+small handler registry directly; the application integration still uses normal
+TinyTools asset loading.
+
 ## Installation
 
 > **Note:** The package is published under different scope names depending on
@@ -196,6 +466,13 @@ each connected client's `sseId` plus recent route paths.
 components.
 
 **`tiny.middleware.layout(renderFn)`** - Adds a layout wrapper for sub-routes.
+Skips the callback on partial requests with a `source-url` header.
+
+**`tiny.middleware.partialLayout(renderFn)`** - Uses the same layout composition,
+but invokes the callback for both full-page and partial requests. The callback
+receives `({ children }, c)` and can inspect `c.req.header("source-url")` to decide
+whether to render a wrapper or return children directly. Like `layout`, it also
+performs a preliminary render with empty children to register layout tools/styles.
 
 **`tiny.middleware.all(options?)`** - Enables all features at once.
 

@@ -80,48 +80,6 @@ export const AssetTags: FC<AssetTagsProps> = ({
 
   return (
     <>
-      {(hasNavigation || hasSse || hasLocalRoutes) && (
-        <script
-          src={`${P}/${getClientFileName("wc-partialContent.js")}`}
-          type="module"
-        />
-      )}
-
-      {/* Navigation and partial page update scripts */}
-      {fullPageLoad && hasNavigation && (
-        <>
-          <script
-            src={`${P}/${getClientFileName("navigation.js")}`}
-            type="module"
-          />
-          <script
-            src={`${P}/${getClientFileName("processIncomingData.js")}`}
-            type="module"
-          />
-          <script
-            src={`${P}/${getClientFileName("processIncomingHtml.js")}`}
-            type="module"
-          />
-          <script
-            src={`${P}/${getClientFileName("performFetchAndUpdate.js")}`}
-            type="module"
-          />
-        </>
-      )}
-
-      {/* Server-Sent Events for live updates */}
-      {fullPageLoad && hasSse && (
-        <script src={`${P}/${getClientFileName("sse.js")}`} type="module" />
-      )}
-
-      {/* Client-side template routing */}
-      {fullPageLoad && hasLocalRoutes && (
-        <script
-          src={`${P}/${getClientFileName("localRoutes.js")}`}
-          type="module"
-        />
-      )}
-
       {/* Web components for lifecycle and window events */}
       {fullPageLoad && hasWebComponents && (
         <>
@@ -130,9 +88,15 @@ export const AssetTags: FC<AssetTagsProps> = ({
             type="module"
           />
           <script
-            src={`${P}/${getClientFileName("wc-windowEventlistener.js")}`}
+            src={`${P}/${getClientFileName("wc-lifecycleAbortable.js")}`}
             type="module"
           />
+          {
+            /* <script
+            src={`${P}/${getClientFileName("wc-windowEventlistener.js")}`}
+            type="module"
+          /> */
+          }
         </>
       )}
 
@@ -150,7 +114,7 @@ export const AssetTags: FC<AssetTagsProps> = ({
       ))}
 
       {/* Event handler proxy for lazy-loading user handlers */}
-      {fullPageLoad && hasNavigation && (
+      {fullPageLoad && (
         <script
           src={`${P}/${getClientFileName("eventHandlers.js")}`}
         />

@@ -1,5 +1,5 @@
 import { assertEquals } from "@std/assert";
-import { interpolateLocalRouteValue } from "../client/localRoutes.ts";
+import { interpolateLocalRouteValue } from "./localRoutes.ts";
 
 Deno.test("local routes interpolate supplied and repeated parameters", () => {
   assertEquals(

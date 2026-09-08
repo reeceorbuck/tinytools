@@ -20,7 +20,7 @@ export type PartialProps = {
   /** Unique identifier for this partial region */
   id: string;
   /** Runs when the incoming partial content is connected to the document. */
-  onMount: PartialInsertHandler;
+  onLoad: PartialInsertHandler;
   groupName?: string;
   mode?: never;
   [attribute: string]: unknown;
@@ -36,7 +36,7 @@ export type PartialProps = {
  * </Partial>
  * ```
  */
-export function Partial(
+export function OldPartial(
   props: PropsWithChildren<PartialProps>,
 ) {
   const { id, onMount, groupName, children, ...attributes } = props;

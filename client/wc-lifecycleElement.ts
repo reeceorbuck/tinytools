@@ -55,6 +55,7 @@ customElements.define(
     }
 
     disconnectedCallback() {
+      this.dispatchEvent(new Event("suspend"));
       const unmountAttr = this.getAttribute("onUnmount") ??
         this.getAttribute("onunmount");
       if (unmountAttr) {
