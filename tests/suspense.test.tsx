@@ -107,8 +107,11 @@ Deno.test("core renderer accepts nullish children without losing the stream", as
   for (const value of [null, undefined]) {
     for (const asyncChildren of [false, true]) {
       const app = new Hono().use(...tiny.middleware.core());
-      app.get("/empty", (context) =>
-        context.render(asyncChildren ? Promise.resolve(value!) : value!));
+      app.get(
+        "/empty",
+        (context) =>
+          context.render(asyncChildren ? Promise.resolve(value!) : value!),
+      );
       for (const partial of [false, true]) {
         const response = await app.request("/empty", {
           headers: partial ? { "source-url": "http://localhost/previous" } : {},

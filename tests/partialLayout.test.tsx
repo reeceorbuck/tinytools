@@ -21,8 +21,7 @@ Deno.test("partialLayout lets nested callbacks decide partial response content",
           : <section id="nested-layout">{children}</section>;
       }),
     );
-    nested.get("/page", (context) =>
-      context.render(<p>Nested content</p>));
+    nested.get("/page", (context) => context.render(<p>Nested content</p>));
     app.route("/nested", nested);
 
     const response = await app.request("/nested/page", {

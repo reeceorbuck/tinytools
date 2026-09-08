@@ -98,13 +98,12 @@ their insertion template (`template[for-partial-id]`). This is built into
 Capture occurs when the source URL matches `from-path` (or `path` when omitted),
 using the route's query rules, independently of the destination request method.
 Capture moves the actual child nodes into the insertion template synchronously
-in the navigation listener, leaving the target empty. Destination rendering
-runs in `intercept({ handler })`, after navigation event dispatch finishes.
-Routes with `from-partial-id` move their stored nodes into a cloned insertion
-wrapper; ordinary authored routes clone their content. Stored nodes are not
-interpolated, so user-entered `$[name]` text remains literal.
-`from-path="*"` accepts every source pathname. Routes without
-`from-partial-id` do not capture content.
+in the navigation listener, leaving the target empty. Destination rendering runs
+in `intercept({ handler })`, after navigation event dispatch finishes. Routes
+with `from-partial-id` move their stored nodes into a cloned insertion wrapper;
+ordinary authored routes clone their content. Stored nodes are not interpolated,
+so user-entered `$[name]` text remains literal. `from-path="*"` accepts every
+source pathname. Routes without `from-partial-id` do not capture content.
 
 Add `fallback` to a loading route to suppress it when any matching route has
 `data-nav-block`. Other matching routes still render normally. Set
@@ -122,26 +121,26 @@ Opt a replacement partial into the template-based navigation cache:
 
 Registration reuses a sibling `ClientRoutes` container, or inserts one beside
 the target if none exists. It adds an ordinary GET `client-route`, containing
-the partial's insertion template and load trigger, with `data-nav-block`.
-There is no separate cache lookup or restoration path in navigation or partial
+the partial's insertion template and load trigger, with `data-nav-block`. There
+is no separate cache lookup or restoration path in navigation or partial
 replacement. Pages without cached partials receive no cache handlers or markup.
 
 `ClientRoutes` moves the route's `from-partial-id` target's children into its
-insertion template. Registered cache routes use an active-path marker inside
-the target to avoid overwriting inactive caches. An active cache stays mounted
-when the destination matches its path pattern or descends from a matching path.
-Path ancestry uses complete segments: `/trial/a` is within `/trial`, but
+insertion template. Registered cache routes use an active-path marker inside the
+target to avoid overwriting inactive caches. An active cache stays mounted when
+the destination matches its path pattern or descends from a matching path. Path
+ancestry uses complete segments: `/trial/a` is within `/trial`, but
 `/trial-other` is not. Sibling child navigation therefore leaves parents mounted
 without blocking uncached child requests. Leaving the branch captures the active
 parent even when the source URL is a deeper child. Restore matching remains
-unchanged and does not turn an exact parent route into a wildcard.
-Returning moves those same nodes through the original insertion handler,
-preserving node identity, live form values, and attached event listeners.
-Only the route wrapper and load trigger are cloned. Detaching and reconnecting
-nodes still triggers lifecycle callbacks; focus and running embedded content
-are not guaranteed to survive. The target is empty while fetching unless an
-authored route provides a loading state. Capture does not roll back if a later
-listener cancels navigation or the request fails.
+unchanged and does not turn an exact parent route into a wildcard. Returning
+moves those same nodes through the original insertion handler, preserving node
+identity, live form values, and attached event listeners. Only the route wrapper
+and load trigger are cloned. Detaching and reconnecting nodes still triggers
+lifecycle callbacks; focus and running embedded content are not guaranteed to
+survive. The target is empty while fetching unless an authored route provides a
+loading state. Capture does not roll back if a later listener cancels navigation
+or the request fails.
 
 An exact parent path already protects its descendants. Assign parent and child
 partials distinct route paths; a layout and child registered at the same path
@@ -158,21 +157,21 @@ several routes, `cache` also accepts a URLPattern:
 </NewPartial>;
 ```
 
-Navigation within that scope leaves the outer panel mounted without blocking
-an uncached child request. Leaving the scope moves the outer content intact;
-its child routers leave their nodes in place for that move. On restoration,
-child routers reconnect and select cached content for the current URL.
-There are no shared phase queues or depth sorting. Reconnect handling is
-idempotent and does not add duplicate navigation listeners.
+Navigation within that scope leaves the outer panel mounted without blocking an
+uncached child request. Leaving the scope moves the outer content intact; its
+child routers leave their nodes in place for that move. On restoration, child
+routers reconnect and select cached content for the current URL. There are no
+shared phase queues or depth sorting. Reconnect handling is idempotent and does
+not add duplicate navigation listeners.
 
 With `cache={true}`, matching uses the exact request pathname as a literal
-URLPattern; a string provides the pattern explicitly. Both ignore query
-strings and hashes. A restore blocks the entire GET fetch, even when only one
-panel was cached; choose scopes whose cached content suffices for the route.
-A parent whose stored child content cannot satisfy the destination is a cache
-miss, allowing the normal server request. POST,
-URL-only, and non-intercepted navigations do not restore GET cache routes. Mark
-authored loading routes `fallback` if they should yield to blocking routes.
+URLPattern; a string provides the pattern explicitly. Both ignore query strings
+and hashes. A restore blocks the entire GET fetch, even when only one panel was
+cached; choose scopes whose cached content suffices for the route. A parent
+whose stored child content cannot satisfy the destination is a cache miss,
+allowing the normal server request. POST, URL-only, and non-intercepted
+navigations do not restore GET cache routes. Mark authored loading routes
+`fallback` if they should yield to blocking routes.
 
 Use `partialReplace` from the `handlers` export. Eviction and SSE updates to
 stored content are not implemented. This cache is separate from the archived
@@ -468,11 +467,12 @@ components.
 **`tiny.middleware.layout(renderFn)`** - Adds a layout wrapper for sub-routes.
 Skips the callback on partial requests with a `source-url` header.
 
-**`tiny.middleware.partialLayout(renderFn)`** - Uses the same layout composition,
-but invokes the callback for both full-page and partial requests. The callback
-receives `({ children }, c)` and can inspect `c.req.header("source-url")` to decide
-whether to render a wrapper or return children directly. Like `layout`, it also
-performs a preliminary render with empty children to register layout tools/styles.
+**`tiny.middleware.partialLayout(renderFn)`** - Uses the same layout
+composition, but invokes the callback for both full-page and partial requests.
+The callback receives `({ children }, c)` and can inspect
+`c.req.header("source-url")` to decide whether to render a wrapper or return
+children directly. Like `layout`, it also performs a preliminary render with
+empty children to register layout tools/styles.
 
 **`tiny.middleware.all(options?)`** - Enables all features at once.
 
