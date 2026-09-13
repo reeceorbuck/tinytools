@@ -16,7 +16,8 @@ import { tiny } from "@tinytools/hono-tools";
 import { partialInsertHandlers } from "../handlers/partialInsertHandlers.ts";
 import type { PartialContentElement } from "../client/wc-partialContent.ts";
 import type { ActivatedClientFunction } from "../jsx-runtime.ts";
-import { headHandler, NewPartial } from "../honoFactory.tsx";
+import { headHandler } from "../honoFactory.tsx";
+import { NewPartial } from "./NewPartial.tsx";
 import { renderToReadableStream } from "hono/jsx/dom/server";
 import { AssetTags } from "./AssetTags.tsx";
 

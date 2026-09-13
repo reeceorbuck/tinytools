@@ -1,54 +1,75 @@
-import { type ClientTools, Handlers } from "../clientTools.ts";
-type RouteCacheFunctions = {
-  registerRouteCache: (this: HTMLTemplateElement) => void;
+import { Handlers } from "../clientTools.ts";
+
+type CacheObserverElement = HTMLTemplateElement & {
+  stopCacheObserver?: () => void;
 };
 
-export const routeCacheTools: ClientTools<
-  RouteCacheFunctions,
-  Record<never, never>,
-  Record<never, never>
-> = new Handlers(import.meta.url, {
-  registerRouteCache: function (this: HTMLTemplateElement) {
-    const partialId = this.getAttribute("for-partial-id");
-    const path = this.getAttribute("path");
+export const routeCacheTools = new Handlers(import.meta.url, {
+  observeRouteCache: function (this: CacheObserverElement) {
+    if (this.stopCacheObserver || !this.isConnected) return;
+    const partialId = this.getAttribute("cache-partial-id");
     const target = partialId ? document.getElementById(partialId) : null;
-    const incomingRouter = this.content.querySelector("client-router");
-    const incomingTemplate = incomingRouter?.querySelector<HTMLTemplateElement>(
+    const lifecycle = this.parentElement;
+    const blueprint = this.content.querySelector("client-route");
+    if (!target || lifecycle?.parentElement !== target || !blueprint) return;
+    let router = Array.from(target.parentElement?.children ?? []).find(
+      (element) =>
+        element.tagName === "CLIENT-ROUTER" &&
+        element.getAttribute("for-partial-id") === partialId,
+    );
+    if (!router) {
+      router = this.content.querySelector("client-router") ?? undefined;
+      if (!router) return;
+      target.insertAdjacentElement("afterend", router);
+    }
+    const routes = router.querySelector<HTMLTemplateElement>(
       "abortable-lifecycle-element > template",
     );
-    const route = this.content.querySelector("client-route");
-    if (!target || !path || !incomingRouter || !incomingTemplate || !route) {
-      this.remove();
-      return;
-    }
-    const siblingRouter = Array.from(target.parentElement?.children ?? [])
-      .find((element) => element.tagName === "CLIENT-ROUTER");
-    const siblingTemplate = siblingRouter?.querySelector<HTMLTemplateElement>(
-      "abortable-lifecycle-element > template",
-    );
-    if (siblingTemplate) {
-      for (const existing of Array.from(siblingTemplate.content.children)) {
-        if (
-          existing.getAttribute("path") === route.getAttribute("path") &&
-          existing.getAttribute("from-partial-id") === partialId
-        ) existing.remove();
+    if (!routes) return;
+    let ownedNodes: Node[] = Array.from(target.childNodes);
+    const capture = (records: MutationRecord[]) => {
+      const replacement = records.find((record) =>
+        record.target === target &&
+        Array.from(record.removedNodes).includes(lifecycle)
+      );
+      if (!replacement) {
+        ownedNodes = Array.from(target.childNodes);
+        return;
       }
-      siblingTemplate.content.append(route);
-    } else {
-      incomingTemplate.content.append(route);
-      target.insertAdjacentElement("afterend", incomingRouter);
-    }
-    for (const child of Array.from(target.children)) {
-      if (child.matches("template[data-client-route-active-path]")) {
-        child.remove();
+      observer.disconnect();
+      this.stopCacheObserver = undefined;
+      const route = blueprint.cloneNode(true) as Element;
+      const insertion = route.querySelector<HTMLTemplateElement>(
+        "template[for-partial-id]",
+      )!;
+      for (const record of records) {
+        if (record === replacement) break;
+        if (record.target === target) {
+          ownedNodes.push(...Array.from(record.addedNodes));
+        }
       }
-    }
-    const marker = document.createElement("template");
-    marker.setAttribute(
-      "data-client-route-active-path",
-      route.getAttribute("path")!,
-    );
-    target.append(marker);
-    this.remove();
+      const removedNodes = records.filter((record) => record.target === target)
+        .flatMap((record) => Array.from(record.removedNodes));
+      insertion.content.append(
+        ...removedNodes.filter((node) => ownedNodes.includes(node)),
+      );
+      for (const existing of Array.from(routes.content.children)) {
+        if (existing.getAttribute("path") === route.getAttribute("path")) {
+          existing.remove();
+        }
+      }
+      routes.content.append(route);
+    };
+    const observer = new MutationObserver(capture);
+    this.stopCacheObserver = () => {
+      const records = observer.takeRecords();
+      observer.disconnect();
+      this.stopCacheObserver = undefined;
+      capture(records);
+    };
+    observer.observe(target, { childList: true });
+  },
+  suspendRouteCache: function (this: CacheObserverElement) {
+    this.stopCacheObserver?.();
   },
 });

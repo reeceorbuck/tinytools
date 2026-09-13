@@ -4,11 +4,13 @@ import { handlers } from "../clientFunctions.ts";
 import { ClientRoutes } from "../components/ClientRoutes.tsx";
 import { navigationTools } from "../handlers/navigationTools.ts";
 import { partialInsertHandlers } from "../handlers/partialInsertHandlers.ts";
+import { routeCacheTools } from "../handlers/routeCacheTools.ts";
 import type { NavigationUrlResult } from "../handlers/navigationUrlTools.ts";
 
 void ClientRoutes;
 void navigationTools;
 void partialInsertHandlers;
+void routeCacheTools;
 
 const moduleUrls = new Map<string, string>();
 const builtHandlers = new Map<string, CallableFunction>();
@@ -26,6 +28,8 @@ for (
     "cloneClientRoute",
     "activateClientRoutes",
     "suspendClientRoutes",
+    "observeRouteCache",
+    "suspendRouteCache",
   ]
 ) {
   const entry = [...handlers.values()].find((handler) =>
@@ -137,7 +141,7 @@ Deno.test("ClientRoutes cooperate with core navigation", async (test) => {
   function setup(coreFirst = true) {
     const navigation = new EventTarget();
     const location = { href: "https://example.com/current?keep=1" };
-    const { document, Node, HTMLTemplateElement } = parseHTML(
+    const { document, Node, HTMLTemplateElement, MutationObserver } = parseHTML(
       "<!doctype html><html><body></body></html>",
     );
     const requests: {
@@ -155,6 +159,7 @@ Deno.test("ClientRoutes cooperate with core navigation", async (test) => {
     setGlobal("location", location);
     setGlobal("document", document);
     setGlobal("Node", Node);
+    setGlobal("MutationObserver", MutationObserver);
     setGlobal("HTMLTemplateElement", HTMLTemplateElement);
     setGlobal("NodeFilter", { SHOW_ELEMENT: 1, SHOW_TEXT: 4 });
     setGlobal("fetch", (url: URL, init: RequestInit) => {
@@ -228,6 +233,25 @@ Deno.test("ClientRoutes cooperate with core navigation", async (test) => {
       assertEquals(state.requests.length, 0);
     });
 
+    await test.step("authored once routes move their output and are consumed", async () => {
+      const state = setup();
+      const route = createRoute("/next", "Once $[value]", true);
+      route.setAttribute("once", "");
+      const output = route.firstElementChild!;
+      let clicks = 0;
+      output.addEventListener("click", () => clicks++);
+      const container = state.addRoutes(route);
+      await state.navigate(new NavigationEvent("/next?value=rendered"));
+      assertStrictEquals(document.body.firstElementChild, output);
+      assertEquals(output.textContent, "Once rendered");
+      (output as HTMLElement).click();
+      assertEquals(clicks, 1);
+      assertEquals(container.content.children.length, 0);
+      assertEquals(state.requests.length, 0);
+      await state.navigate(new NavigationEvent("/next"));
+      assertEquals(state.requests.length, 1);
+    });
+
     await test.step("POST routes interpolate submitted fields and retain the server request", async () => {
       const state = setup();
       const route = createRoute(
@@ -283,192 +307,8 @@ Deno.test("ClientRoutes cooperate with core navigation", async (test) => {
       }
     });
 
-    await test.step("source capture uses the route path and respects active ownership", async () => {
-      const state = setup();
-      const target = document.createElement("section");
-      target.id = "source-panel";
-      target.innerHTML = '<input value="current">';
-      document.body.append(target);
-      const route = document.createElement("client-route");
-      route.setAttribute("path", "/source");
-      route.setAttribute("from-partial-id", "source-panel");
-      const insertion = document.createElement("template");
-      insertion.setAttribute("for-partial-id", "source-panel");
-      route.append(insertion);
-      state.addRoutes(route);
-      await state.navigate(new NavigationEvent("/other"));
-      assertEquals(insertion.content.childNodes.length, 0);
-      state.location.href = "https://example.com/source";
-      await state.navigate(new NavigationEvent("/other"));
-      assertEquals(target.childNodes.length, 0);
-      assertEquals(
-        insertion.content.querySelector("input")!.getAttribute("value"),
-        "current",
-      );
-      target.innerHTML = '<input value="unrelated">';
-      const marker = document.createElement("template");
-      marker.setAttribute("data-client-route-active-path", "/different");
-      target.append(marker);
-      (target.querySelector("input") as HTMLInputElement).value = "unrelated";
-      state.location.href = "https://example.com/source";
-      await state.navigate(new NavigationEvent("/other"));
-      assertEquals(
-        insertion.content.querySelector("input")!.getAttribute("value"),
-        "current",
-      );
-    });
-
-    for (const outerFirst of [true, false]) {
-      await test.step(`destination scopes retain and restore the correct panel; outerFirst=${outerFirst}`, async () => {
-        const state = setup();
-        state.location.href = "https://example.com/trial/a";
-        const outer = document.createElement("section");
-        outer.id = "outer";
-        outer.innerHTML =
-          '<input id="notes"><section id="inner"><input id="input-a"><template data-client-route-active-path="/trial/a"></template></section><template data-client-route-active-path="/trial{/:page}?"></template>';
-        document.body.append(outer);
-        const notes = outer.querySelector("#notes")!;
-        const inner = outer.querySelector("#inner")!;
-        const inputA = inner.querySelector("input")!;
-        const cachedRoute = (path: string, partialId: string) => {
-          const route = document.createElement("client-route");
-          route.setAttribute("path", path);
-          route.setAttribute("from-partial-id", partialId);
-          route.setAttribute("data-nav-block", "");
-          const insertion = document.createElement("template");
-          insertion.setAttribute("for-partial-id", partialId);
-          route.append(insertion);
-          return route;
-        };
-        const outerRoute = cachedRoute("/trial{/:page}?", "outer");
-        const routeA = cachedRoute("/trial/a", "inner");
-        const routeB = cachedRoute("/trial/b", "inner");
-        const inputB = document.createElement("input");
-        const markerB = document.createElement("template");
-        markerB.setAttribute("data-client-route-active-path", "/trial/b");
-        routeB.querySelector("template")!.content.append(inputB, markerB);
-        if (outerFirst) state.addRoutes(outerRoute);
-        const childRouter = state.addRoutes(routeA);
-        const childContainer = document.createElement("client-router");
-        childContainer.append(childRouter);
-        outer.append(childContainer);
-        if (!outerFirst) state.addRoutes(outerRoute);
-
-        await state.navigate(new NavigationEvent("/trial/b"));
-        assertStrictEquals(outer.querySelector("#notes"), notes);
-        assertStrictEquals(outer.querySelector("#inner"), inner);
-        assertEquals(inner.childNodes.length, 0);
-        assertEquals(state.requests.length, 1);
-        inner.append(
-          ...Array.from(routeB.querySelector("template")!.content.childNodes),
-        );
-        childRouter.content.append(routeB);
-        assertStrictEquals(inner.querySelector("input"), inputB);
-
-        await state.navigate(new NavigationEvent("/elsewhere"));
-        assertEquals(outer.childNodes.length, 0);
-        assertStrictEquals(inner.querySelector("input"), inputB);
-        assertEquals(state.requests.length, 2);
-        if (outerFirst) invoke("suspendClientRoutes", childRouter);
-
-        await state.navigate(new NavigationEvent("/trial/a"));
-        invoke("partialReplace", document.body.lastElementChild);
-        assertStrictEquals(outer.querySelector("#notes"), notes);
-        assertStrictEquals(outer.querySelector("#inner"), inner);
-        invoke("activateClientRoutes", childRouter);
-        invoke("activateClientRoutes", childRouter);
-        invoke("partialReplace", document.body.lastElementChild);
-        assertStrictEquals(inner.querySelector("input"), inputA);
-        await state.navigate(new NavigationEvent("/trial/b"));
-        invoke("partialReplace", document.body.lastElementChild);
-        assertStrictEquals(inner.querySelector("input"), inputB);
-        assertEquals(state.requests.length, 2);
-        await state.navigate(new NavigationEvent("/elsewhere"));
-        routeA.remove();
-        await state.navigate(new NavigationEvent("/trial/a"));
-        assertEquals(outer.childNodes.length, 0);
-        assertEquals(state.requests.length, 4);
-      });
-    }
-
-    for (const parentPath of ["/trial", "/trial/"]) {
-      await test.step(`exact parent remains mounted throughout descendants: ${parentPath}`, async () => {
-        const state = setup();
-        state.location.href = `https://example.com${parentPath}`;
-        const target = document.createElement("section");
-        target.id = "parent";
-        const input = document.createElement("input");
-        const marker = document.createElement("template");
-        marker.setAttribute("data-client-route-active-path", parentPath);
-        target.append(input, marker);
-        document.body.append(target);
-        const route = document.createElement("client-route");
-        route.setAttribute("path", parentPath);
-        route.setAttribute("from-partial-id", "parent");
-        route.setAttribute("data-nav-block", "");
-        const insertion = document.createElement("template");
-        insertion.setAttribute("for-partial-id", "parent");
-        route.append(insertion);
-        state.addRoutes(route);
-        for (
-          const destination of [
-            "/trial/a",
-            "/trial/a/deeper",
-            "/trial/b?mode=edit",
-          ]
-        ) {
-          await state.navigate(new NavigationEvent(destination));
-          assertStrictEquals(target.firstChild, input);
-          assertEquals(insertion.content.childNodes.length, 0);
-        }
-        assertEquals(state.requests.length, 3);
-        await state.navigate(new NavigationEvent("/trial-other"));
-        assertEquals(target.childNodes.length, 0);
-        assertStrictEquals(insertion.content.firstChild, input);
-        assertEquals(state.requests.length, 4);
-        await state.navigate(new NavigationEvent(parentPath));
-        invoke("partialReplace", document.body.lastElementChild);
-        assertStrictEquals(target.firstChild, input);
-        assertEquals(state.requests.length, 4);
-      });
-    }
-
-    await test.step("moving the active marker does not overwrite another cached route", async () => {
-      const state = setup();
-      const target = document.createElement("section");
-      target.id = "panel";
-      target.innerHTML =
-        '<input value="A"><template data-client-route-active-path="/current"></template>';
-      const inputA = target.querySelector("input")!;
-      document.body.append(target);
-      const routeA = document.createElement("client-route");
-      routeA.setAttribute("path", "/current");
-      routeA.setAttribute("from-path", "*");
-      routeA.setAttribute("from-partial-id", "panel");
-      routeA.setAttribute("data-nav-block", "");
-      routeA.innerHTML = '<template for-partial-id="panel"></template>';
-      const routeB = routeA.cloneNode(true) as HTMLElement;
-      routeB.setAttribute("path", "/next");
-      const insertionB = routeB.querySelector("template")!;
-      const inputB = document.createElement("input");
-      inputB.value = "B";
-      const markerB = document.createElement("template");
-      markerB.setAttribute("data-client-route-active-path", "/next");
-      insertionB.content.append(inputB, markerB);
-      state.addRoutes(routeA, routeB);
-      for (const path of ["/next", "/current", "/next", "/current"]) {
-        await state.navigate(new NavigationEvent(path));
-        invoke("partialReplace", document.body.lastElementChild);
-        assertStrictEquals(
-          target.querySelector("input"),
-          path === "/next" ? inputB : inputA,
-        );
-      }
-      assertEquals(state.requests.length, 0);
-    });
-
     for (const coreFirst of [true, false]) {
-      await test.step(`dynamic routes capture source before rendering; coreFirst=${coreFirst}`, async () => {
+      await test.step(`observer captures on replacement and restores through normal routes; coreFirst=${coreFirst}`, async () => {
         const state = setup(coreFirst);
         const target = document.createElement("section");
         target.id = "source-panel";
@@ -484,44 +324,34 @@ Deno.test("ClientRoutes cooperate with core navigation", async (test) => {
         let clicks = 0;
         button.addEventListener("click", () => clicks++);
         document.body.append(target);
-        const destination = document.createElement("client-route");
-        destination.setAttribute("path", "/next");
-        destination.setAttribute("from-path", "/current");
-        destination.setAttribute("from-partial-id", "source-panel");
-        destination.setAttribute("data-nav-block", "");
-        const insertion = document.createElement("template");
-        insertion.setAttribute("for-partial-id", "source-panel");
-        destination.append(insertion);
-        const container = state.addRoutes();
-        container.content.append(destination);
-        const fallback = createRoute("/next", "loading");
+        const lifecycle = document.createElement("abortable-lifecycle-element");
+        const watcher = document.createElement("template");
+        watcher.setAttribute("cache-partial-id", "source-panel");
+        watcher.innerHTML =
+          '<client-route path="/current" once data-nav-block interpolate="false"><template for-partial-id="source-panel"></template></client-route><client-router for-partial-id="source-panel"><abortable-lifecycle-element><template></template></abortable-lifecycle-element></client-router>';
+        lifecycle.append(watcher);
+        target.append(lifecycle);
+        invoke("observeRouteCache", watcher);
+        const container = target.nextElementSibling!.querySelector("template")!;
+        invoke("activateClientRoutes", container);
+        const fallback = createRoute("/current", "loading");
         fallback.setAttribute("fallback", "");
         state.addRoutes(fallback);
-        const append = document.body.append.bind(document.body);
-        let capturedBeforeRender = false;
-        document.body.append = (...nodes) => {
-          capturedBeforeRender = target.childNodes.length === 0 &&
-            insertion.content.childNodes.length === 0;
-          append(...nodes);
-        };
         if (!coreFirst) invoke("handleNavigate", {});
-        const event = new NavigationEvent("/next?ignored=1");
-        await state.navigate(event, () => {
-          assertStrictEquals(insertion.content.querySelector("input"), input);
-          assertEquals(target.childNodes.length, 0);
-          assertEquals(document.body.children.length, 1);
-          assertEquals(capturedBeforeRender, false);
-          assertEquals(state.requests.length, 0);
-          assertEquals(
-            event.interceptions.filter((entry) => entry.precommitHandler)
-              .length,
-            1,
-          );
-        });
+        await state.navigate(new NavigationEvent("/next"));
+        assertStrictEquals(target.querySelector("input"), input);
+        assertEquals(container.content.children.length, 0);
+        assertEquals(state.requests.length, 1);
+        const replacement = document.createElement("template");
+        replacement.setAttribute("for-partial-id", "source-panel");
+        replacement.innerHTML = "<p>Other content</p>";
+        invoke("partialReplace", replacement);
+        await Promise.resolve();
+        assertEquals(container.content.children.length, 1);
+        await state.navigate(new NavigationEvent("/current?ignored=1"));
         const rendered = document.body.lastElementChild as HTMLTemplateElement;
         assertEquals(rendered.tagName, "TEMPLATE");
-        assertEquals(capturedBeforeRender, true);
-        assertEquals(insertion.content.childNodes.length, 0);
+        assertEquals(container.content.children.length, 0);
         assertStrictEquals(rendered.content.querySelector("input"), input);
         assertStrictEquals(
           rendered.content.querySelector("textarea"),
@@ -529,6 +359,7 @@ Deno.test("ClientRoutes cooperate with core navigation", async (test) => {
         );
         assertStrictEquals(rendered.content.querySelector("button"), button);
         invoke("partialReplace", rendered);
+        invoke("observeRouteCache", watcher);
         assertStrictEquals(target.querySelector("input"), input);
         assertEquals(input.value, "edited");
         assertEquals(textarea.value, "notes");
@@ -536,15 +367,18 @@ Deno.test("ClientRoutes cooperate with core navigation", async (test) => {
         button.click();
         assertEquals(clicks, 1);
         input.value = "edited again";
-        state.location.href = "https://example.com/current";
-        await state.navigate(new NavigationEvent("/next"));
+        const secondReplacement = document.createElement("template");
+        secondReplacement.setAttribute("for-partial-id", "source-panel");
+        invoke("partialReplace", secondReplacement);
+        await Promise.resolve();
+        await state.navigate(new NavigationEvent("/current"));
         invoke("partialReplace", document.body.lastElementChild);
         assertStrictEquals(target.querySelector("input"), input);
         assertEquals(input.value, "edited again");
         button.click();
         assertEquals(clicks, 2);
         assertEquals(document.querySelector("span"), null);
-        assertEquals(state.requests.length, 0);
+        assertEquals(state.requests.length, 1);
       });
 
       await test.step(`all containers render; coreFirst=${coreFirst}`, async () => {

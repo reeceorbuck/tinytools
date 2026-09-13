@@ -50,7 +50,6 @@ import {
 } from "./eventAttributes.ts";
 
 export type { PartialAbortableHTMLElement };
-export { NewPartial };
 
 /** URL prefix for package-provided client scripts */
 export const TINYTOOLS_CLIENT_PREFIX = "/_tinytools";

@@ -92,22 +92,15 @@ untrusted values into event handlers, scripts, styles, or unconstrained
 URL-valued attributes. This component does not reactivate archived suspense
 templates or the archived route cache.
 
-Routes can declare `from-partial-id` to capture an element's child content into
-their insertion template (`template[for-partial-id]`). This is built into
-`ClientRoutes`: there is no callback attribute, handler lookup, or leave event.
-Capture occurs when the source URL matches `from-path` (or `path` when omitted),
-using the route's query rules, independently of the destination request method.
-Capture moves the actual child nodes into the insertion template synchronously
-in the navigation listener, leaving the target empty. Destination rendering runs
-in `intercept({ handler })`, after navigation event dispatch finishes. Routes
-with `from-partial-id` move their stored nodes into a cloned insertion wrapper;
-ordinary authored routes clone their content. Stored nodes are not interpolated,
-so user-entered `$[name]` text remains literal. `from-path="*"` accepts every
-source pathname. Routes without `from-partial-id` do not capture content.
+Add `once` to a route to move its actual child nodes into the document body and
+remove that route after rendering, rather than cloning its content. This works
+for authored routes too, including insertion templates and their load triggers.
+Rendering runs in `intercept({ handler })`, after navigation event dispatch.
+`ClientRoutes` does not capture outgoing content or inspect mounted panels.
 
 Add `fallback` to a loading route to suppress it when any matching route has
 `data-nav-block`. Other matching routes still render normally. Set
-`interpolate="false"` to clone literal content without expanding `$[name]`.
+`interpolate="false"` to render literal content without expanding `$[name]`.
 
 ### Partial Cache
 
@@ -119,33 +112,51 @@ Opt a replacement partial into the template-based navigation cache:
 </NewPartial>;
 ```
 
-Registration reuses a sibling `ClientRoutes` container, or inserts one beside
-the target if none exists. It adds an ordinary GET `client-route`, containing
-the partial's insertion template and load trigger, with `data-nav-block`. There
-is no separate cache lookup or restoration path in navigation or partial
-replacement. Pages without cached partials receive no cache handlers or markup.
+Both `NewPartial` and `PartialReplaceWithCache` accept `fullPageLoad` (default
+`false`). Set it when the layout already renders the partial directly inside its
+target element:
 
-`ClientRoutes` moves the route's `from-partial-id` target's children into its
-insertion template. Registered cache routes use an active-path marker inside the
-target to avoid overwriting inactive caches. An active cache stays mounted when
-the destination matches its path pattern or descends from a matching path. Path
-ancestry uses complete segments: `/trial/a` is within `/trial`, but
-`/trial-other` is not. Sibling child navigation therefore leaves parents mounted
-without blocking uncached child requests. Leaving the branch captures the active
-parent even when the source URL is a deeper child. Restore matching remains
-unchanged and does not turn an exact parent route into a wildcard. Returning
-moves those same nodes through the original insertion handler, preserving node
-identity, live form values, and attached event listeners. Only the route wrapper
-and load trigger are cloned. Detaching and reconnecting nodes still triggers
-lifecycle callbacks; focus and running embedded content are not guaranteed to
-survive. The target is empty while fetching unless an authored route provides a
-loading state. Capture does not roll back if a later listener cancels navigation
-or the request fails.
+```tsx
+const sourceUrl = c.req.header("source-url");
 
-An exact parent path already protects its descendants. Assign parent and child
-partials distinct route paths; a layout and child registered at the same path
-cannot be distinguished by URL ancestry. For an explicit pattern spanning
-several routes, `cache` also accepts a URLPattern:
+<PartialReplaceWithCache id="thirdPanelContent" fullPageLoad={!sourceUrl}>
+  <PatientDetails />
+</PartialReplaceWithCache>;
+```
+
+With `fullPageLoad`, children render in place without the initial insertion
+template or its load trigger. The component does not create or find the target
+element, and does not run `onLoad` on initial rendering. Keep the component a
+direct child of the element identified by `id` for caching. Cache lifecycle
+markup remains active, and cached restoration still uses the original insertion
+handler, group name, and attributes. Partial navigation retains the usual
+template insertion behavior when `fullPageLoad` is omitted or `false`.
+
+The partial includes a lifecycle element whose load handler starts a
+`MutationObserver` on the target's direct children. Its suspend handler drains
+pending records and disconnects the observer. A sibling `ClientRoutes` container
+stores the captured routes; no route is published while its content is mounted.
+Pages without cached partials receive no cache handlers or markup.
+
+When another partial replaces the target's children, the observer moves the
+outgoing nodes into an insertion template and publishes an ordinary GET
+`client-route` with `once`, `data-nav-block`, and `interpolate="false"`. Its
+output is the insertion template followed by the modulepreload link that proxies
+its load event. Restoration uses normal client-route rendering and the original
+insertion handler. There is no cache lookup or capture logic in navigation or
+partial replacement, no active-path markers, and no ancestry checks.
+
+Capture depends on DOM replacement, not the URL or navigation event. A failed or
+cancelled navigation that does not replace content leaves it mounted. An
+authored loading partial that replaces content does cause capture. Updating a
+nested panel does not capture its parent. Removing a whole parent subtree leaves
+its nested content intact; nested observers suspend and resume on reconnection.
+Restoration preserves node identity, live form values, and attached listeners.
+Detachment still triggers lifecycle callbacks, and focus or running embedded
+content is not guaranteed to survive.
+
+For an explicit restore pattern spanning several routes, `cache` also accepts a
+URLPattern:
 
 ```tsx
 <NewPartial
@@ -157,21 +168,15 @@ several routes, `cache` also accepts a URLPattern:
 </NewPartial>;
 ```
 
-Navigation within that scope leaves the outer panel mounted without blocking an
-uncached child request. Leaving the scope moves the outer content intact; its
-child routers leave their nodes in place for that move. On restoration, child
-routers reconnect and select cached content for the current URL. There are no
-shared phase queues or depth sorting. Reconnect handling is idempotent and does
-not add duplicate navigation listeners.
-
 With `cache={true}`, matching uses the exact request pathname as a literal
 URLPattern; a string provides the pattern explicitly. Both ignore query strings
 and hashes. A restore blocks the entire GET fetch, even when only one panel was
-cached; choose scopes whose cached content suffices for the route. A parent
-whose stored child content cannot satisfy the destination is a cache miss,
-allowing the normal server request. POST, URL-only, and non-intercepted
-navigations do not restore GET cache routes. Mark authored loading routes
-`fallback` if they should yield to blocking routes.
+cached; choose patterns whose stored content suffices for the destination. A
+parent restores its captured subtree as-is, including whichever child was
+mounted at replacement time. Reconnecting a child router only resumes listening
+for future navigation; it does not switch child content automatically. POST,
+URL-only, and non-intercepted navigations do not restore GET cache routes. Mark
+authored loading routes `fallback` if they should yield to blocking routes.
 
 Use `partialReplace` from the `handlers` export. Eviction and SSE updates to
 stored content are not implemented. This cache is separate from the archived

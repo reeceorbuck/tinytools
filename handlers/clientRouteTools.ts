@@ -68,17 +68,12 @@ export const clientRouteTools = new Handlers(import.meta.url, {
     route: Element,
     params: Readonly<Record<string, string | undefined>>,
   ): DocumentFragment {
-    const insertion = route.hasAttribute("from-partial-id")
-      ? route.querySelector<HTMLTemplateElement>("template[for-partial-id]")
-      : null;
-    const cachedContent = document.createDocumentFragment();
-    if (insertion) {
-      cachedContent.append(...Array.from(insertion.content.childNodes));
-    }
     const fragment = document.createDocumentFragment();
-    for (const child of route.childNodes) {
-      fragment.appendChild(child.cloneNode(true));
+    const once = route.hasAttribute("once");
+    for (const child of Array.from(route.childNodes)) {
+      fragment.appendChild(once ? child : child.cloneNode(true));
     }
+    if (once) route.remove();
     const interpolateContent = (content: DocumentFragment) => {
       const walker = document.createTreeWalker(
         content,
@@ -111,10 +106,6 @@ export const clientRouteTools = new Handlers(import.meta.url, {
     };
     if (route.getAttribute("interpolate") !== "false") {
       interpolateContent(fragment);
-    }
-    if (insertion) {
-      fragment.querySelector<HTMLTemplateElement>("template[for-partial-id]")!
-        .content.append(cachedContent);
     }
     return fragment;
   },

@@ -13,7 +13,6 @@ export {
   ActivateOnLoadHandler,
   BuildFromTemplateElement,
 } from "./ActivateOnLoadHandler.tsx";
-export { RouteCache } from "./RouteCache.tsx";
 export type { RouteCacheProps } from "./RouteCache.tsx";
 export { CustomSuspense, Suspense } from "./Suspense.tsx";
 export type {
@@ -22,5 +21,10 @@ export type {
   SuspenseProps,
 } from "./Suspense.tsx";
 // export { Partial } from "./Partial.tsx";
-export { NewPartial } from "../honoFactory.tsx";
+export {
+  NewPartial,
+  PartialDelete,
+  PartialReplace,
+  PartialReplaceWithCache,
+} from "./NewPartial.tsx";
 export type { PartialProps } from "./Partial.tsx";
