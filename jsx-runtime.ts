@@ -44,7 +44,6 @@ export const jsxAttr: typeof honoJsxAttr = (name, value) => {
 };
 import type { JSX as HonoJSX } from "hono/jsx/jsx-runtime";
 import type { ClientTools } from "./clientTools.ts";
-import type { PartialContentElement } from "./client/wc-partialContent.ts";
 
 /**
  * Brand symbol for ClientFunction types.
@@ -228,21 +227,12 @@ type ClientEventHandler<E extends Event> =
   | HandlerReference<string, (event: E) => unknown>
   | undefined;
 
-type ClientEventHandlerWithThis<E extends Event, T = HTMLElement> =
-  | ActivatedClientFunction<(this: T, event: E) => void>
-  | HandlerReference<string, (this: T, event: E) => unknown>
-  | undefined;
-
-type ClientLifecycleHandler<T extends HTMLElement> =
-  | ActivatedClientFunction<(this: T, element: T) => void>
-  | undefined;
-
 // Define your global overrides here - now requiring branded ClientFunction types
 interface GlobalOverrides {
   // Common events
   onCommand?: ClientEventHandler<CommandEvent>;
 
-  // Window / document / navigation events (window-event-listener only)
+  // Window / document / navigation events
   onNavigate?: ClientEventHandler<NavigateEvent>;
   onNavigateSuccess?: ClientEventHandler<Event>;
   onNavigateError?: ClientEventHandler<ErrorEvent>;
@@ -363,9 +353,6 @@ interface GlobalOverrides {
 
   // Toggle events (for details/dialog)
   onToggle?: ClientEventHandler<Event>;
-
-  // Custom events for Navigation API
-  // (kept above under window-event-listener-only group)
 }
 
 // Apply branded handler types to regular elements, but do NOT add window/navigation-only events.
@@ -387,87 +374,6 @@ type ElementEventOverrides = Omit<
   | "onUnload"
 >;
 
-type DisallowLifecycleEvents = {
-  /**
-   * Only lifecycle custom elements can use these.
-   * Using them on normal elements should be a type error.
-   */
-  onMount?: ForbiddenProp<
-    "Only <lifecycle-element> and <partial-content> can use onMount"
-  >;
-  onUnmount?: ForbiddenProp<"Only <lifecycle-element> can use onUnmount">;
-};
-
-type ForbiddenProp<Message extends string> = {
-  /**
-   * This property exists only to surface a readable compiler error.
-   * It should never be provided at runtime.
-   */
-  __tsx_error_message__: Message;
-};
-
-/**
- * Helper type that shows an error when a non-activated ClientFunction is used.
- * At JSX attribute assignment time, this shows a readable hint about what went wrong.
- * @internal
- */
-type ClientFunctionNotActivatedError = ForbiddenProp<
-  "ClientFunction from defineFunctions() must be accessed from c.var.tools.fn after activation. Example: const { fn } = c.var.tools; <div onClick={fn.handlerName}>"
->;
-
-/**
- * Helper type that shows an error when a raw function is used instead of a ClientFunction.
- * @internal
- */
-type RawFunctionNotAllowedError = ForbiddenProp<
-  "Raw functions cannot be used as event handlers. Use ClientTools constructor with functions option to define a handler, then access it from c.var.tools.fn after the handler is activated."
->;
-
-type DisallowWindowOnlyEvents = {
-  /**
-   * Only <window-event-listener> can use these.
-   * Using them on normal elements should be a type error.
-   */
-  onNavigate?: ForbiddenProp<"Only <window-event-listener> can use onNavigate">;
-  onNavigateSuccess?: ForbiddenProp<
-    "Only <window-event-listener> can use onNavigateSuccess"
-  >;
-  onNavigateError?: ForbiddenProp<
-    "Only <window-event-listener> can use onNavigateError"
-  >;
-  onCurrentEntryChange?: ForbiddenProp<
-    "Only <window-event-listener> can use onCurrentEntryChange"
-  >;
-  onHashChange?: ForbiddenProp<
-    "Only <window-event-listener> can use onHashChange"
-  >;
-  onPopState?: ForbiddenProp<"Only <window-event-listener> can use onPopState">;
-  onResize?: ForbiddenProp<"Only <window-event-listener> can use onResize">;
-  onOnline?: ForbiddenProp<"Only <window-event-listener> can use onOnline">;
-  onOffline?: ForbiddenProp<"Only <window-event-listener> can use onOffline">;
-  onMessage?: ForbiddenProp<"Only <window-event-listener> can use onMessage">;
-  onStorage?: ForbiddenProp<"Only <window-event-listener> can use onStorage">;
-  onVisibilityChange?: ForbiddenProp<
-    "Only <window-event-listener> can use onVisibilityChange"
-  >;
-  onBeforeUnload?: ForbiddenProp<
-    "Only <window-event-listener> can use onBeforeUnload"
-  >;
-  onUnload?: ForbiddenProp<"Only <window-event-listener> can use onUnload">;
-};
-
-type ElementEventOverridesWithNoLifecycle =
-  & ElementEventOverrides
-  & DisallowLifecycleEvents;
-
-type ElementEventOverridesStrict =
-  & ElementEventOverridesWithNoLifecycle
-  & DisallowWindowOnlyEvents;
-
-type ElementEventOverridesNoWindowOnly =
-  & ElementEventOverrides
-  & DisallowWindowOnlyEvents;
-
 type WindowEventTypes = Pick<
   GlobalOverrides,
   | "onNavigate"
@@ -486,12 +392,13 @@ type WindowEventTypes = Pick<
   | "onUnload"
 >;
 
-type WindowEventOverrides = {
-  [Name in keyof WindowEventTypes]: Exclude<
-    WindowEventTypes[Name],
-    HandlerReference<string, unknown>
-  >;
-};
+type ElementEventOverridesStrict =
+  & ElementEventOverrides
+  & { [Name in keyof WindowEventTypes]?: never }
+  & {
+    onMount?: never;
+    onUnmount?: never;
+  };
 
 type ApplyOverrides<TBase, TOverrides> =
   & Omit<TBase, keyof TOverrides>
@@ -503,45 +410,10 @@ export namespace JSX {
   export type IntrinsicAttributes = HonoJSX.IntrinsicAttributes;
   export type ElementChildrenAttribute = HonoJSX.ElementChildrenAttribute;
 
-  export type IntrinsicElements =
-    & {
-      [K in keyof HonoJSX.IntrinsicElements]: ApplyOverrides<
-        HonoJSX.IntrinsicElements[K],
-        ElementEventOverridesStrict
-      >;
-    }
-    & {
-      /**
-       * Custom element that can listen to global/window-level events.
-       * Accepts normal element attributes, but event handlers must be activated client functions.
-       */
-      "window-event-listener": ApplyOverrides<
-        HonoJSX.IntrinsicElements["div"],
-        ElementEventOverridesWithNoLifecycle & WindowEventOverrides
-      >;
-
-      /**
-       * Custom element that emits lifecycle events.
-       * Accepts normal element attributes.
-       */
-      "lifecycle-element":
-        & ApplyOverrides<
-          HonoJSX.IntrinsicElements["div"],
-          ElementEventOverridesNoWindowOnly
-        >
-        & {
-          onMount?: ActivatedClientFunction<(event: Event) => void>;
-          onUnmount?: ActivatedClientFunction<(event: Event) => void>;
-        };
-
-      /** Incoming partial content processed by an app-owned mount handler. */
-      "partial-content":
-        & ApplyOverrides<
-          HonoJSX.IntrinsicElements["div"],
-          ElementEventOverridesNoWindowOnly
-        >
-        & {
-          onMount: ClientLifecycleHandler<PartialContentElement>;
-        };
-    };
+  export type IntrinsicElements = {
+    [K in keyof HonoJSX.IntrinsicElements]: ApplyOverrides<
+      HonoJSX.IntrinsicElements[K],
+      ElementEventOverridesStrict
+    >;
+  };
 }

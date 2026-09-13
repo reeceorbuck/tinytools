@@ -1,8 +1,7 @@
-import { Handlers } from "./clientTools.ts";
-import type { PartialContentElement } from "./client/wc-partialContent.ts";
+import { Handlers } from "../clientTools.ts";
 
 export const partialInsertHandlers = new Handlers(import.meta.url, {
-  partialRouteCache: function (this: PartialContentElement) {
+  partialRouteCache: function (this: HTMLElement) {
     const context = this.partialContext;
     if (!context || context.options.bypassRouteCache) return true;
     if (context.state.has("route-cache:stale")) {
@@ -231,7 +230,7 @@ export const partialInsertHandlers = new Handlers(import.meta.url, {
     return true;
   },
 
-  partialAutofocus: function (this: PartialContentElement) {
+  partialAutofocus: function (this: HTMLElement) {
     const targets = [
       ...(this.hasAttribute("autofocus") ? [this] : []),
       ...Array.from(this.querySelectorAll<HTMLElement>("[autofocus]")),
@@ -254,7 +253,7 @@ export const partialInsertHandlers = new Handlers(import.meta.url, {
     });
   },
 
-  partialAttributes: function (this: PartialContentElement) {
+  partialAttributes: function (this: HTMLElement) {
     const scope = this.partialContext?.scope ?? document;
     const existing = Array.from(
       scope.querySelectorAll(`#${CSS.escape(this.id)}`),
@@ -280,7 +279,7 @@ export const partialInsertHandlers = new Handlers(import.meta.url, {
     this.remove();
   },
 
-  partialReplace: function (this: PartialContentElement) {
+  partialReplace: function (this: HTMLElement) {
     const scope = this.partialContext?.scope ?? document;
     const existing = Array.from(
       scope.querySelectorAll(`#${CSS.escape(this.id)}`),
@@ -295,7 +294,7 @@ export const partialInsertHandlers = new Handlers(import.meta.url, {
     this.remove();
   },
 
-  partialBlast: function (this: PartialContentElement) {
+  partialBlast: function (this: HTMLElement) {
     const scope = this.partialContext?.scope ?? document;
     const cacheId = this.getAttribute("data-cache-id");
     if (cacheId) {
@@ -321,7 +320,7 @@ export const partialInsertHandlers = new Handlers(import.meta.url, {
     this.remove();
   },
 
-  partialDelete: function (this: PartialContentElement) {
+  partialDelete: function (this: HTMLElement) {
     const scope = this.partialContext?.scope ?? document;
     const existing = Array.from(
       scope.querySelectorAll(`#${CSS.escape(this.id)}`),
@@ -331,7 +330,7 @@ export const partialInsertHandlers = new Handlers(import.meta.url, {
     this.remove();
   },
 
-  partialMergeContent: function (this: PartialContentElement) {
+  partialMergeContent: function (this: HTMLElement) {
     const scope = this.partialContext?.scope ?? document;
     const existing = Array.from(
       scope.querySelectorAll(`#${CSS.escape(this.id)}`),

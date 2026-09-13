@@ -8,11 +8,10 @@
  */
 
 import type { PropsWithChildren } from "hono/jsx";
-import type { PartialContentElement } from "../client/wc-partialContent.ts";
 import type { ActivatedClientFunction } from "../jsx-runtime.ts";
 
 type PartialInsertHandler = ActivatedClientFunction<
-  (this: PartialContentElement, element: PartialContentElement) => void
+  (this: HTMLElement, element: HTMLElement) => void
 >;
 
 /** Props for the Partial component */

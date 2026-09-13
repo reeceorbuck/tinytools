@@ -72,6 +72,3 @@ export const processIncomingDataTools = new tiny.Handlers(import.meta.url, {
     }
   },
 });
-
-export const processIncomingData =
-  processIncomingDataTools.getFunctionReferences.processIncomingData;

@@ -1,4 +1,4 @@
-import { Handlers } from "../clientTools.ts";
+import { Handlers, imports } from "../clientTools.ts";
 import type { AppNavigation, NavigationClientInfo } from "./navigationTools.ts";
 
 export interface NavigationUrlResult {
@@ -11,29 +11,7 @@ export interface NavigationUrlResult {
   readonly isSameDocumentHashNavigation: boolean;
 }
 
-export const navigationUrlTools = new Handlers(import.meta.url, {
-  getNavigationMethod: function (event: NavigateEvent): "get" | "post" {
-    const source = event.sourceElement;
-    if (source instanceof HTMLFormElement) {
-      return (source.method || "get").toLowerCase() === "post" ? "post" : "get";
-    }
-    if (
-      source instanceof HTMLButtonElement || source instanceof HTMLInputElement
-    ) {
-      const explicit = source.getAttribute("formmethod");
-      if (explicit) return explicit.toLowerCase() === "post" ? "post" : "get";
-      return (source.form?.method || "get").toLowerCase() === "post"
-        ? "post"
-        : "get";
-    }
-    if (source && "form" in source) {
-      const form = (source as HTMLInputElement | HTMLButtonElement).form;
-      if (form) {
-        return (form.method || "get").toLowerCase() === "post" ? "post" : "get";
-      }
-    }
-    return event.formData ? "post" : "get";
-  },
+export const parseNavigationUrlsTools = new Handlers(import.meta.url, {
   parseNavigationUrls: function (
     event: Pick<
       NavigateEvent,
@@ -120,31 +98,57 @@ export const navigationUrlTools = new Handlers(import.meta.url, {
       isSameDocumentHashNavigation,
     };
   },
-  getNavigationUrls: function (event: NavigateEvent): NavigationUrlResult {
-    const navigationApi = globalThis.navigation as AppNavigation;
-    const cache = navigationApi.navigationUrlResults ??= new WeakMap<
-      NavigateEvent,
-      NavigationUrlResult
-    >();
-    const cached = cache.get(event);
-    if (cached) return cached;
-
-    const navigationInfo = event.info && typeof event.info === "object"
-      ? event.info as NavigationClientInfo
-      : null;
-    const result = parseNavigationUrls(
-      event,
-      globalThis.location.href,
-      navigationInfo?.blockIntercept,
-    );
-    cache.set(event, result);
-    return result;
-  },
 });
 
-export const parseNavigationUrls =
-  navigationUrlTools.getFunctionReferences.parseNavigationUrls;
-export const getNavigationUrls =
-  navigationUrlTools.getFunctionReferences.getNavigationUrls;
-export const getNavigationMethod =
-  navigationUrlTools.getFunctionReferences.getNavigationMethod;
+export const navigationUrlTools = new Handlers(import.meta.url, async () => {
+  const { fn } = await imports(parseNavigationUrlsTools);
+  return {
+    getNavigationMethod: function (event: NavigateEvent): "get" | "post" {
+      const source = event.sourceElement;
+      if (source instanceof HTMLFormElement) {
+        return (source.method || "get").toLowerCase() === "post"
+          ? "post"
+          : "get";
+      }
+      if (
+        source instanceof HTMLButtonElement ||
+        source instanceof HTMLInputElement
+      ) {
+        const explicit = source.getAttribute("formmethod");
+        if (explicit) return explicit.toLowerCase() === "post" ? "post" : "get";
+        return (source.form?.method || "get").toLowerCase() === "post"
+          ? "post"
+          : "get";
+      }
+      if (source && "form" in source) {
+        const form = (source as HTMLInputElement | HTMLButtonElement).form;
+        if (form) {
+          return (form.method || "get").toLowerCase() === "post"
+            ? "post"
+            : "get";
+        }
+      }
+      return event.formData ? "post" : "get";
+    },
+    getNavigationUrls: function (event: NavigateEvent): NavigationUrlResult {
+      const navigationApi = globalThis.navigation as AppNavigation;
+      const cache = navigationApi.navigationUrlResults ??= new WeakMap<
+        NavigateEvent,
+        NavigationUrlResult
+      >();
+      const cached = cache.get(event);
+      if (cached) return cached;
+
+      const navigationInfo = event.info && typeof event.info === "object"
+        ? event.info as NavigationClientInfo
+        : null;
+      const result = fn.parseNavigationUrls(
+        event,
+        globalThis.location.href,
+        navigationInfo?.blockIntercept,
+      );
+      cache.set(event, result);
+      return result;
+    },
+  };
+});

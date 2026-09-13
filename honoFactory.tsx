@@ -23,6 +23,7 @@ import {
   type ClientTools,
   Handlers,
   imports as importTools,
+  NewHandlers,
   resolveToolAccessFromChain,
   setGeneratedFilenameHashLength,
   setGeneratedHandlerHashLength,
@@ -1059,36 +1060,19 @@ function createCoreMiddleware(
       const sourceUrl = c.req.header("source-url");
       if (sourceUrl) {
         return (
-          <>
-            {
-              /* <update>
-              <template>
-                <head-update>
-                  {title !== undefined && <title>{title}</title>}
-                  <AssetTags
-                    accessedHandlerFiles={handlerFiles}
-                    accessedStyleFiles={styleFiles}
-                    fullPageLoad={false}
-                  />
-                </head-update>
-                <body-update>{body}</body-update>
-              </template>
-            </update> */
-            }
-            <update>
-              <NewPartial onLoad={fn.importIntoHead}>
-                {title !== undefined && <title>{title}</title>}
-                <AssetTags
-                  accessedHandlerFiles={handlerFiles}
-                  accessedStyleFiles={styleFiles}
-                  fullPageLoad={false}
-                />
-              </NewPartial>
-              <NewPartial onLoad={fn.cacheRoute}>
-                {body}
-              </NewPartial>
-            </update>
-          </>
+          <update>
+            <NewPartial onLoad={fn.importIntoHead}>
+              {title !== undefined && <title>{title}</title>}
+              <AssetTags
+                accessedHandlerFiles={handlerFiles}
+                accessedStyleFiles={styleFiles}
+                fullPageLoad={false}
+              />
+            </NewPartial>
+            <NewPartial onLoad={fn.cacheRoute}>
+              {body}
+            </NewPartial>
+          </update>
         );
       }
 
@@ -1236,6 +1220,7 @@ class TinyHono<E extends Env = BlankEnv> extends HonoBase<E> {
 export type TinyApi = {
   readonly Hono: typeof TinyHono;
   readonly Handlers: typeof Handlers;
+  readonly NewHandlers: typeof NewHandlers;
   readonly Styles: typeof Styles;
   readonly css: typeof css;
   readonly imports: typeof importTools;
@@ -1264,6 +1249,7 @@ export type TinyApi = {
 export const tiny: TinyApi = {
   Hono: TinyHono,
   Handlers,
+  NewHandlers,
   Styles,
   css,
   imports: importTools,
@@ -1356,9 +1342,9 @@ export const tiny: TinyApi = {
     },
 
     /**
-     * Enable web component scripts (lifecycle-element, window-event-listener).
+    * Enable the abortable lifecycle web component script.
      *
-     * Adds client scripts: wc-lifecycleElement.js, wc-windowEventlistener.js
+    * Adds client scripts: wc-lifecycleAbortable.js
      *
      * @param _options - Reserved for future use
      *

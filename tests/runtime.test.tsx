@@ -253,7 +253,7 @@ Deno.test("Runtime - web component assets render as ES modules", async () => {
     .use(...tiny.middleware.core())
     .use(tiny.middleware.webComponents());
 
-  app.get("/", (c) => c.render(<lifecycle-element />));
+  app.get("/", (c) => c.render(<div />));
 
   const response = await app.fetch(new Request("http://localhost/"));
   const html = await response.text();
@@ -261,15 +261,12 @@ Deno.test("Runtime - web component assets render as ES modules", async () => {
   assertStringIncludes(
     html,
     `src="/_tinytools/${
-      getClientFileName("wc-lifecycleElement.js")
+      getClientFileName("wc-lifecycleAbortable.js")
     }" type="module"`,
   );
-  assertStringIncludes(
-    html,
-    `src="/_tinytools/${
-      getClientFileName("wc-windowEventlistener.js")
-    }" type="module"`,
-  );
+  assertEquals(html.includes("wc-lifecycleElement"), false);
+  assertEquals(html.includes("wc-windowEventlistener"), false);
+  assertEquals(html.includes("wc-partialContent"), false);
 });
 
 // ============================================================================

@@ -8,10 +8,7 @@ const CLIENT_FILES = [
   // "localRoutes.ts",
   // "mutationObserver.ts",
   // "sse.ts",
-  "wc-partialContent.ts",
-  "wc-lifecycleElement.ts",
-  "wc-lifecycleAbortable.ts",
-  "wc-windowEventlistener.ts"
+  "wc-lifecycleAbortable.ts"
 ];
 export {
   CLIENT_FILES

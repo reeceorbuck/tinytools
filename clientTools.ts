@@ -25,6 +25,7 @@ import {
   styleBundleRegistry,
 } from "./scopedStyles.ts";
 import { tryGetContext } from "hono/context-storage";
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { Context } from "hono";
 import {
   createEvents,
@@ -518,7 +519,7 @@ class ClientToolsCacheManager {
   getNextOccurrenceIndex(
     sourceFileUrl: string,
     name: string,
-    kind: "handler" | "style",
+    kind: "handler" | "style" | "factory",
   ): number {
     const key = `${kind}::${sourceFileUrl}::${name}`;
     const index = this.nameOccurrences.get(key) ?? 0;
@@ -892,6 +893,25 @@ type EngageResult<TFunctions, TStyles> = {
 // deno-lint-ignore no-explicit-any
 type AnyClientToolsInstance = ClientToolsClass<any, any, any>;
 
+type HandlerFactory<T extends Record<string, AnyFunction>> = () =>
+  | T
+  | Promise<T>;
+
+type HandlerDefinitionScope = {
+  owner: AnyClientToolsInstance;
+  dependencies: Map<string, ClientFunctionImpl>;
+  active: boolean;
+};
+
+const handlerDefinitionScope = new AsyncLocalStorage<HandlerDefinitionScope>();
+
+interface HandlerFactoryConstructor {
+  new <TFunctions extends Record<string, AnyFunction>>(
+    sourceFileUrl: string | URL,
+    factory: HandlerFactory<TFunctions>,
+  ): ClientToolsClass<TFunctions, Record<never, never>, Record<never, never>>;
+}
+
 // deno-lint-ignore no-explicit-any
 type UnionToIntersection<U> = (U extends any ? (arg: U) => void : never) extends
   ((arg: infer I) => void) ? I : never;
@@ -989,7 +1009,7 @@ interface ClientToolsConstructor {
   >;
 }
 
-interface HandlersConstructor {
+interface HandlersConstructor extends HandlerFactoryConstructor {
   // Overloads without sourceFileUrl (functions as first arg)
   // deno-lint-ignore ban-types
   new <TFunctions extends Record<string, AnyFunction> = {}>(
@@ -1133,6 +1153,91 @@ class ClientToolsClass<
   private _importedTools: ClientToolsClass<any, any, any>[] = [];
   /** Whether ensureBuilt() has already run */
   private _ensureBuiltPromise: Promise<void> | null = null;
+  private _definitionReady = true;
+  private _definitionPromise: Promise<void> | undefined;
+  private _definitionInitializer?: (
+    scope: HandlerDefinitionScope,
+  ) => Promise<void>;
+  private _definitionWaits = new Set<AnyClientToolsInstance>();
+
+  private _waitsFor(
+    target: AnyClientToolsInstance,
+    seen = new Set<AnyClientToolsInstance>(),
+  ): boolean {
+    if (this === target) return true;
+    if (seen.has(this)) return false;
+    seen.add(this);
+    return [...this._definitionWaits].some((dependency) =>
+      dependency._waitsFor(target, seen)
+    );
+  }
+
+  async ensureDefined(): Promise<void> {
+    if (this._definitionReady) return;
+    const context = handlerDefinitionScope.getStore();
+    const caller = context?.active ? context.owner : undefined;
+    if (caller && this._waitsFor(caller)) {
+      throw new Error(
+        `Circular handler definition dependency: ${caller.sourceFileUrl} -> ${this.sourceFileUrl}`,
+      );
+    }
+    caller?._definitionWaits.add(this);
+    try {
+      this._definitionPromise ??= Promise.resolve().then(() =>
+        handlerDefinitionScope.run({
+          owner: this,
+          dependencies: new Map(),
+          active: true,
+        }, async () => {
+          const scope = handlerDefinitionScope.getStore()!;
+          try {
+            await this._definitionInitializer!(scope);
+            this._definitionReady = true;
+          } finally {
+            scope.active = false;
+          }
+        })
+      );
+      await this._definitionPromise;
+    } finally {
+      caller?._definitionWaits.delete(this);
+    }
+  }
+
+  protected defineFactory(
+    factory: HandlerFactory<Record<string, AnyFunction>>,
+  ): void {
+    const namespaceId = cache.getNextOccurrenceIndex(
+      this.sourceFileUrl,
+      "",
+      "factory",
+    );
+    this._definitionReady = false;
+    this._definitionInitializer = async (scope) => {
+      const functions = await factory();
+      if (
+        !functions || typeof functions !== "object" ||
+        Object.values(functions).some((value) => typeof value !== "function")
+      ) {
+        throw new TypeError(
+          "Handlers factory must return an object of handler functions.",
+        );
+      }
+      this._processFunctions(functions, scope.dependencies, namespaceId);
+      for (const instance of this._clientFunctions.values()) {
+        await instance.initializeNamespace();
+      }
+      this._refreshHandlerFilenames();
+    };
+  }
+
+  private _refreshHandlerFilenames(): void {
+    for (const [name, instance] of this._clientFunctions) {
+      this.handlerFilenames.set(name, instance.filename);
+      (this as Record<string, unknown>)[name] =
+        (instance as unknown as Record<string, unknown>)[name];
+    }
+  }
 
   constructor(
     sourceFileUrl: string | URL | undefined,
@@ -1145,23 +1250,43 @@ class ClientToolsClass<
         : sourceFileUrl?.toString() ?? "");
     registeredClientTools.add(this);
 
-    if (options) {
-      // Process imports first so imported functions/styles are available
-      if (options.imports) {
-        for (const externalTools of options.imports) {
-          this._processImport(externalTools);
+    const processOptions = () => {
+      if (options) {
+        // Process imports first so imported functions/styles are available
+        if (options.imports) {
+          for (const externalTools of options.imports) {
+            this._processImport(externalTools);
+          }
+        }
+
+        // Process functions
+        if (options.functions) {
+          this._processFunctions(options.functions);
+        }
+
+        // Process styles
+        if (options.styles) {
+          this._processStyles(options.styles);
         }
       }
-
-      // Process functions
-      if (options.functions) {
-        this._processFunctions(options.functions);
-      }
-
-      // Process styles
-      if (options.styles) {
-        this._processStyles(options.styles);
-      }
+    };
+    if (
+      options?.imports?.some((tools: AnyClientToolsInstance) =>
+        !tools._definitionReady
+      )
+    ) {
+      this._definitionReady = false;
+      this._definitionInitializer = async () => {
+        await Promise.all(
+          options.imports.map((tools: AnyClientToolsInstance) =>
+            tools.ensureDefined()
+          ),
+        );
+        processOptions();
+        this._finalizeStyleBundle();
+      };
+    } else {
+      processOptions();
     }
 
     // After all styles are processed, bundle scoped styles into one file
@@ -1171,6 +1296,8 @@ class ClientToolsClass<
   /** Internal helper to process function definitions */
   private _processFunctions<T extends Record<string, AnyFunction>>(
     fns: T,
+    namespaceDependencies?: ReadonlyMap<string, ClientFunctionImpl>,
+    namespaceId?: number,
   ): void {
     // Compute a stable fingerprint of imported function names so that
     // adding/removing imports produces a different handler hash (and filename),
@@ -1199,6 +1326,8 @@ class ClientToolsClass<
         fn,
         this.sourceFileUrl,
         importsFingerprint,
+        namespaceDependencies,
+        namespaceId,
       );
       // deno-lint-ignore no-explicit-any
       (this as any)[fnName] = (instance as any)[fnName];
@@ -1295,6 +1424,8 @@ class ClientToolsClass<
    * Subsequent calls return the same promise (idempotent).
    */
   async ensureBuilt(): Promise<void> {
+    await this.ensureDefined();
+    this._refreshHandlerFilenames();
     if (cache.trustCache) return;
     if (this._ensureBuiltPromise) return this._ensureBuiltPromise;
     const buildPromise = this._doEnsureBuilt();
@@ -1596,7 +1727,12 @@ class ClientToolsClass<
    * @internal
    */
   get _handlerFilenames(): ReadonlyMap<string, string> {
+    this._refreshHandlerFilenames();
     return this.handlerFilenames;
+  }
+
+  get _handlerDefinitions(): ReadonlyMap<string, ClientFunctionImpl> {
+    return this._clientFunctions;
   }
 
   /**
@@ -1627,6 +1763,11 @@ class ClientToolsClass<
    *   a client function body.
    */
   get getFunctionReferences(): AccumulatedFunctions {
+    if (!this._definitionReady) {
+      throw new Error(
+        "Handler definitions are not ready. Await tiny.imports(tools) or tools.ensureDefined() first.",
+      );
+    }
     const result = {} as AccumulatedFunctions;
     for (const fnName of this._clientFunctions.keys()) {
       // deno-lint-ignore no-explicit-any
@@ -1823,10 +1964,32 @@ class HandlersClass extends ClientToolsClass<{}, {}, {}> {
       // deno-lint-ignore no-explicit-any
       | HandlersOptions<any>
       | Record<string, AnyFunction>,
-    // deno-lint-ignore no-explicit-any
-    optionsOrFunctions?: HandlersOptions<any> | Record<string, AnyFunction>,
+    optionsOrFunctions?:
+      // deno-lint-ignore no-explicit-any
+      | HandlersOptions<any>
+      | Record<string, AnyFunction>
+      | HandlerFactory<Record<string, AnyFunction>>,
     maybeFunctions?: Record<string, AnyFunction>,
   ) {
+    if (typeof optionsOrFunctions === "function") {
+      if (
+        !(typeof sourceFileUrlOrOptionsOrFunctions === "string" ||
+          sourceFileUrlOrOptionsOrFunctions instanceof URL) ||
+        !normalizeSourceFileUrl(sourceFileUrlOrOptionsOrFunctions)
+      ) {
+        throw new TypeError(
+          "Handlers factory requires a valid source file URL. Pass import.meta.url.",
+        );
+      }
+      if (maybeFunctions !== undefined) {
+        throw new TypeError(
+          "Handlers factory does not accept a third argument.",
+        );
+      }
+      super(sourceFileUrlOrOptionsOrFunctions);
+      this.defineFactory(optionsOrFunctions);
+      return;
+    }
     // Detect whether first arg is the sourceFileUrl (string/URL/undefined) or
     // already an object (options or functions, meaning no sourceFileUrl was
     // provided).
@@ -1941,6 +2104,8 @@ class StylesClass extends ClientToolsClass<{}, {}, {}> {
 export const Handlers: HandlersConstructor =
   HandlersClass as unknown as HandlersConstructor;
 
+export const NewHandlers: HandlerFactoryConstructor = Handlers;
+
 export const Styles: StylesConstructor =
   StylesClass as unknown as StylesConstructor;
 
@@ -1958,6 +2123,64 @@ export async function imports<
 export async function imports(
   ...tools: AnyClientToolsInstance[]
 ): Promise<EngageResult<unknown, unknown>> {
+  const definition = handlerDefinitionScope.getStore();
+  if (definition?.active) {
+    if (tools.length === 0) {
+      throw new Error(
+        "Handler definitions require explicit tools in tiny.imports().",
+      );
+    }
+    await Promise.all(tools.map((tool) => tool.ensureDefined()));
+    const references: Record<string, AnyFunction> = Object.create(null);
+    for (const tool of tools) {
+      for (const [name, instance] of tool._handlerDefinitions) {
+        if (definition.dependencies.has(name)) {
+          throw new Error(
+            `Duplicate imported handler '${name}' in handler definition.`,
+          );
+        }
+        definition.dependencies.set(name, instance);
+        references[name] = function () {
+          throw new Error(
+            `Handler '${name}' cannot be called during server-side definition. Call it inside a returned handler.`,
+          );
+        };
+      }
+    }
+    const unsupported = () => {
+      throw new Error(
+        "Handler definitions support only fn from tiny.imports(); request tools are unavailable.",
+      );
+    };
+    return {
+      fn: new Proxy(references, {
+        get(target, property) {
+          if (
+            typeof property !== "string" || !Object.hasOwn(target, property)
+          ) {
+            throw new Error(
+              `Unknown definition handler '${
+                String(property)
+              }'. Rendering helpers are not available inside handler definitions.`,
+            );
+          }
+          return target[property];
+        },
+      }) as unknown as ActivateClientFunctions<unknown>,
+      get events() {
+        return unsupported();
+      },
+      get handlers() {
+        return unsupported();
+      },
+      get styled() {
+        return unsupported();
+      },
+      get c() {
+        return unsupported();
+      },
+    };
+  }
   if (tools.length === 0) {
     const c = tryGetContext();
     if (!c) {

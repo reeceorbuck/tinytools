@@ -30,10 +30,12 @@ export const newAltTestTools = new tiny.NewHandlers(
   },
 );
 
-const { useSignal } = signalTools.getFunctionReferences;
-export const oldTools = new tiny.Handlers(import.meta.url, {
-  someHandler: function (e: CommandEvent) {
-    console.log("Some handler called, event: ", e);
-    useSignal(e);
-  },
+export const oldTools = new tiny.Handlers(import.meta.url, async () => {
+  const { fn } = await tiny.imports(signalTools);
+  return {
+    someHandler: function (e: CommandEvent) {
+      console.log("Some handler called, event: ", e);
+      fn.useSignal(e);
+    },
+  };
 });

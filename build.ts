@@ -17,7 +17,11 @@ import {
   setGeneratedHandlerHashLength,
   setGeneratedStyleHashLength,
 } from "./clientTools.ts";
-import { changedHandlerKeys, handlers } from "./clientFunctions.ts";
+import {
+  changedHandlerKeys,
+  ClientFunctionImpl,
+  handlers,
+} from "./clientFunctions.ts";
 performance.mark("import:clientFunctions:done");
 import {
   changedStyleKeys,
@@ -428,6 +432,15 @@ export async function buildScriptFiles(options: BuildOptions = {}) {
 
   performance.mark("startup:buildScriptFilesStart");
   performance.mark("buildScriptFiles:begin");
+
+  for (const tools of registeredClientTools) {
+    await tools.ensureDefined();
+  }
+  for (const handler of handlers.values()) {
+    if (handler instanceof ClientFunctionImpl) {
+      handler.resolveNamespaceFilename();
+    }
+  }
 
   // --- Revalidation phase (skip in fresh mode — filenames are already determined) ---
   performance.mark("buildScriptFiles:revalidateStart");

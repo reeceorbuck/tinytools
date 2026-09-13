@@ -52,5 +52,3 @@ export const signalTools = new tiny.Handlers(import.meta.url, {
     });
   },
 });
-
-export const { useSignal, sendSignal } = signalTools.getFunctionReferences;

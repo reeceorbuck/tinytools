@@ -67,25 +67,7 @@ export const partialInsertHandlers = new Handlers(import.meta.url, {
       if (existingChild) {
         switch (existingMode) {
           case "substitute":
-            if (insertNode.tagName === "PARTIAL-CONTENT") {
-              // const contexts = (globalThis as typeof globalThis & {
-              //   [key: symbol]: WeakMap<Element, unknown>;
-              // })[Symbol.for("tinytools.partialContentContexts")];
-              // contexts?.set(insertNode, {
-              //   ...(this.partialContext ?? {
-              //     options: {},
-              //     incomingElements: [insertNode],
-              //     state: new Set<string>(),
-              //   }),
-              //   scope: existingChild.parentElement!,
-              // });
-              // document.body.appendChild(insertNode);
-              console.warn(
-                "Partial-content is not implemented yet in partial-merge-content!",
-              );
-            } else {
-              existingChild.replaceWith(insertNode);
-            }
+            existingChild.replaceWith(insertNode);
             break;
           case "match":
             break;

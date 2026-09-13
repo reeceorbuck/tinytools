@@ -81,6 +81,7 @@ export class ClientFunctionImpl<
   filename: string;
   sourceFileUrl?: string;
   private occurrenceIndex: number;
+  private cacheName: string;
   private importsFingerprint: string;
   /**
    * Records the previous filename when `_resolveFilename` performs an
@@ -90,9 +91,44 @@ export class ClientFunctionImpl<
    * renames (fixed-point loop) still produce a single cleanup.
    */
   private _pendingOldFilename: string | undefined;
+  private namespaceDependencies?: Map<string, ClientFunctionImpl>;
+  private namespaceInitialized = false;
+
+  resolveNamespaceFilename(): void {
+    if (!this.namespaceInitialized || !this.namespaceDependencies) return;
+    for (const dependency of this.namespaceDependencies.values()) {
+      dependency.resolveNamespaceFilename();
+    }
+    this._resolveFilename();
+  }
+
+  async initializeNamespace(): Promise<void> {
+    if (!this.namespaceDependencies || this.namespaceInitialized) return;
+    const { compileHandlerNamespace } = await import("./handlerNamespace.ts");
+    const candidates = [...this.namespaceDependencies];
+    const logicalPaths = new Map(
+      candidates.map((
+        [name],
+        index,
+      ) => [name, `./__tiny_dependency_${index}.js`]),
+    );
+    const result = await compileHandlerNamespace(
+      this.fn.toString(),
+      this.fnName,
+      "__tiny_analysis",
+      logicalPaths,
+    );
+    const live = new Set(result.imports);
+    this.namespaceDependencies = new Map(
+      candidates.filter(([name]) => live.has(logicalPaths.get(name)!)),
+    );
+    this.namespaceInitialized = true;
+    this._resolveFilename();
+  }
 
   private _computeHashInput(): string {
-    const base = this.fn.toString() + "::" + (this.sourceFileUrl ?? "");
+    const base = this.fn.toString() + "::" + (this.sourceFileUrl ?? "") +
+      (this.namespaceDependencies ? `::namespace-v2:${this.cacheName}` : "");
     const fingerprint = this._currentImportsFingerprint();
     return fingerprint ? `${base}::imports[${fingerprint}]` : base;
   }
@@ -146,6 +182,11 @@ export class ClientFunctionImpl<
    * the old import filename.
    */
   private _currentImportsFingerprint(): string {
+    if (this.namespaceDependencies) {
+      return [...this.namespaceDependencies].map(([name, dependency]) =>
+        `${name}=${dependency.filename}`
+      ).sort().join(",");
+    }
     if (!this.sourceFileUrl) return this.importsFingerprint;
 
     const referenced = this._referencedNames();
@@ -198,15 +239,22 @@ export class ClientFunctionImpl<
     fn: T,
     sourceFileUrl?: string,
     importsFingerprint = "",
+    namespaceDependencies?: ReadonlyMap<string, ClientFunctionImpl>,
+    namespaceId?: number,
   ) {
     if (typeof fn !== "function") {
       throw new Error("ClientFunction requires a function");
     }
 
     const normalizedSourceFileUrl = normalizeSourceFileUrl(sourceFileUrl);
+    const cacheName = namespaceId === undefined
+      ? fnName
+      : `${fnName}::factory:${namespaceId}`;
 
     // Get the occurrence index for this name in this file (0 for first, 1 for second, etc.)
-    const occurrenceIndex = normalizedSourceFileUrl
+    const occurrenceIndex = namespaceId !== undefined
+      ? 0
+      : normalizedSourceFileUrl
       ? cache.getNextOccurrenceIndex(normalizedSourceFileUrl, fnName, "handler")
       : 0;
 
@@ -214,7 +262,7 @@ export class ClientFunctionImpl<
     if (normalizedSourceFileUrl) {
       cachedFilename = cache.getCachedHandler(
         normalizedSourceFileUrl,
-        fnName,
+        cacheName,
         occurrenceIndex,
       );
     }
@@ -230,6 +278,7 @@ export class ClientFunctionImpl<
       resolvedFilename = `${fnName}_${
         generateHandlerHash(
           fn.toString() + "::" + (normalizedSourceFileUrl ?? "") +
+            (namespaceDependencies ? `::namespace-v2:${cacheName}` : "") +
             (importsFingerprint ? `::imports[${importsFingerprint}]` : ""),
         )
       }`;
@@ -245,7 +294,7 @@ export class ClientFunctionImpl<
 
       cache.setCachedHandler(
         normalizedSourceFileUrl,
-        fnName,
+        cacheName,
         occurrenceIndex,
         resolvedFilename,
       );
@@ -257,7 +306,11 @@ export class ClientFunctionImpl<
     this.filename = resolvedFilename;
     this.sourceFileUrl = normalizedSourceFileUrl;
     this.occurrenceIndex = occurrenceIndex;
+    this.cacheName = cacheName;
     this.importsFingerprint = importsFingerprint;
+    this.namespaceDependencies = namespaceDependencies
+      ? new Map(namespaceDependencies)
+      : undefined;
     // deno-lint-ignore no-explicit-any
     (this as any)[fnName] =
       `handlers.${this.filename}.call(this, event)` as unknown as T;
@@ -300,6 +353,10 @@ export class ClientFunctionImpl<
   }
 
   needsRebuildDueToDependencyChange(): boolean {
+    if (this.namespaceDependencies) {
+      return this.filename !==
+        `${this.fnName}_${generateHandlerHash(this._computeHashInput())}`;
+    }
     if (!this.sourceFileUrl) return false;
     if (changedHandlerKeys.size === 0 && filesWithChangedHandlers.size === 0) {
       return false;
@@ -338,6 +395,21 @@ export class ClientFunctionImpl<
   }
 
   async buildCode() {
+    if (this.namespaceDependencies) {
+      await this.initializeNamespace();
+      const { compileHandlerNamespace } = await import("./handlerNamespace.ts");
+      const dependencies = new Map(
+        [...this.namespaceDependencies].map((
+          [name, dependency],
+        ) => [name, `./${dependency.filename}.js`]),
+      );
+      return (await compileHandlerNamespace(
+        this.fn.toString(),
+        this.fnName,
+        this.filename,
+        dependencies,
+      )).code;
+    }
     const { buildHandlerCode } = await import("./build.ts");
     const registry = getImportRegistry(this.sourceFileUrl);
     return buildHandlerCode(this.fnName, this.fn, this.filename, registry);
@@ -359,6 +431,7 @@ export class ClientFunctionImpl<
    * stable the call is a no-op.
    */
   _resolveFilename(): boolean {
+    if (this.namespaceDependencies && !this.namespaceInitialized) return false;
     if (!this.sourceFileUrl) return false;
     const str = this._computeHashInput();
     const newFilename = `${this.fnName}_${generateHandlerHash(str)}`;
@@ -375,7 +448,7 @@ export class ClientFunctionImpl<
 
     cache.setCachedHandler(
       this.sourceFileUrl,
-      this.fnName,
+      this.cacheName,
       this.occurrenceIndex,
       this.filename,
     );
@@ -419,6 +492,19 @@ export class ClientFunctionImpl<
     if (!this.sourceFileUrl) return false;
     if (cache.isHandlerProcessedThisPass(this)) return false;
     cache.markHandlerProcessedThisPass(this);
+
+    if (this.namespaceDependencies) {
+      await this.initializeNamespace();
+      for (const dependency of this.namespaceDependencies.values()) {
+        await dependency.revalidateAndBuild(handlerDir);
+      }
+      const mtimeChanged = cache.checkAndTrackMtimeChange(this.sourceFileUrl);
+      const rebuilt = await this._revalidateSelf(handlerDir, mtimeChanged);
+      if (mtimeChanged) {
+        await revalidateSourceFileSiblings(this.sourceFileUrl, handlerDir);
+      }
+      return rebuilt;
+    }
 
     // Revalidate any handlers imported from other source files first, so
     // that filename changes in those imports are recorded in
@@ -476,7 +562,8 @@ export class ClientFunctionImpl<
     // rename ourselves so consumers/browsers don't keep using a stale
     // cached bundle.
     const depsChanged = !mtimeChanged &&
-      this.needsRebuildDueToDependencyChange();
+      (this.needsRebuildDueToDependencyChange() ||
+        this._pendingOldFilename !== undefined);
 
     if (mtimeChanged || depsChanged) {
       // The fixed-point sibling pre-pass in `revalidateAndBuild` may
@@ -498,7 +585,7 @@ export class ClientFunctionImpl<
         // (it may have been cleared by resetHashDependentState)
         cache.setCachedHandler(
           this.sourceFileUrl,
-          this.fnName,
+          this.cacheName,
           this.occurrenceIndex,
           this.filename,
         );

@@ -59,7 +59,7 @@ Deno.test("ordinary attributes, inline expressions and component props are prese
   );
   assertThrows(() => jsx("div", { title: reference }), TypeError);
   assertThrows(
-    () => jsx("lifecycle-element", { onMount: reference }),
+    () => jsx("div", { onMount: reference }),
     TypeError,
   );
 });

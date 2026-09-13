@@ -62,6 +62,7 @@ export {
 export {
   type ActivatedClientTools,
   Handlers,
+  NewHandlers,
   type HandlersOptions,
   imports,
   Styles,

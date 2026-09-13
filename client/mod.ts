@@ -24,10 +24,7 @@ export const CLIENT_FILES = [
   // "localRoutes.ts",
   // "mutationObserver.ts",
   // "sse.ts",
-  "wc-partialContent.ts",
-  "wc-lifecycleElement.ts",
   "wc-lifecycleAbortable.ts",
-  "wc-windowEventlistener.ts",
 ] as const;
 
 export type ClientFile = typeof CLIENT_FILES[number];

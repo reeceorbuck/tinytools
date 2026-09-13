@@ -58,9 +58,11 @@ async function checkTypes() {
   <button type="button" onClick={handlers.missing} />;
   // @ts-expect-error Raw functions remain forbidden.
   <button type="button" onClick={() => {}} />;
-  // @ts-expect-error Lifecycle hooks still require legacy activated handlers.
-  <lifecycle-element onMount={handlers.click} />;
-  // @ts-expect-error Custom window hooks still require legacy handlers.
-  <window-event-listener onResize={handlers.generic} />;
+  // @ts-expect-error Lifecycle hooks are not supported on elements.
+  <div onMount={handlers.generic} />;
+  // @ts-expect-error Lifecycle hooks are not supported on elements.
+  <div onUnmount={handlers.generic} />;
+  // @ts-expect-error Window-only events are not supported on elements.
+  <div onResize={handlers.generic} />;
 }
 void checkTypes;

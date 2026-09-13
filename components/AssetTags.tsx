@@ -28,7 +28,7 @@ type AssetTagsProps = {
  *                     performFetchAndUpdate.js, eventHandlers.js
  * - `"sse"` - sse.js
  * - `"localRoutes"` - localRoutes.js
- * - `"webComponents"` - wc-lifecycleElement.js, wc-windowEventlistener.js
+ * - `"webComponents"` - wc-lifecycleAbortable.js
  *
  * @example
  * ```tsx
@@ -80,24 +80,11 @@ export const AssetTags: FC<AssetTagsProps> = ({
 
   return (
     <>
-      {/* Web components for lifecycle and window events */}
       {fullPageLoad && hasWebComponents && (
-        <>
-          <script
-            src={`${P}/${getClientFileName("wc-lifecycleElement.js")}`}
-            type="module"
-          />
-          <script
-            src={`${P}/${getClientFileName("wc-lifecycleAbortable.js")}`}
-            type="module"
-          />
-          {
-            /* <script
-            src={`${P}/${getClientFileName("wc-windowEventlistener.js")}`}
-            type="module"
-          /> */
-          }
-        </>
+        <script
+          src={`${P}/${getClientFileName("wc-lifecycleAbortable.js")}`}
+          type="module"
+        />
       )}
 
       {/* User-defined handler scripts */}

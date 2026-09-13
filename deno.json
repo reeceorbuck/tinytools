@@ -43,6 +43,7 @@
       "jsx-dev-runtime.ts",
       "build.ts",
       "esbuildInit.ts",
+      "handlerNamespace.ts",
       "clientFunctions.ts",
       "clientTools.ts",
       "eventAttributes.ts",

@@ -14,16 +14,11 @@ import type { Child, FC, PropsWithChildren } from "hono/jsx";
 import { getContext } from "hono/context-storage";
 import { tiny } from "@tinytools/hono-tools";
 import { partialInsertHandlers } from "../handlers/partialInsertHandlers.ts";
-import type { PartialContentElement } from "../client/wc-partialContent.ts";
 import type { ActivatedClientFunction } from "../jsx-runtime.ts";
 import { headHandler } from "../honoFactory.tsx";
 import { NewPartial } from "./NewPartial.tsx";
 import { renderToReadableStream } from "hono/jsx/dom/server";
 import { AssetTags } from "./AssetTags.tsx";
-
-export type PartialMountHandler = ActivatedClientFunction<
-  (this: PartialContentElement, event: Event) => void
->;
 
 export type PartialInsertHandler = ActivatedClientFunction<
   (this: HTMLTemplateElement, event: Event) => void
@@ -35,22 +30,29 @@ export type SuspenseProps = PropsWithChildren<{
 }>;
 
 export type CustomSuspenseProps = SuspenseProps & {
-  onMount?: PartialMountHandler;
   onLoad: PartialInsertHandler;
+};
+
+const childToString = (child: Child): string | Promise<string> => {
+  if (child instanceof Promise) {
+    return child.then(childToString);
+  }
+  if (child == null || typeof child === "boolean") {
+    return "";
+  }
+  if (child instanceof String) {
+    return child as HtmlEscapedString;
+  }
+  return child.toString();
 };
 
 const childrenToString = async (
   children: Child[],
 ): Promise<HtmlEscapedString[]> => {
   try {
-    return children
-      .flat()
-      .map((
-        c,
-      ) => (c == null || typeof c === "boolean"
-        ? ""
-        : c.toString())
-      ) as HtmlEscapedString[];
+    return await Promise.all(
+      children.flat().map(childToString),
+    ) as HtmlEscapedString[];
   } catch (e) {
     if (e instanceof Promise) {
       await e;
@@ -128,9 +130,7 @@ export const CustomSuspense: FC<CustomSuspenseProps> = async ({
   try {
     stackNode[DOM_STASH][0] = 0;
     buildDataStack.push([[], stackNode]);
-    resArray = children.map((c) =>
-      c == null || typeof c === "boolean" ? "" : c.toString()
-    ) as HtmlEscapedString[];
+    resArray = children.map(childToString) as HtmlEscapedString[];
   } catch (e) {
     if (e instanceof Promise) {
       resArray = [

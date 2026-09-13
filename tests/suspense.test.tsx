@@ -22,6 +22,7 @@ import { Hono } from "hono";
 import { addRouteLayout, tiny } from "../honoFactory.tsx";
 import { CustomSuspense, Suspense } from "../components/Suspense.tsx";
 import type { Child, FC } from "hono/jsx";
+import { jsxTemplate } from "hono/jsx/jsx-runtime";
 
 declare module "hono" {
   interface ContextRenderer {
@@ -158,6 +159,29 @@ Deno.test("Suspense - streams fallback then resolved async content", async () =>
   );
   assertStringIncludes(laterContent, "Hello World");
   assertStringIncludes(laterContent, "resolved");
+});
+
+Deno.test("Suspense - resolves promise-valued markup alongside async siblings", async () => {
+  const app = new Hono()
+    .use(...tiny.middleware.core())
+    .get("/", (context) =>
+      context.render(
+        <Suspense fallback={<div>Loading...</div>}>
+          {jsxTemplate`<section id="search-results">${(
+            <SlowContent content="Search result" delay={10} />
+          )}</section>`}
+          <SlowContent content="Patient list" delay={20} />
+        </Suspense>,
+      ));
+
+  const body = await fullBody(await app.request("/"));
+
+  assertEquals(body.includes("[object Promise]"), false);
+  assertStringIncludes(
+    body,
+    '<section id="search-results"><div class="resolved">Search result</div></section>',
+  );
+  assertStringIncludes(body, '<div class="resolved">Patient list</div>');
 });
 
 Deno.test("CustomSuspense - streams with the supplied mount handler", async () => {

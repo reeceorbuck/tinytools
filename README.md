@@ -279,9 +279,8 @@ event attributes. Any injected markup can reuse an authorized body, so continue
 to sanitize untrusted HTML, including `tt-handler-*` attributes.
 
 This first alternative handles native DOM events, one handler per event.
-Synthetic TinyTools lifecycle hooks such as `mount` and `unmount`, and handlers
-invoked by custom components instead of native event dispatch, should continue
-using `fn`. This includes the custom hooks on `window-event-listener`.
+Handlers invoked directly by custom components instead of native event dispatch
+should continue using `fn`.
 
 For a standalone comparison, run from the package directory:
 
@@ -616,6 +615,57 @@ const localHandlers = new tiny.Handlers(import.meta.url, {
 });
 ```
 
+#### Async Handler Factories (Experimental)
+
+`tiny.Handlers` accepts either the existing handler object or a synchronous or
+asynchronous factory. `tiny.NewHandlers` remains a compatibility alias for the
+factory form. Use `tiny.imports()` inside the factory to make other handlers
+available as `fn`:
+
+```ts
+import { tiny } from "@tinytools/hono-tools";
+import { signalTools } from "./signals.ts";
+
+export const pageHandlers = new tiny.Handlers(import.meta.url, async () => {
+  const { fn } = await tiny.imports(signalTools);
+  return {
+    handleCommand: function (event: CommandEvent) {
+      const values = fn.useSignal(event);
+      console.log(values);
+    },
+  };
+});
+```
+
+The factory runs once on the server when definitions are first needed. Returned
+handler bodies are never executed during definition or building: they are
+emitted as browser modules. Imports, middleware, and full builds await
+definition readiness automatically, including production and fresh builds.
+
+- Pass multiple collections in one call: `await tiny.imports(toolA, toolB)`.
+  Duplicate imported names and circular definition dependencies are errors.
+- Only returned handlers are public. Here, components importing `pageHandlers`
+  receive `handleCommand`, not `useSignal`.
+- Static `fn.handlerName()` references are tree-shaken by esbuild. Used handlers
+  remain separate, cacheable ESM files; unused dependencies are not loaded by
+  the consumer. Dynamic `fn[name]` access or passing the whole namespace can
+  retain all candidates. A full build still emits independently registered
+  handlers.
+- Keep the outer binding named `fn`. Original-name destructuring, such as
+  `const { useSignal } = fn`, also works. Renamed outer bindings and arbitrary
+  captured values are not serialized. Avoid identifier mangling in server builds
+  that would rename those captured bindings.
+- To forward an element receiver, use `fn.handlerName.call(this, event)`.
+  Namespace calls do not automatically forward the current handler's `this`.
+- Definition imports provide function references only, not request context,
+  styles, event bindings, or rendering helpers. Calling these references in the
+  outer factory throws; call them inside returned handlers instead.
+
+The existing `tiny.Handlers` API remains supported. Prefer
+`await tiny.imports()` when consuming an async collection. Synchronous
+`getFunctionReferences` access before initialization throws; explicit setup code
+can first await `pageHandlers.ensureDefined()` without building assets.
+
 #### Reusing a client function inside another client function
 
 Use `getFunctionReferences` when a client function needs to call another client
@@ -813,15 +863,13 @@ import { Suspense } from "@tinytools/hono-tools/components";
 </Suspense>;
 ```
 
-#### `Partial`
+#### `NewPartial`
 
 Declarative partial page updates.
 
 ```tsx
-import { Partial } from "@tinytools/hono-tools/components";
-import {
-  partialInsertHandlers,
-} from "@tinytools/hono-tools/partial-insert-handlers";
+import { NewPartial } from "@tinytools/hono-tools/components";
+import { partialInsertHandlers } from "@tinytools/hono-tools/handlers";
 
 const app = new Hono()
   .use(...tiny.middleware.core())
@@ -830,49 +878,25 @@ const app = new Hono()
 app.get("/profile", (c) => {
   const { fn } = c.var.tools;
   return (
-    <Partial
+    <NewPartial
       id="user-profile"
-      onMount={fn.partialReplace}
+      onLoad={fn.partialReplace}
     >
       <UserProfile />
-    </Partial>
+    </NewPartial>
   );
 });
 ```
 
-Available handlers are `partialReplace`, `partialDelete`, `partialBlast`,
-`partialAttributes`, `partialMergeContent`, `partialRouteCache`, and
-`partialAutofocus`. Every partial requires an `onMount` handler.
+Available handlers are `partialReplace`, `partialDelete`, `partialBlast`, and
+`partialMergeContent`. Every `NewPartial` requires an `onLoad` handler.
 
-The server renders `<partial-content>`. Navigation and SSE processing only add
-incoming elements to the document; the custom element invokes `onMount` from its
-`connectedCallback`. Insertion handlers find the live element using the partial
-content's own `id`.
+The server renders a `<template for-partial-id="...">` and a module-preload link
+that dispatches its load event. Insertion handlers use `for-partial-id` to find
+the live target and read incoming nodes from the template's content.
 
-Features can be composed at the application boundary. Imported handlers are
-included in generated modules, so an app handler can opt into cache writes and
-autofocus before choosing its insertion behavior:
-
-```tsx
-const { partialRouteCache, partialAutofocus, partialReplace } =
-  partialInsertHandlers.getFunctionReferences;
-
-const appPartials = new tiny.Handlers(
-  import.meta.url,
-  { imports: [partialInsertHandlers] },
-  {
-    replaceWithFeatures: function () {
-      if (partialRouteCache.call(this) === false) return;
-      partialAutofocus.call(this);
-      return partialReplace.call(this);
-    },
-  },
-);
-```
-
-Route-cache reads remain part of Navigation/local-route processing. Cache
-creation, outgoing capture, stale-response storage, and cached-template updates
-are performed by `partialRouteCache` only when the app includes it.
+Set `cache` to `true` or a route pattern to opt into route caching. Set
+`fullPageLoad` when rendering the initial page to render the content directly.
 
 ### Client Module (`@tinytools/hono-tools/client`)
 
@@ -890,8 +914,7 @@ Required scripts for partial navigation:
 Optional scripts:
 
 - `sse.ts` - Server-Sent Events support
-- `wc-lifecycleElement.ts` - Lifecycle web component
-- `wc-windowEventlistener.ts` - Window event listener web component
+- `wc-lifecycleAbortable.ts` - Abortable lifecycle web component
 
 ## Type Safety
 
