@@ -34,10 +34,13 @@ Deno.test("partial responses use reference bindings unless CSP is disabled", asy
     assertStringIncludes(html, "<update>");
     assertEquals(html.includes("[object Object]"), false);
     for (const name of ["cacheRoute", "importIntoHead"]) {
-      assertEquals(html.includes(`tt-handler-load="${name}_`), csp);
+      assertEquals(
+        new RegExp(`tt-handler-load="\\w+\\.${name}"`).test(html),
+        csp,
+      );
       assertEquals(
         new RegExp(
-          `onload="handlers\\.${name}_\\w+\\.call\\(this, event\\)"`,
+          `onload="handlers\\.\\w+\\.${name}\\.call\\(this, event\\)"`,
           "i",
         ).test(html),
         !csp,
@@ -57,8 +60,14 @@ Deno.test("package lifecycle components transform references with the package JS
   const html = await response.text();
   assertEquals(response.status, 200, html);
   assertEquals(html.includes("[object Object]"), false);
-  assertStringIncludes(html, 'tt-handler-load="referOnConnect_');
-  assertStringIncludes(html, 'tt-handler-suspend="referOnSuspend_');
+  assertMatch(
+    html,
+    /tt-handler-load="ActivateOnLoadHandler_\w+\.referOnConnect"/,
+  );
+  assertMatch(
+    html,
+    /tt-handler-suspend="ActivateOnLoadHandler_\w+\.referOnSuspend"/,
+  );
   assertStringIncludes(html, eventHandlerBody);
 });
 
@@ -187,7 +196,9 @@ Deno.test("events work alongside legacy handlers in request rendering and local 
     assertEquals(attributes.onclick, attributes.onmouseover);
     assertEquals(
       (context.var as unknown as { accessedHandlerFiles: Set<string> })
-        .accessedHandlerFiles.has(attributes["tt-handler-click"] + ".js"),
+        .accessedHandlerFiles.has(
+          attributes["tt-handler-click"].split(".")[0] + ".js",
+        ),
       true,
     );
     return context.html(
@@ -200,8 +211,11 @@ Deno.test("events work alongside legacy handlers in request rendering and local 
   const response = await app.request("/");
   const html = await response.text();
   assertEquals(response.status, 200, html);
-  assertMatch(html, /onClick="handlers\.click_\w+\.call\(this, event\)"/i);
-  assertStringIncludes(html, 'tt-handler-click="click_');
+  assertMatch(
+    html,
+    /onClick="handlers\.events_test_\w+\.click\.call\(this, event\)"/i,
+  );
+  assertMatch(html, /tt-handler-click="events_test_\w+\.click"/);
   assertStringIncludes(html, expectedButton);
 });
 

@@ -10,7 +10,7 @@ type Handlers = {
 
 const events = createEvents<Handlers>((name) =>
   ["click", "submit", "anyEvent"].includes(name)
-    ? `handlers.${name}_123.call(this, event)`
+    ? `handlers.bundle_123.${name}.call(this, event)`
     : undefined
 );
 
@@ -18,8 +18,8 @@ Deno.test("events emit identical bodies and separate handler IDs", () => {
   const attributes = events({ click: "click", mouseover: "anyEvent" });
   assertEquals(String(attributes.onclick), eventHandlerBody);
   assertEquals(String(attributes.onmouseover), eventHandlerBody);
-  assertEquals(attributes["tt-handler-click"], "click_123");
-  assertEquals(attributes["tt-handler-mouseover"], "anyEvent_123");
+  assertEquals(attributes["tt-handler-click"], "bundle_123.click");
+  assertEquals(attributes["tt-handler-mouseover"], "bundle_123.anyEvent");
   assertEquals(events({}), {});
   assertThrows(() => events({ click: "missing" } as never), TypeError);
 });
@@ -72,14 +72,13 @@ Deno.test("browser dispatcher starts every handler without awaiting and preserve
       "loadHandler",
       `return ${runHandler.toString().replace("import(", "loadHandler(")}`,
     )((path: string) => {
-      const name = /^\/handlers\/(\w+)\.js$/.exec(path)?.[1];
-      if (!name || !handlers[name]) {
-        throw new Error(`Unexpected handler: ${path}`);
+      if (path !== "/handlers/bundle_123.js") {
+        throw new Error(`Unexpected bundle: ${path}`);
       }
-      return Promise.resolve({ default: handlers[name] });
+      return Promise.resolve(handlers);
     });
     const calls: string[] = [];
-    let names = "first second";
+    let names = "bundle_123.first bundle_123.second";
     const event = new Event("load");
     const element = {
       getAttribute(name: string) {
@@ -112,7 +111,7 @@ Deno.test("browser dispatcher starts every handler without awaiting and preserve
     assertEquals(calls, ["first:start", "second", "first:end"]);
 
     calls.length = 0;
-    names = "second second";
+    names = "bundle_123.second bundle_123.second";
     Object.defineProperty(globalThis, "document", {
       configurable: true,
       value: { body: element },
@@ -123,7 +122,7 @@ Deno.test("browser dispatcher starts every handler without awaiting and preserve
     assertEquals(calls, ["second", "second"]);
 
     calls.length = 0;
-    names = "second";
+    names = "bundle_123.second";
     dispatch(globalThis, event);
     await Promise.resolve();
     assertEquals(calls, ["second"]);

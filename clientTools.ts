@@ -27,16 +27,18 @@ import { tryGetContext } from "hono/context-storage";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Context } from "hono";
 import {
-  createSignalTools,
   type SignalAccessors,
+  signalClasses,
   type SignalDefinitions,
   type SignalTools,
 } from "./signals.ts";
 import {
   createEvents,
   createHandlerReferences,
+  createSignalReferences,
   type Events,
   type HandlerReferences,
+  type SignalReferences,
 } from "./eventAttributes.ts";
 
 // Import shared registries from registry modules
@@ -44,6 +46,8 @@ import {
   changedHandlerKeys,
   ClientFunctionImpl,
   filesWithChangedHandlers,
+  getImportRegistry,
+  HandlerBundle,
 } from "./clientFunctions.ts";
 import {
   mkdirSync,
@@ -70,8 +74,9 @@ import {
  */
 const HASH_ALGORITHM_VERSION = 2;
 
+/** Version 4: handler filenames are stored per bundle, not per handler. */
 type ClientToolsCacheV1 = {
-  version: 3;
+  version: 4;
   hashConfig: {
     handlerHashLength: number;
     styleHashLength: number;
@@ -143,7 +148,7 @@ export function resolveToolAccessFromChain(
   ) {
     return (...handlerReferences: string[]) => {
       for (const reference of handlerReferences) {
-        if (!/^handlers\.\w+\.call\(this, event\)$/.test(reference)) {
+        if (!/^handlers\.\w+\.[$\w]+\.call\(this, event\)$/.test(reference)) {
           throw new Error(
             `Cannot compose invalid handler reference: ${reference}`,
           );
@@ -268,10 +273,8 @@ function getHashLength(kind: "handler" | "style"): number {
     : generatedStyleHashLength;
 }
 
-export function generateHash(
-  str: string,
-  kind: "handler" | "style" = "style",
-): string {
+/** Full 64-bit FNV-1a hash as 16 hex characters. */
+export function generateFullHash(str: string): string {
   const input = new TextEncoder().encode(str);
   let hash = 0xcbf29ce484222325n;
   const prime = 0x100000001b3n;
@@ -281,8 +284,14 @@ export function generateHash(
     hash = (hash * prime) & 0xffffffffffffffffn;
   }
 
-  const fullHash = hash.toString(16).padStart(16, "0");
-  return fullHash.slice(0, getHashLength(kind));
+  return hash.toString(16).padStart(16, "0");
+}
+
+export function generateHash(
+  str: string,
+  kind: "handler" | "style" = "style",
+): string {
+  return generateFullHash(str).slice(0, getHashLength(kind));
 }
 
 export function generateHandlerHash(str: string): string {
@@ -415,7 +424,7 @@ class ClientToolsCacheManager {
       const parsed = JSON.parse(text);
 
       if (
-        parsed && parsed.version === 3 && parsed.files &&
+        parsed && parsed.version === 4 && parsed.files &&
         typeof parsed.files === "object" && parsed.hashConfig
       ) {
         const loaded = parsed as ClientToolsCacheV1;
@@ -533,7 +542,7 @@ class ClientToolsCacheManager {
   getNextOccurrenceIndex(
     sourceFileUrl: string,
     name: string,
-    kind: "handler" | "style" | "factory",
+    kind: "handler" | "style" | "bundle",
   ): number {
     const key = `${kind}::${sourceFileUrl}::${name}`;
     const index = this.nameOccurrences.get(key) ?? 0;
@@ -614,7 +623,7 @@ class ClientToolsCacheManager {
     try {
       mkdirSync(CACHE_DIR, { recursive: true });
       const data: ClientToolsCacheV1 = {
-        version: 3,
+        version: 4,
         hashConfig: this.hashConfig,
         files: this.files,
       };
@@ -841,7 +850,7 @@ type ForbidReservedStyledKeys<T extends Record<string, ScopedStyleInput>> =
 export type ImportedTools<TFunctions, TStyles, TSignals = {}> = {
   readonly events: Events<TFunctions>;
   readonly fn: HandlerReferences<TFunctions>;
-  readonly signal: HandlerReferences<TSignals>;
+  readonly signal: SignalReferences<TSignals>;
   readonly handlers: ActivateClientFunctions<TFunctions>;
   readonly styled: ActivateScopedStyles<TStyles>;
   readonly c: Context;
@@ -1134,9 +1143,18 @@ class ClientToolsClass<
     scope: HandlerDefinitionScope,
   ) => Promise<void>;
   private _definitionWaits = new Set<AnyClientToolsInstance>();
+  /** The browser module holding this instance's own handlers. */
+  private _bundle?: HandlerBundle;
+  /** Construction order within the source file; keys the bundle's cache entry. */
+  private _bundleIndex: number;
 
   protected get stateful(): boolean {
     return false;
+  }
+
+  /** Module-level code emitted ahead of this instance's handlers. */
+  protected get bundlePrelude(): string {
+    return "";
   }
 
   private _waitsFor(
@@ -1206,11 +1224,6 @@ class ClientToolsClass<
         );
       }
     }
-    const namespaceId = cache.getNextOccurrenceIndex(
-      this.sourceFileUrl,
-      "",
-      "factory",
-    );
     this._definitionReady = false;
     this._definitionInitializer = async (scope) => {
       const functions = await factory(Object.create(null));
@@ -1222,15 +1235,8 @@ class ClientToolsClass<
           "Handlers factory must return an object of handler functions.",
         );
       }
-      this._processFunctions(
-        functions,
-        scope.dependencies,
-        namespaceId,
-        storedBinding,
-      );
-      for (const instance of this._clientFunctions.values()) {
-        await instance.initializeNamespace();
-      }
+      this._processFunctions(functions, scope.dependencies, storedBinding);
+      await this._bundle?.pruneDependencies();
       this._refreshHandlerFilenames();
     };
   }
@@ -1238,8 +1244,7 @@ class ClientToolsClass<
   private _refreshHandlerFilenames(): void {
     for (const [name, instance] of this._clientFunctions) {
       this.handlerFilenames.set(name, instance.filename);
-      (this as Record<string, unknown>)[name] =
-        (instance as unknown as Record<string, unknown>)[name];
+      (this as Record<string, unknown>)[name] = instance.expression;
     }
   }
 
@@ -1252,6 +1257,11 @@ class ClientToolsClass<
       (typeof sourceFileUrl === "string"
         ? sourceFileUrl
         : sourceFileUrl?.toString() ?? "");
+    this._bundleIndex = cache.getNextOccurrenceIndex(
+      this.sourceFileUrl,
+      "",
+      "bundle",
+    );
     registeredClientTools.add(this);
 
     const processOptions = () => {
@@ -1300,17 +1310,10 @@ class ClientToolsClass<
   /** Internal helper to process function definitions */
   private _processFunctions<T extends Record<string, AnyFunction>>(
     fns: T,
-    namespaceDependencies?: ReadonlyMap<string, ClientFunctionImpl>,
-    namespaceId?: number,
+    dependencies?: ReadonlyMap<string, ClientFunctionImpl>,
     storedBinding = "stored",
   ): void {
-    // Compute a stable fingerprint of imported function names so that
-    // adding/removing imports produces a different handler hash (and filename),
-    // which busts the browser cache.
-    const importsFingerprint = [...this._clientFunctions.keys()].sort().join(
-      ",",
-    );
-
+    const registry = getImportRegistry(this.sourceFileUrl);
     for (const [fnName, fn] of Object.entries(fns)) {
       if (ClientToolsClass.RESERVED_FUNCTION_KEYS.has(fnName)) {
         throw new Error(
@@ -1326,21 +1329,19 @@ class ClientToolsClass<
         );
       }
 
-      const instance = new ClientFunctionImpl(
-        fnName,
-        fn,
-        this.sourceFileUrl,
-        importsFingerprint,
-        namespaceDependencies,
-        namespaceId,
-        this.stateful,
+      this._bundle ??= new HandlerBundle({
+        sourceFileUrl: this.sourceFileUrl,
+        index: this._bundleIndex,
+        stateful: this.stateful,
         storedBinding,
-      );
-      // deno-lint-ignore no-explicit-any
-      (this as any)[fnName] = (instance as any)[fnName];
-      this.handlerFilenames.set(fnName, instance.filename);
+        dependencies,
+        prelude: this.bundlePrelude,
+      });
+      const instance = this._bundle.add(fnName, fn);
+      registry.set(fnName, instance);
       this._clientFunctions.set(fnName, instance);
     }
+    this._refreshHandlerFilenames();
   }
 
   /**
@@ -1455,16 +1456,15 @@ class ClientToolsClass<
     // Ensure imported tools are built first (their bundles need to exist)
     await Promise.all(this._importedTools.map((t) => t.ensureBuilt()));
 
-    // Revalidate all handlers (own + imported)
-    for (const [fnName, impl] of this._clientFunctions) {
-      const rebuilt = await impl.revalidateAndBuild(handlerDir);
-      if (rebuilt || impl.filename !== this.handlerFilenames.get(fnName)) {
-        // Update our filename map if the handler's filename changed
-        this.handlerFilenames.set(fnName, impl.filename);
-        // deno-lint-ignore no-explicit-any
-        (this as any)[fnName] = (impl as any)[impl.fnName];
-      }
+    // Write every bundle these handlers live in (own + imported), along
+    // with everything those bundles import.
+    const bundles = new Set(
+      [...this._clientFunctions.values()].map((impl) => impl.bundle),
+    );
+    for (const bundle of bundles) {
+      await bundle.ensureWritten(handlerDir);
     }
+    this._refreshHandlerFilenames();
 
     // Capture old filenames before revalidation so we can clean up stale
     // files AND so we can detect filename shifts that happened indirectly
@@ -1705,9 +1705,8 @@ class ClientToolsClass<
         );
       }
 
-      instance.import(this.sourceFileUrl);
-      // deno-lint-ignore no-explicit-any
-      (this as any)[fnName] = (externalTools as any)[fnName];
+      getImportRegistry(this.sourceFileUrl).set(fnName, instance);
+      (this as Record<string, unknown>)[fnName] = instance.expression;
       this.handlerFilenames.set(fnName, instance.filename);
       this._clientFunctions.set(fnName, instance);
     }
@@ -1942,17 +1941,56 @@ type SignalFactory = (tools: SignalTools) => SignalDefinitions;
 
 /**
  * Builds a handler from source text. Handlers ship to the browser as source,
- * so per-instance values (a signal name, the user's factory) must be spliced
- * in rather than captured by a closure. `fn` and `stored` are free variables
- * bound by the emitted handler module.
+ * so per-instance values (like a signal name) must be spliced in rather than
+ * captured by a closure. Free variables resolve in the emitted bundle module.
  */
 function handlerFromSource(source: string): AnyFunction {
   return new Function(`return ${source}`)() as AnyFunction;
 }
 
+/**
+ * Split a factory with one simple parameter, like `({ Signal }) => {...}` or
+ * `function (tools) {...}`, into that parameter and the same function with an
+ * empty parameter list. Returns undefined for any other shape (several
+ * parameters, defaults, rest parameters, async functions).
+ */
+function splitFactory(
+  source: string,
+): { parameter: string; body: string } | undefined {
+  const trimmed = source.trim();
+  const bare = /^([$A-Z_a-z][$\w]*)\s*=>/.exec(trimmed);
+  if (bare) {
+    return {
+      parameter: bare[1],
+      body: `() =>${trimmed.slice(bare[0].length)}`,
+    };
+  }
+  const header = trimmed.startsWith("(")
+    ? "("
+    : /^function\b[^(]*\(/.exec(trimmed)?.[0];
+  if (!header) return undefined;
+  const open = header.length - 1;
+  let depth = 0;
+  for (let index = open; index < trimmed.length; index++) {
+    const char = trimmed[index];
+    if ("([{".includes(char)) depth++;
+    else if (")]}".includes(char)) depth--;
+    else if (depth === 1 && (char === "," || char === "=" || char === ".")) {
+      return undefined;
+    } else if ("'\"`/".includes(char)) return undefined;
+    if (depth === 0) {
+      return {
+        parameter: trimmed.slice(open + 1, index).trim(),
+        body: `${trimmed.slice(0, open)}()${trimmed.slice(index + 1)}`,
+      };
+    }
+  }
+  return undefined;
+}
+
 /** Runs the factory server-side (values inert) to validate it and list its signals. */
 function signalNames(factory: SignalFactory): string[] {
-  const tools = createSignalTools(false);
+  const tools = signalClasses(false);
   const definitions = factory(tools);
   if (
     !definitions || typeof definitions !== "object" ||
@@ -1967,47 +2005,72 @@ function signalNames(factory: SignalFactory): string[] {
 }
 
 /**
- * Browser module that runs the factory once against the shared signal runtime
- * and memoises the resulting graph for every accessor that imports it.
+ * One bundle per instance: the prelude runs the factory once against the
+ * shared signal runtime (signals.ts), and each signal is exported as an
+ * accessor that can be referenced like any handler.
  */
-function signalGraph(sourceFileUrl: string | URL, factory: SignalFactory) {
-  const runtime = new Handlers(
-    new URL("./signals.ts", import.meta.url),
-    () => ({ __tinySignalTools: createSignalTools }),
-  );
-  return new Store(sourceFileUrl, async () => {
-    await imports(runtime);
-    return {
-      __tinySignalGraph: handlerFromSource(`function () {
-        return stored.graph ??= (${factory})(fn.__tinySignalTools());
-      }`),
-    };
-  });
-}
+class SignalsClass extends StoreClass {
+  #prelude: { code: string };
 
-/**
- * Emits three layers of browser modules:
- * - `__tinySignalTools`: the signal runtime from signals.ts
- * - `__tinySignalGraph`: one per Signals instance, owns the signal objects
- * - one stateless accessor per signal, so each can be referenced by filename
- *   (e.g. `signal.count` in JSX attributes or other handlers)
- */
-class SignalsClass extends HandlersClass {
   constructor(sourceFileUrl: string | URL, factory: SignalFactory) {
-    const graph = signalGraph(sourceFileUrl, factory);
+    const runtime = new Handlers(new URL("./signals.ts", import.meta.url), {
+      signalClasses,
+    });
+    const prelude = { code: "" };
     super(sourceFileUrl, async () => {
       const names = signalNames(factory);
-      await imports(graph);
+      await imports(runtime);
+      // Module-level names in the bundle must not collide with signal exports.
+      const taken = new Set([
+        ...names,
+        "fn",
+        "signal",
+        "stored",
+        "signalClasses",
+      ]);
+      const free = (base: string) => {
+        let name = base;
+        for (let index = 2; taken.has(name); index++) name = `${base}${index}`;
+        taken.add(name);
+        return name;
+      };
+      // Unpack the toolkit with the factory's own parameter and run its body
+      // once, e.g. `const { Signal } = fn.signalClasses();` followed by
+      // `const signals = (() => {...})();`. Factories of other shapes are
+      // called with the toolkit instead.
+      const split = splitFactory(factory.toString());
+      const parameterNames = split?.parameter.match(/[$A-Z_a-z][$\w]*/g) ??
+        [];
+      let graph: string;
+      if (split && !parameterNames.some((name) => taken.has(name))) {
+        parameterNames.forEach((name) => taken.add(name));
+        graph = free("signals");
+        prelude.code = (split.parameter
+          ? `const ${split.parameter} = fn.signalClasses();\n`
+          : "") + `const ${graph} = (${split.body})();`;
+      } else {
+        const define = free("defineSignals");
+        graph = free("signals");
+        prelude.code = `const ${define} = ${factory};\n` +
+          `const ${graph} = ${define}(fn.signalClasses());`;
+      }
       return Object.fromEntries(names.map((name) => {
-        const key = JSON.stringify(name);
+        const property = /^[$A-Z_a-z][$\w]*$/.test(name)
+          ? `.${name}`
+          : `[${JSON.stringify(name)}]`;
         return [
           name,
           handlerFromSource(`function (event) {
-            return fn.__tinySignalGraph()[${key}].handleEvent(this, event);
+            return ${graph}${property}.handleEvent(this, event);
           }`),
         ];
       }));
     });
+    this.#prelude = prelude;
+  }
+
+  protected override get bundlePrelude(): string {
+    return this.#prelude.code;
   }
 }
 
@@ -2094,7 +2157,7 @@ export async function imports(
     }
     await Promise.all(tools.map((tool) => tool.ensureDefined()));
     const references: Record<string, AnyFunction> = Object.create(null);
-    const signalReferences: Record<string, AnyFunction> = Object.create(null);
+    const signalReferences: Record<string, unknown> = Object.create(null);
     for (const tool of tools) {
       for (const [name, instance] of tool._handlerDefinitions) {
         const isSignal = tool instanceof SignalsClass;
@@ -2105,15 +2168,22 @@ export async function imports(
           );
         }
         definition.dependencies.set(dependencyName, instance);
-        (isSignal ? signalReferences : references)[name] = function (
-          this: unknown,
-          ...args: unknown[]
-        ) {
-          if (definition.active) {
-            throw new Error(
-              `Handler '${name}' cannot be called during server-side definition. Call it inside a returned handler.`,
-            );
-          }
+        const unavailable = () =>
+          new Error(
+            `Handler '${name}' cannot be called during server-side definition. Call it inside a returned handler.`,
+          );
+        if (isSignal) {
+          Object.defineProperty(signalReferences, name, {
+            enumerable: true,
+            get() {
+              if (definition.active) throw unavailable();
+              return instance.fn();
+            },
+          });
+          continue;
+        }
+        references[name] = function (this: unknown, ...args: unknown[]) {
+          if (definition.active) throw unavailable();
           return Reflect.apply(instance.fn, this, args);
         };
       }
@@ -2124,7 +2194,7 @@ export async function imports(
       );
     };
     return {
-      signal: signalReferences as HandlerReferences<unknown>,
+      signal: signalReferences as SignalReferences<unknown>,
       fn: new Proxy(references, {
         get(target, property) {
           if (
@@ -2191,7 +2261,7 @@ export async function imports(
       resolveToolAccessFromChain(tools, "style", property, recordUsage),
   });
   return {
-    signal: createHandlerReferences((name) =>
+    signal: createSignalReferences((name) =>
       resolveToolAccessFromChain(signals, "function", name, recordUsage)
     ),
     fn: createHandlerReferences((name) =>

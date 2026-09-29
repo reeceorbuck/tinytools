@@ -29,7 +29,7 @@ Deno.test("NewPartial emits cache registration only when opted in", async () => 
   assertStringIncludes(cached, 'path="/cached"');
   assertMatch(
     cached,
-    /tt-handler-load="observeRouteCache_[a-z0-9]+"/i,
+    /tt-handler-load="\w+\.observeRouteCache"/i,
   );
   assertEquals((cached.match(/<template\b/g) ?? []).length, 4);
   assertStringIncludes(cached, "<client-router");
@@ -85,15 +85,15 @@ Deno.test("NewPartial full page loads render directly and retain cache restorati
   assertEquals(panel.lastElementChild?.getAttribute("rel"), "modulepreload");
   assertEquals((cached.match(/<template\b/g) ?? []).length, 3);
   assertEquals(
-    (cached.match(/tt-handler-load="passLoadEvent_/gi) ?? []).length,
+    (cached.match(/tt-handler-load="\w+\.passLoadEvent"/gi) ?? []).length,
     1,
   );
   assertStringIncludes(cached, '<client-route path="/cached"');
   assertStringIncludes(cached, 'cache-partial-id="panel"');
   assertStringIncludes(cached, 'group-name="items"');
   assertStringIncludes(cached, 'data-restore="retained"');
-  assertMatch(cached, /tt-handler-load="partialReplace_/i);
-  assertMatch(cached, /tt-handler-load="observeRouteCache_/i);
+  assertMatch(cached, /tt-handler-load="\w+\.partialReplace"/i);
+  assertMatch(cached, /tt-handler-load="\w+\.observeRouteCache"/i);
   assertStringIncludes(cached, "<cache-collector");
   assertEquals(cached.includes("[object Object]"), false);
   assertEquals(/fullpageload/i.test(cached), false);

@@ -8,6 +8,10 @@ export const CSP_ENABLED_KEY = "tinyToolsCspEnabled";
 
 export const eventHandlerBody = "tiny.runHandler(this,event)";
 
+/** Matches `handlers.<bundle>.<name>.call(this, event)`, capturing `<bundle>.<name>`. */
+const handlerReferencePattern =
+  /^handlers\.(\w+\.[$\w]+)\.call\(this, event\)$/;
+
 declare const handlerReferenceBrand: unique symbol;
 
 export type HandlerReference<TName extends string, TFunction> = {
@@ -24,6 +28,19 @@ export type HandlerReferences<TFunctions> = {
       TFunctions[Name]
     >
     & TFunctions[Name];
+};
+
+/**
+ * Signals are typed as the signal itself so handlers read `signal.name.value`
+ * directly. The handler reference brand keeps them usable as JSX event
+ * handlers, where they are resolved as references like `fn.*`.
+ */
+export type SignalReferences<TSignals> = {
+  readonly [Name in keyof TSignals]:
+    & HandlerReference<Name & string, TSignals[Name]>
+    // deno-lint-ignore no-explicit-any
+    & (TSignals[Name] extends (...args: any[]) => infer Signal ? Signal
+      : never);
 };
 
 const referenceDetails = new WeakMap<
@@ -55,9 +72,7 @@ export function handlerReferenceAttributes(
         "Expected an imported handler reference in event handler array",
       );
     }
-    const match = /^handlers\.(\w+)\.call\(this, event\)$/.exec(
-      details.resolved,
-    );
+    const match = handlerReferencePattern.exec(details.resolved);
     if (!match) {
       throw new TypeError(`Invalid handler reference: ${details.name}`);
     }
@@ -94,6 +109,29 @@ export function createHandlerReferences<TFunctions>(
       return reference;
     },
   }) as HandlerReferences<TFunctions>;
+}
+
+export function createSignalReferences<TSignals>(
+  resolveHandler: (name: string) => unknown,
+): SignalReferences<TSignals> {
+  return new Proxy({}, {
+    get(_target, name) {
+      if (typeof name !== "string") return undefined;
+      const resolved = resolveHandler(name);
+      if (typeof resolved !== "string") return undefined;
+      const unavailable = () => {
+        throw new Error(
+          `Signal '${name}' is only a handler reference while rendering. Read signal values in client handlers.`,
+        );
+      };
+      const reference = Object.freeze(Object.defineProperties({}, {
+        value: { get: unavailable, set: unavailable },
+        subscribe: { get: unavailable },
+      }));
+      referenceDetails.set(reference, { name, resolved });
+      return reference;
+    },
+  }) as SignalReferences<TSignals>;
 }
 
 type HandlerName<TFunctions, TEvent extends Event> =
@@ -153,7 +191,7 @@ export function createEvents<TFunctions>(
         throw new TypeError(`Event handler is not imported: ${handlerName}`);
       }
       const match = typeof resolved === "string"
-        ? /^handlers\.(\w+)\.call\(this, event\)$/.exec(resolved)
+        ? handlerReferencePattern.exec(resolved)
         : null;
       if (!match) {
         throw new TypeError(`Event handler is not imported: ${handlerName}`);

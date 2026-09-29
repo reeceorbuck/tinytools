@@ -6,6 +6,7 @@
 
 import { assertEquals, assertMatch, assertStringIncludes } from "@std/assert";
 import { Hono } from "hono";
+import { pathToFileURL } from "node:url";
 import { buildHandlers } from "../build.ts";
 import { tiny } from "../honoFactory.tsx";
 import { NewPartial } from "../components/NewPartial.tsx";
@@ -32,9 +33,15 @@ Deno.test("partial insert handlers build as standalone modules", async () => {
     for await (const entry of Deno.readDir(handlerDirectory)) {
       if (entry.isFile && entry.name.endsWith(".js")) built.push(entry.name);
     }
+    const bundle = built.find((entry) =>
+      entry.startsWith("partialInsertHandlers_")
+    );
+    assertEquals(typeof bundle, "string");
+    const module = await import(
+      pathToFileURL(`${Deno.cwd()}/${handlerDirectory}/${bundle}`).href
+    );
     for (const name of handlerNames) {
-      const filename = built.find((entry) => entry.startsWith(`${name}_`));
-      assertEquals(typeof filename, "string");
+      assertEquals(typeof module[name], "function");
     }
   } finally {
     await Deno.remove(handlerDirectory, { recursive: true }).catch(() => {});
@@ -52,7 +59,7 @@ Deno.test("partial handlers activate and serialize on Partial", async () => {
       assertMatch(
         handlers[name] as unknown as string,
         new RegExp(
-          `^handlers\\.${name}_[a-z0-9]+\\.call\\(this, event\\)$`,
+          `^handlers\\.partialInsertHandlers_[a-z0-9]+\\.${name}\\.call\\(this, event\\)$`,
         ),
       );
     }
@@ -84,7 +91,7 @@ Deno.test("partial handlers activate and serialize on Partial", async () => {
   assertStringIncludes(html, 'group-name="test-group"');
   assertMatch(
     html,
-    /tt-handler-load="partialReplace_[a-z0-9]+"/i,
+    /tt-handler-load="\w+\.partialReplace"/i,
   );
   assertEquals(html.includes("handlers.merge"), false);
 });

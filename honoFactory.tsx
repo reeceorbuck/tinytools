@@ -354,15 +354,16 @@ export function runHandler(
 ) {
   const element = el === globalThis ? document.body : el as HTMLElement;
 
+  // Each reference is `<bundle>.<handler>`.
   for (
-    const name of (element.getAttribute("tt-handler-" + e.type) ?? "").split(
-      " ",
-    )
+    const reference of (element.getAttribute("tt-handler-" + e.type) ?? "")
+      .split(" ")
   ) {
-    if (!name) continue;
-    import(`/handlers/${name}.js`).then(({ default: scriptContent }) => {
-      return scriptContent.call(el, e);
-    });
+    const dot = reference.indexOf(".");
+    if (dot < 1) continue;
+    import(`/handlers/${reference.slice(0, dot)}.js`).then((bundle) =>
+      bundle[reference.slice(dot + 1)].call(el, e)
+    );
   }
 }
 

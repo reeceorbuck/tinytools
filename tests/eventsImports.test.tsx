@@ -41,7 +41,9 @@ Deno.test("imports track explicit request assets without context tools", async (
     const local = await imports(handlers, styles);
     assertEquals(local.c, context);
     const attributes = local.events({ click: local.fn.click });
-    assertEquals([...handlerFiles], [attributes["tt-handler-click"] + ".js"]);
+    assertEquals([...handlerFiles], [
+      attributes["tt-handler-click"].split(".")[0] + ".js",
+    ]);
     assertEquals(typeof local.styled.button, "string");
     assertEquals(styleFiles.size, 1);
     assertEquals((await imports()).c, context);
@@ -65,11 +67,11 @@ Deno.test("imports events track only accessed assets without context", async () 
     assertEquals(String(props.onclick), eventHandlerBody);
     assertEquals(
       [...tracker.accessedHandlerFiles],
-      [attributes["tt-handler-click"] + ".js"],
+      [attributes["tt-handler-click"].split(".")[0] + ".js"],
     );
     assertEquals(tracker.accessedStyleFiles.size, 0);
     const html = String(<button {...attributes}>Test</button>);
-    assertEquals(html.includes('tt-handler-click="click_'), true);
+    assertEquals(/tt-handler-click="\w+\.click"/.test(html), true);
     const expected = String(
       <button {...events({ click: "click" })}>Test</button>,
     );

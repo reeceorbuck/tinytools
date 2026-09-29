@@ -29,7 +29,7 @@ export type SignalAccessors<Definitions extends SignalDefinitions> = {
   ) => Definitions[Name];
 };
 
-export function createSignalTools(runtime = true): SignalTools {
+export function signalClasses(runtime = true): SignalTools {
   class SignalInstance<Value = SignalValue> extends EventTarget
     implements Signal<Value> {
     #name?: string;

@@ -92,8 +92,13 @@ Deno.test("core loads only the dispatcher plus accessed handler and style assets
     html,
     `/styles/${styles._styleFilenames.get("panel")}.css`,
   );
+  // Handlers of one instance share a bundle; other instances are not loaded.
   assertEquals(
-    html.includes(`/handlers/${first._handlerFilenames.get("unused")}.js`),
+    first._handlerFilenames.get("unused"),
+    first._handlerFilenames.get("click"),
+  );
+  assertEquals(
+    html.includes(`/handlers/${second._handlerFilenames.get("click")}.js`),
     false,
   );
   assertEquals(html.includes("/_tinytools/"), false);

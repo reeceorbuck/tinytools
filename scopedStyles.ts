@@ -440,11 +440,7 @@ export class ScopedStyleImpl {
       const { revalidateSourceFileSiblings } = await import(
         "./clientFunctions.ts"
       );
-      const { DEFAULT_HANDLER_DIR } = await import("./clientTools.ts");
-      await revalidateSourceFileSiblings(
-        this.sourceFileUrl,
-        DEFAULT_HANDLER_DIR,
-      );
+      await revalidateSourceFileSiblings(this.sourceFileUrl);
     }
 
     return filenameChanged;

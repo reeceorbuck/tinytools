@@ -11,10 +11,12 @@
  */
 
 import { assertEquals, assertExists, assertNotEquals } from "@std/assert";
-import { buildHandlerCode, buildScriptFiles } from "../build.ts";
+import { buildScriptFiles } from "../build.ts";
+import { pathToFileURL } from "node:url";
 import {
   changedHandlerKeys,
   filesWithChangedHandlers,
+  handlerBundles,
   handlers,
   resetImportRegistries,
 } from "../clientFunctions.ts";
@@ -52,28 +54,16 @@ Deno.test({
       },
       arrow: (amount: number) => amount + 2,
     };
-    for (const [name, definition] of Object.entries(definitions)) {
-      const code = await buildHandlerCode(
-        name,
-        definition,
-        name,
-        new Map([[name, name]]),
-      );
-      assertEquals(code.includes("globalThis.handlers"), false);
-      assertEquals(code.includes("_handler"), false);
-      if (name === "expression") {
-        assertEquals(
-          code.includes("export default function expression("),
-          true,
-        );
-      }
-      if (name === "arrow") {
-        assertEquals(code.includes("=>"), true);
-      }
-      const module = await import(
-        `data:text/javascript,${encodeURIComponent(code)}`
-      );
-      assertEquals(await module.default.call({ value: 2 }, 3), 5);
+    const tools = new Handlers(import.meta.url, definitions);
+    const code = await tools._handlerDefinitions.get("method")!.bundle
+      .buildCode();
+    assertEquals(code.includes("globalThis.handlers"), false);
+    assertEquals(code.includes("=>"), true);
+    const module = await import(
+      `data:text/javascript,${encodeURIComponent(code)}`
+    );
+    for (const name of Object.keys(definitions)) {
+      assertEquals(await module[name].call({ value: 2 }, 3), 5);
     }
   },
 });
@@ -123,6 +113,7 @@ function resetRegistries() {
   // source changes.
   (cache as { trustCache: boolean }).trustCache = false;
   handlers.clear();
+  handlerBundles.clear();
   scopedStylesRegistry.clear();
   styleBundleRegistry.clear();
   changedHandlerKeys.clear();
@@ -212,7 +203,7 @@ Deno.test({
     // Verify handler files were created
     const handlerFiles = await listFiles(TEST_HANDLER_DIR);
     assertEquals(handlerFiles.length, 1);
-    assertEquals(handlerFiles[0].startsWith("testHandler_"), true);
+    assertEquals(handlerFiles[0].startsWith("build_test_"), true);
     assertEquals(handlerFiles[0].endsWith(".js"), true);
 
     await cleanupTestDirs();
@@ -410,14 +401,13 @@ Deno.test({
 });
 
 Deno.test({
-  name: "cache - eagerly revalidates sibling handlers on first mtime detection",
+  name: "buildScriptFiles - each Handlers instance in a file is its own bundle",
   async fn() {
     await cleanupTestDirs();
     resetRegistries();
 
-    // Two handlers on the SAME source file — mirrors the real-world pattern
-    // of one file exporting multiple `new tiny.Handlers(import.meta.url, …)`
-    // bound to different routes (e.g. dental/partials/charting.tsx).
+    // Two instances on the SAME source file, as in a file exporting several
+    // `new tiny.Handlers(import.meta.url, ...)` for different routes.
     const first = new Handlers(import.meta.url, {
       firstSharedHandler(this: HTMLElement) {
         console.log("first", this.tagName);
@@ -429,46 +419,46 @@ Deno.test({
       },
     });
 
-    const sourceKey = normalizeSourceFileUrl(import.meta.url);
-    assertExists(sourceKey);
+    await buildForTest({
+      clientDir: TEST_CLIENT_DIR,
+      publicDir: TEST_PUBLIC_DIR,
+      handlerDir: TEST_HANDLER_DIR,
+      stylesDir: TEST_STYLES_DIR,
+    });
 
-    // Pretend the cache was written before this file was last edited so the
-    // mtime-based detection will flag the source as changed.
-    cache.files[sourceKey] ??= {
-      mtimeMs: 0,
-      externalImports: [],
-      handlers: {},
-      styles: {},
-    };
-    cache.files[sourceKey].mtimeMs = 1;
-
-    cache.beginChangeDetectionPass();
-
-    // Grab the per-handler impl objects that the source registered during
-    // construction. These expose the `revalidateAndBuild` method that the
-    // cache invokes during the lazy rebuild pass.
-    const siblings = [
-      ...(cache.getHandlersForSource(sourceKey) ?? []),
-    ] as Array<{
-      revalidateAndBuild: (dir: string) => Promise<void>;
-    }>;
-    assertEquals(siblings.length, 2);
-
-    // Revalidate only the FIRST impl. The eager-sibling-fanout mechanism
-    // must process the second impl as part of the same pass so its .js
-    // file is refreshed before the source mtime is committed.
-    await siblings[0].revalidateAndBuild(TEST_HANDLER_DIR);
-
+    const firstFile = first._handlerFilenames.get("firstSharedHandler")!;
+    const secondFile = second._handlerFilenames.get("secondSharedHandler")!;
+    assertNotEquals(firstFile, secondFile);
     assertEquals(
-      cache.isHandlerProcessedThisPass(siblings[1] as object),
-      true,
-      "sibling handler on the same source file must be eagerly revalidated",
+      await listFiles(TEST_HANDLER_DIR),
+      [
+        `${firstFile}.js`,
+        `${secondFile}.js`,
+      ].sort(),
     );
 
-    // Silence unused-binding lints — the Handlers instances keep the impls
-    // alive in the registry.
-    void first;
-    void second;
+    // Changing one bundle leaves its sibling's URL (and browser cache) alone.
+    first._handlerDefinitions.get("firstSharedHandler")!.fn = function () {
+      console.log("edited");
+    };
+    await buildForTest({
+      clientDir: TEST_CLIENT_DIR,
+      publicDir: TEST_PUBLIC_DIR,
+      handlerDir: TEST_HANDLER_DIR,
+      stylesDir: TEST_STYLES_DIR,
+    });
+    assertNotEquals(
+      first._handlerFilenames.get("firstSharedHandler"),
+      firstFile,
+    );
+    assertEquals(
+      second._handlerFilenames.get("secondSharedHandler"),
+      secondFile,
+    );
+    assertEquals(
+      await fileExists(`${TEST_HANDLER_DIR}/${firstFile}.js`),
+      false,
+    );
 
     await cleanupTestDirs();
   },
@@ -557,29 +547,18 @@ Deno.test({
       stylesDir: TEST_STYLES_DIR,
     });
 
-    // Verify both files were created
+    // Both handlers share one bundle that exports each by name
     const handlerFiles = await listFiles(TEST_HANDLER_DIR);
-    assertEquals(handlerFiles.length, 2);
-
-    const helperFile = handlerFiles.find((f) => f.startsWith("sharedHelper_"));
-    const consumerFile = handlerFiles.find((f) =>
-      f.startsWith("consumerHandler_")
+    assertEquals(handlerFiles.length, 1);
+    const content = await readFileOrNull(
+      `${TEST_HANDLER_DIR}/${handlerFiles[0]}`,
     );
-    assertExists(helperFile);
-    assertExists(consumerFile);
-
-    // Both files should be valid JavaScript (successfully transpiled)
-    const consumerContent = await readFileOrNull(
-      `${TEST_HANDLER_DIR}/${consumerFile}`,
-    );
-    assertExists(consumerContent);
-
-    // Verify it's a valid ES module with a default export
+    assertExists(content);
     assertEquals(
-      consumerContent!.includes("export") &&
-        consumerContent!.includes("default"),
+      content.includes("export function sharedHelper(") &&
+        content.includes("export function consumerHandler("),
       true,
-      `Expected default export in:\n${consumerContent}`,
+      `Expected named exports in:\n${content}`,
     );
 
     await cleanupTestDirs();
@@ -633,7 +612,7 @@ Deno.test({
     // Verify active handler file exists
     const handlerFiles = await listFiles(TEST_HANDLER_DIR);
     assertEquals(handlerFiles.length, 1);
-    assertEquals(handlerFiles[0].startsWith("activeHandler_"), true);
+    assertEquals(handlerFiles[0].startsWith("build_test_"), true);
 
     await cleanupTestDirs();
   },
@@ -720,17 +699,14 @@ Deno.test({
       stylesDir: TEST_STYLES_DIR,
     });
 
-    // Verify all handler files were created
+    // Both handlers live in one bundle
     const handlerFiles = await listFiles(TEST_HANDLER_DIR);
-    assertEquals(handlerFiles.length, 2);
-    assertEquals(
-      handlerFiles.some((f) => f.startsWith("clickHandler_")),
-      true,
+    assertEquals(handlerFiles.length, 1);
+    const content = await readFileOrNull(
+      `${TEST_HANDLER_DIR}/${handlerFiles[0]}`,
     );
-    assertEquals(
-      handlerFiles.some((f) => f.startsWith("submitHandler_")),
-      true,
-    );
+    assertEquals(content?.includes("clickHandler"), true);
+    assertEquals(content?.includes("submitHandler"), true);
 
     // Verify all style files were created
     const styleFiles = await listFiles(TEST_STYLES_DIR);
@@ -1001,23 +977,11 @@ Deno.test({
 
     // Get the handler file content
     const handlerFiles = await listFiles(TEST_HANDLER_DIR);
-    const handlerFile = handlerFiles.find((f) =>
-      f.startsWith("esModuleHandler_")
+    assertEquals(handlerFiles.length, 1);
+    const module = await import(
+      pathToFileURL(`${Deno.cwd()}/${TEST_HANDLER_DIR}/${handlerFiles[0]}`).href
     );
-    assertExists(handlerFile);
-
-    const content = await readFileOrNull(
-      `${TEST_HANDLER_DIR}/${handlerFile}`,
-    );
-    assertExists(content);
-
-    // Should be a valid ES module with default export
-    // esbuild may use either "export default" or "export { x as default }"
-    assertEquals(
-      content!.includes("export") && content!.includes("default"),
-      true,
-      `Expected ES module with default export in:\n${content}`,
-    );
+    assertEquals(typeof module.esModuleHandler, "function");
 
     await cleanupTestDirs();
   },
@@ -1333,12 +1297,8 @@ Deno.test({
     const handlerFiles = await listFiles(TEST_HANDLER_DIR);
     assertEquals(handlerFiles.length, 2);
 
-    const externalFile = handlerFiles.find((f) =>
-      f.startsWith("externalUtility_")
-    );
-    const consumerFile = handlerFiles.find((f) =>
-      f.startsWith("consumerFunction_")
-    );
+    const externalFile = handlerFiles.find((f) => f.startsWith("source_"));
+    const consumerFile = handlerFiles.find((f) => f.startsWith("build_test_"));
     assertExists(externalFile);
     assertExists(consumerFile);
 
@@ -1454,9 +1414,9 @@ Deno.test({
 
     // Filenames should be different because code changed (different hash)
     assertEquals(filename1 !== filename2, true);
-    // But both should start with the handler name
-    assertEquals(filename1.startsWith("hashedHandler_"), true);
-    assertEquals(filename2.startsWith("hashedHandler_"), true);
+    // Bundles are named after their source file
+    assertEquals(filename1.startsWith("path1_"), true);
+    assertEquals(filename2.startsWith("path2_"), true);
 
     await cleanupTestDirs();
   },
@@ -1557,7 +1517,7 @@ Deno.test({
 
     assertEquals(handlerFiles.length, 1);
     assertEquals(styleFiles.length, 1);
-    assertEquals(handlerFiles[0].startsWith("onlyHandler_"), true);
+    assertEquals(handlerFiles[0].startsWith("build_test_"), true);
     assertEquals(styleFiles[0].endsWith(".css"), true);
 
     await cleanupTestDirs();
@@ -1695,9 +1655,9 @@ Deno.test({
       "Should produce two distinct handler files",
     );
 
-    // Both should start with the handler name
-    assertEquals(handlerFiles[0].startsWith("clickHandler_"), true);
-    assertEquals(handlerFiles[1].startsWith("clickHandler_"), true);
+    // Both are named after their source file
+    assertEquals(handlerFiles[0].startsWith("handlers_"), true);
+    assertEquals(handlerFiles[1].startsWith("handlers_"), true);
     assertNotEquals(
       handlerFiles[0],
       handlerFiles[1],

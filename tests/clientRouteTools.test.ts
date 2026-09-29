@@ -1,18 +1,8 @@
 import { assertEquals, assertExists } from "@std/assert";
-import { handlers } from "../clientFunctions.ts";
 import { clientRouteTools } from "../handlers/clientRouteTools.ts";
+import { loadHandler as buildHandler } from "./helpers/loadHandler.ts";
 
 await clientRouteTools.ensureDefined();
-
-async function buildHandler(name: string) {
-  const entry = [...handlers.values()].find((handler) =>
-    handler.fnName === name
-  );
-  assertExists(entry);
-  return (await import(
-    `data:text/javascript,${encodeURIComponent(await entry.buildCode())}`
-  )).default;
-}
 
 const compile = await buildHandler("compileClientRoute") as (
   path: string,

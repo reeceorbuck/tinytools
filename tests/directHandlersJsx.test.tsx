@@ -100,7 +100,7 @@ Deno.test("navigation event references emit bindings for explicit forwarding", a
   const html = String(<div onCurrentEntryChange={fn.currentEntryChange} />);
   assertStringIncludes(
     html,
-    'tt-handler-currententrychange="currentEntryChange_',
+    '.currentEntryChange"',
   );
   assertStringIncludes(html, `oncurrententrychange="${eventHandlerBody}"`);
   assertEquals(html.includes("[object Object]"), false);

@@ -9,7 +9,6 @@ performance.mark("import:@tinytools/hono-tools/build:start");
  */
 
 import { getEsbuild } from "./esbuildInit.ts";
-import { handlerDefaultExport } from "./handlerNamespace.ts";
 performance.mark("import:esbuild:done");
 import {
   cache,
@@ -19,11 +18,7 @@ import {
   setGeneratedHandlerHashLength,
   setGeneratedStyleHashLength,
 } from "./clientTools.ts";
-import {
-  changedHandlerKeys,
-  ClientFunctionImpl,
-  handlers,
-} from "./clientFunctions.ts";
+import { changedHandlerKeys, handlerBundles } from "./clientFunctions.ts";
 performance.mark("import:clientFunctions:done");
 import {
   changedStyleKeys,
@@ -75,74 +70,6 @@ export function buildLayeredCssContent(styles: ScopedStyleEntry[]): string {
     .join("\n");
 }
 
-/**
- * Build code for a handler function into a standalone ES module.
- * This transforms TypeScript to JavaScript that can be served to the browser.
- *
- * @param fnName The name of the function
- * @param fn The function to build
- * @param filename The output filename (without extension)
- * @param importRegistry Map of function names to their filenames for import generation
- * @returns The transpiled JavaScript code as a string
- */
-export async function buildHandlerCode(
-  fnName: string,
-  fn: AnyFunction,
-  filename: string,
-  importRegistry: Map<string, string>,
-): Promise<string> {
-  console.log("Building code for handler: ", fnName);
-
-  // Convert function to string up front so we can scope emitted import
-  // lines to the symbols this handler actually references. Emitting an
-  // import for every entry in the source file's import registry would
-  // otherwise (a) make the emitted file content depend on the
-  // filenames of unrelated siblings, and (b) create an unstable
-  // feedback loop where every sibling's hash depends on every other
-  // sibling's hash, never converging. Filtering here matches what
-  // `ClientFunctionImpl._currentImportsFingerprint` uses to derive the
-  // consumer's own hash, keeping the two in sync.
-  const fnString = fn.toString();
-  const referenced = new Set<string>();
-  {
-    const idRe = /[A-Za-z_$][\w$]*/g;
-    let m: RegExpExecArray | null;
-    while ((m = idRe.exec(fnString)) !== null) {
-      if (m[0] !== fnName) referenced.add(m[0]);
-    }
-  }
-
-  const importLines: string[] = [];
-  const importedNames = new Set<string>(["stored"]);
-
-  for (const [name, importFilename] of importRegistry.entries()) {
-    // Avoid self-imports; they are unnecessary and can create circular deps.
-    if (name === fnName || importFilename === filename) continue;
-    // Skip imports the handler body does not reference. False positives
-    // (matches inside strings or comments) are acceptable and merely
-    // over-emit.
-    if (!referenced.has(name)) continue;
-    importedNames.add(name);
-    importLines.push(
-      `import { default as ${name} } from "./${importFilename}.js";`,
-    );
-  }
-
-  const functionCode = `${importLines.join("\n")}\n${
-    handlerDefaultExport(fnString, fnName, importedNames)
-  }`;
-  console.log("Function code: ", functionCode);
-
-  const esbuild = await getEsbuild();
-  const result = await esbuild.transform(functionCode, {
-    loader: "ts",
-    target: ["esnext"],
-    sourcemap: false,
-  });
-
-  return result.code;
-}
-
 /** Options for the build process */
 export interface BuildOptions {
   /** Directory containing client-side TypeScript files to transpile (user scripts) */
@@ -173,47 +100,25 @@ export interface BuildOptions {
 }
 
 /**
- * Build all registered handlers to JavaScript files.
+ * Build every handler bundle to a JavaScript file.
  *
  * @param handlerDir Output directory for handler .js files
- * @param options.fresh If true, skip file-existence and dependency checks — build everything unconditionally
- * @returns Array of handler filenames (without extension) that were built or already existed
+ * @param options.fresh If true, rewrite every bundle even if its file exists
+ * @returns Bundle filenames (without extension) that were built or already existed
  */
 export async function buildHandlers(
   handlerDir: string,
   options: { fresh?: boolean } = {},
 ): Promise<string[]> {
-  const { fresh = false } = options;
-
-  return await Promise.all(
-    [...handlers.values()].map(async (handler) => {
-      const { filename } = handler;
-
-      if (!fresh) {
-        const fileExists = await fsStat(`${handlerDir}/${filename}.js`)
-          .then(() => true)
-          .catch(() => false);
-
-        const needsRebuildForDeps = handler.needsRebuildDueToDependencyChange();
-
-        if (fileExists && !needsRebuildForDeps) {
-          return filename;
-        }
-
-        if (needsRebuildForDeps) {
-          console.log(
-            `Rebuilding handler ${filename} because a dependency changed.`,
-          );
-        }
-      }
-
-      console.log(`Building file for handler:`, handler.buildCode);
-      const functionCode = await handler.buildCode();
-      await writeFile(`${handlerDir}/${filename}.js`, functionCode);
-      console.log(`Handler file written: ${handlerDir}/${filename}.js`);
-      return filename;
-    }),
-  );
+  cache.beginChangeDetectionPass();
+  try {
+    for (const bundle of handlerBundles) {
+      await bundle.ensureWritten(handlerDir, options);
+    }
+  } finally {
+    cache.commitPendingSourceMtimes();
+  }
+  return [...new Set([...handlerBundles].map((bundle) => bundle.filename))];
 }
 
 /**
@@ -429,20 +334,12 @@ export async function buildScriptFiles(options: BuildOptions = {}) {
   for (const tools of registeredClientTools) {
     await tools.ensureDefined();
   }
-  for (const handler of handlers.values()) {
-    if (handler instanceof ClientFunctionImpl) {
-      handler.resolveNamespaceFilename();
-    }
-  }
 
   // --- Revalidation phase (skip in fresh mode — filenames are already determined) ---
   performance.mark("buildScriptFiles:revalidateStart");
   if (!fresh) {
     cache.beginChangeDetectionPass();
 
-    for (const handler of handlers.values()) {
-      await handler.revalidateAndBuild(handlerDir);
-    }
     for (const style of scopedStylesRegistry.values()) {
       await style.revalidate();
     }

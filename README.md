@@ -10,6 +10,25 @@ handlers. Works with **Deno**, **Bun**, and **Node.js**.
 
 - **Handlers & Styles** - Separate factories for type-safe client-side event
   handlers and scoped CSS styles
+- **One module per collection** - Each `tiny.Handlers`, `tiny.Store` and
+  `tiny.Signals` instance is served as one browser module exporting its handlers
+  by name. To split handlers into separately loaded files, create several
+  instances (they can share a source file).
+
+## Handler Bundles
+
+Every tools instance compiles to `/handlers/<source>_<hash>.js`, named after its
+source file, with one named export per handler. Elements reference a handler as
+`<bundle>.<name>`, for example `tt-handler-click="routes_3fa1c.save"`, and
+`tiny.runHandler` imports the bundle and calls that export. Handlers that import
+other collections (through `tiny.imports()` in a factory, or `imports: [...]` in
+object form) get ordinary ES imports of those bundles.
+
+The hash covers the bundle's own code and every bundle it imports, directly or
+indirectly. Editing any handler therefore gives its bundle, and every bundle
+that depends on it, a new URL, while unrelated bundles keep theirs and stay
+cached. Handlers within one bundle can call each other by name.
+
 - **Enhanced JSX Types** - Better inline event types (onSubmit, onClick, etc.)
   that enforce type safety
 
@@ -24,9 +43,9 @@ handlers. Works with **Deno**, **Bun**, and **Node.js**.
 ## Stateful Handlers
 
 `tiny.Store` supports the same construction and `fn.*` import syntax as
-`tiny.Handlers`, but each emitted function module owns a private
-`const stored = Object.create(null)`. Use a factory parameter named **`stored`**
-with an explicit state type:
+`tiny.Handlers`, but its bundle owns a private
+`const stored = Object.create(null)` shared by all of its handlers. Use a
+factory parameter named **`stored`** with an explicit state type:
 
 ```ts
 const counters = new tiny.Store(
@@ -49,14 +68,13 @@ const buttons = new tiny.Handlers(import.meta.url, async () => {
 });
 ```
 
-State is shared by all callers of that exact function module, including separate
-handler collections and partial navigations. Different functions, even within
-one Store, have independent state. To share state, import and call one store
-accessor. Separate Store instances are isolated. Nothing is serialized into HTML
-or added to `globalThis` for state storage; the usual handler registry is
-unchanged. State lasts until a full reload (or a changed module URL), not across
-browser tabs. It is page-scoped, not per rendered component instance, and is not
-server state.
+State is shared by every handler in the Store and by all callers of them,
+including separate handler collections and partial navigations. Separate Store
+instances are isolated, even when their code is identical. Nothing is serialized
+into HTML or added to `globalThis` for state storage; the usual handler registry
+is unchanged. State lasts until a full reload (or a changed module URL), not
+across browser tabs. It is page-scoped, not per rendered component instance, and
+is not server state.
 
 Initialize values inside the returned functions. Factories still run on the
 server; their outer closures and initial state are not serialized. The `stored`
@@ -94,8 +112,8 @@ const consumers = new tiny.Handlers(import.meta.url, async () => {
   const { signal } = await tiny.imports(trialSignals);
   return {
     update: function () {
-      signal.anonOne().value = "updated";
-      console.log(signal.computedOne().value);
+      signal.anonOne.value = "updated";
+      console.log(signal.computedOne.value);
     },
   };
 });
@@ -106,10 +124,11 @@ exported for explicit annotations. Initial writable values are string, number,
 boolean, or null (the default). Computed values are read-only and update
 synchronously when declared dependencies change. Equal values do not notify.
 
-Imports expose callable stored accessors under `signal.*`, not `fn.*`. Each
-accessor has its own Store state and calls a shared private Store holding the
-collection's signal graph, so computed closures use exactly the same signal
-instances as consumers. The graph initializes on the first accessor call.
+Handlers import signals under `signal.*`, not `fn.*`, and use them directly
+(`signal.anonOne.value`). Each collection is one bundle: the factory runs once
+when the bundle loads and each signal is exported as an accessor, which the
+handler's `signal.*` namespace resolves lazily, so computed closures use exactly
+the same signal instances as consumers. All collections share one signal runtime module.
 Collections are isolated; all consumers of one collection share page-scoped
 state.
 
@@ -127,14 +146,16 @@ const { signal } = await tiny.imports(trialSignals);
 return <input type="text" onInput={signal.anonOne} />;
 ```
 
-An accessor receiving an input/change event assigns the target's string value. A
+While rendering, `signal.*` is only an event reference: reading `.value` or
+`.subscribe` from it throws. A signal handler receiving an input/change event assigns the target's string value. A
 load event subscribes its receiver; alternatively call
-`signal.anonOne().subscribe(this)` in a client load handler. Signal events carry
-`value`; HTMLElement subscribers run their TinyTools signal handler.
-Subscriptions deduplicate per target and use the element's `abortController`
-when present. Computed accessors reject input/change writes. References are not
-initial values: `value={signal.anonOne}` is unsupported, and automatic DOM value
-binding is not included. Supply a literal initial input value where needed.
+`signal.anonOne.subscribe(this)` in a client load handler. Signal events carry
+the `signal` (read `event.signal.value`); HTMLElement subscribers run their
+TinyTools signal handler. Subscriptions deduplicate per target and use the
+element's `abortController` when present. Computed accessors reject input/change
+writes. References are not initial values: `value={signal.anonOne}` is
+unsupported, and automatic DOM value binding is not included. Supply a literal
+initial input value where needed.
 
 ## Client Route Templates
 
@@ -387,8 +408,9 @@ example, a `KeyboardEvent` handler cannot be assigned to `click`. As with the
 existing JSX handlers, the receiving element's `this` type is not checked by the
 spread helper.
 
-Each binding emits `tt-handler-click="handleClick_<hash>"` and `onclick` with
-exactly this body, shared across all event types and handler names:
+Each binding emits `tt-handler-click="<bundle>_<hash>.handleClick"` and
+`onclick` with exactly this body, shared across all event types and handler
+names:
 
 ```text
 tiny.runHandler(this,event)
@@ -402,17 +424,18 @@ Pass an array of `fn` references to run multiple handlers for one event:
 />;
 ```
 
-The generated `tt-handler-load` attribute contains the handler IDs separated by
-a single space. Handlers are invoked in array order without awaiting their
-results, with the same `this` and event. Returning `false` does not skip later
-handlers. Empty arrays emit no event binding. Arrays support `fn` references,
-not legacy inline `handlers` expressions.
+The generated `tt-handler-load` attribute contains the handler references
+separated by a single space. Handlers are invoked in array order without
+awaiting their results, with the same `this` and event. Returning `false` does
+not skip later handlers. Empty arrays emit no event binding. Arrays support `fn`
+references, not legacy inline `handlers` expressions.
 
-Only accessed handler files are tracked for loading, just as with `fn`. The
-handler receives the element as `this` and the native event as its argument. Use
-`event.preventDefault()` to cancel a native default action, before awaiting in
-an async handler. The current shared body does not return the dispatcher's
-result, so returning `false` from the handler alone does not cancel the action.
+Only the bundles of accessed handlers are tracked for loading, just as with
+`fn`. The handler receives the element as `this` and the native event as its
+argument. Use `event.preventDefault()` to cancel a native default action, before
+awaiting in an async handler. The current shared body does not return the
+dispatcher's result, so returning `false` from the handler alone does not cancel
+the action.
 
 The middleware derives its hash from the exported `eventHandlerBody`. For a
 custom policy, hash that exact string, not its HTML-escaped representation:

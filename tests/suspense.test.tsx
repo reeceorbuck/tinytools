@@ -204,7 +204,7 @@ Deno.test("CustomSuspense - streams with the supplied mount handler", async () =
   assertStringIncludes(body, "Custom content");
   assertMatch(
     body,
-    /tt-handler-load="customSuspenseMount_[a-z0-9]+"/,
+    /tt-handler-load="\w+\.customSuspenseMount"/,
   );
 });
 
@@ -343,9 +343,11 @@ Deno.test("Suspense - partial navigation returns update without full page shell"
   const body = await fullBody(res);
   // Partial navigation wraps in <update><template>...
   assertStringIncludes(body, "<update>");
-  assertStringIncludes(body, 'tt-handler-load="importIntoHead_');
-  assertStringIncludes(body, 'tt-handler-load="cacheRoute_');
-  const bodyUpdate = body.slice(body.indexOf('tt-handler-load="cacheRoute_'));
+  assertMatch(body, /tt-handler-load="\w+\.importIntoHead"/);
+  assertMatch(body, /tt-handler-load="\w+\.cacheRoute"/);
+  const bodyUpdate = body.slice(
+    body.search(/tt-handler-load="\w+\.cacheRoute"/),
+  );
   assert(
     !bodyUpdate.includes("<title>"),
     "Partial title must not be emitted in the body template",
@@ -432,7 +434,7 @@ Deno.test("partial navigation without a title omits the title update", async () 
   assertEquals(res.status, 200);
 
   const body = await fullBody(res);
-  assertStringIncludes(body, 'tt-handler-load="importIntoHead_');
+  assertMatch(body, /tt-handler-load="\w+\.importIntoHead"/);
   assert(
     !body.includes("<title>"),
     "A title-less partial must preserve the current document title",

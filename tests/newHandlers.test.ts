@@ -6,7 +6,7 @@ import {
   assertThrows,
 } from "@std/assert";
 import { pathToFileURL } from "node:url";
-import { compileHandlerNamespace } from "../handlerNamespace.ts";
+import { compileHandlerBundle } from "../handlerNamespace.ts";
 import { getEsbuild } from "../esbuildInit.ts";
 import {
   cache,
@@ -18,11 +18,38 @@ import {
   Styles,
 } from "../clientTools.ts";
 import { buildScriptFiles } from "../build.ts";
-import { handlers, resetImportRegistries } from "../clientFunctions.ts";
+import {
+  handlerBundles,
+  handlers,
+  resetImportRegistries,
+} from "../clientFunctions.ts";
 import type { JSX } from "../jsx-runtime.ts";
 import { handlerReferenceAttributes } from "../eventAttributes.ts";
 
 declare const stored: { count?: number };
+
+/** Compile a single-handler bundle; `dependencies` maps key -> [path, export]. */
+function compileOne(
+  source: string,
+  dependencies: [string, string, string?][] = [],
+  name = "consumer",
+  stored: string | false = false,
+) {
+  return compileHandlerBundle({
+    functions: new Map([[name, source]]),
+    dependencies: new Map(
+      dependencies.map(([key, path, exportName]) => [key, {
+        path,
+        exportName: exportName ??
+          (key.startsWith("signal:") ? key.slice(7) : key),
+      }]),
+    ),
+    stored,
+  });
+}
+
+const loadCode = (code: string) =>
+  import(`data:text/javascript,${encodeURIComponent(code)}`);
 
 Deno.test({
   name:
@@ -31,57 +58,58 @@ Deno.test({
   sanitizeResources: false,
   async fn() {
     try {
-      const result = await compileHandlerNamespace(
-        "function () { return signal.count().value + fn.count(); }",
-        "consume",
-        "consume",
-        new Map([
-          ["signal:count", "./signal_count.js"],
-          ["signal:unused", "./unused.js"],
-          ["count", "./handler_count.js"],
-        ]),
+      const result = await compileOne(
+        "function () { return signal.count.value + fn.count(); }",
+        [
+          ["signal:count", "./signals_a.js"],
+          ["signal:unused", "./signals_a.js"],
+          ["count", "./handlers_b.js"],
+        ],
       );
-      assertEquals(result.imports.sort(), [
-        "./handler_count.js",
-        "./signal_count.js",
-      ]);
-      assertStringIncludes(result.code, "signal.count()");
+      assertEquals(result.dependencies.sort(), ["count", "signal:count"]);
+      assertStringIncludes(result.code, "signal.count.value");
       assertStringIncludes(result.code, "fn.count()");
+      assertStringIncludes(result.code, 'from "./signals_a.js"');
+      assertEquals(result.code.includes("unused"), false);
+      // Imports keep their names. `fn.count` is also callable as bare `count`,
+      // so the clashing signal import is the one aliased.
       assertStringIncludes(
         result.code,
-        'import signal1 from "./signal_count.js"',
+        'import { count as count2 } from "./signals_a.js"',
       );
-      assertEquals(result.code.includes("__tinyDependency"), false);
-      const collision = await compileHandlerNamespace(
-        "function () { return signal.count().value + fn.signal(); }",
-        "signal",
-        "collision",
-        new Map([["signal:count", "./signal_count.js"], [
-          "signal",
-          "./handler_signal.js",
-        ]]),
-      );
-      assertEquals(collision.imports.sort(), [
-        "./handler_signal.js",
-        "./signal_count.js",
-      ]);
       assertStringIncludes(
-        collision.code,
-        'import count from "./signal_count.js"',
+        result.code,
+        'import { count } from "./handlers_b.js"',
       );
-      const numbered = await compileHandlerNamespace(
-        "function () { const signal1 = 1; return signal['not-valid']().value + signal.fn().value + signal1; }",
-        "consume",
-        "numbered",
-        new Map([
-          ["signal:not-valid", "./invalid.js"],
-          ["signal:fn", "./reserved.js"],
-        ]),
+      assertStringIncludes(result.code, 'const signal = { get count() { return count2(); } }');
+      assertStringIncludes(result.code, "export function consumer()");
+      const grouped = await compileOne(
+        // Names inside strings, templates and comments do not force aliases.
+        "function () { /* one */ return `one ${signal.one.value}` + 'two' + signal.two.value; }",
+        [["signal:one", "./signals_a.js"], ["signal:two", "./signals_a.js"]],
       );
-      assertStringIncludes(numbered.code, 'import signal2 from "./invalid.js"');
+      assertStringIncludes(
+        grouped.code,
+        'import { one, two } from "./signals_a.js"',
+      );
+      const collision = await compileOne(
+        "function () { return signal.count.value + fn.signal(); }",
+        [["signal:count", "./signals_a.js"], ["signal", "./handlers_b.js"]],
+        "signal",
+      );
+      assertEquals(collision.dependencies.sort(), ["signal", "signal:count"]);
+      assertStringIncludes(collision.code, "signal as signal2");
+      assertStringIncludes(collision.code, "as signal }");
+      const numbered = await compileOne(
+        "function () { const dependency = 1; return signal['not-valid'].value + signal.fn.value + dependency; }",
+        [
+          ["signal:not-valid", "./signals_a.js"],
+          ["signal:fn", "./signals_a.js"],
+        ],
+      );
       assertStringIncludes(
         numbered.code,
-        'import signal3 from "./reserved.js"',
+        'import { "not-valid" as dependency2, fn as fn2 } from "./signals_a.js"',
       );
     } finally {
       (await getEsbuild()).stop();
@@ -92,6 +120,7 @@ Deno.test({
 function reset() {
   (cache as { trustCache: boolean }).trustCache = false;
   handlers.clear();
+  handlerBundles.clear();
   registeredClientTools.clear();
   cache.resetHashDependentState();
   resetImportRegistries();
@@ -99,7 +128,7 @@ function reset() {
 
 Deno.test({
   name:
-    "Signals factories emit stored accessors with shared computed dependencies",
+    "Signals emit one bundle per instance with shared computed dependencies",
   sanitizeOps: false,
   sanitizeResources: false,
   async fn() {
@@ -119,7 +148,7 @@ Deno.test({
       const { signal } = await imports(first);
       return {
         read: function () {
-          return [signal.count(), signal.doubled(), signal.empty()];
+          return [signal.count, signal.doubled, signal.empty];
         },
       };
     });
@@ -130,17 +159,62 @@ Deno.test({
           pathToFileURL(`${Deno.cwd()}/${directory}/handlers/${filename}.js`)
             .href
         );
+      // One bundle per Signals instance, plus one shared signal runtime.
+      assertEquals(
+        new Set(
+          ["count", "empty", "doubled", "text"].map((name) =>
+            first._handlerFilenames.get(name)
+          ),
+        ).size,
+        1,
+      );
+      const built = [...Deno.readDirSync(`${directory}/handlers`)].map((
+        entry,
+      ) => entry.name).sort();
+      assertEquals(
+        built,
+        [
+          `${consumer._handlerFilenames.get("read")}.js`,
+          `${first._handlerFilenames.get("count")}.js`,
+          `${second._handlerFilenames.get("count")}.js`,
+          built.find((name) => name.startsWith("signals_"))!,
+        ].sort(),
+      );
+      const signalCode = await Deno.readTextFile(
+        `${directory}/handlers/${first._handlerFilenames.get("count")}.js`,
+      );
+      assertStringIncludes(signalCode, "import { signalClasses } from");
+      assertStringIncludes(signalCode, "const fn = { signalClasses };");
+      assertStringIncludes(
+        signalCode,
+        "const { Signal, Computed } = fn.signalClasses();",
+      );
+      assertStringIncludes(
+        signalCode,
+        "const signals = (() => {",
+      );
+      // Factory locals keep their names even though they match exports.
+      assertStringIncludes(signalCode, "const count = new Signal(1)");
+      assertStringIncludes(signalCode, "export function count(event)");
+      assertStringIncludes(
+        signalCode,
+        "signals.count.handleEvent(this, event)",
+      );
+      assertEquals(signalCode.includes("stored"), false);
       const module = await load(consumer._handlerFilenames.get("read")!);
-      const [count, doubled, empty] = module.default();
+      const [count, doubled, empty] = module.read();
       assertEquals(count.value, 1);
       assertEquals(doubled.value, 2);
       assertEquals(empty.value, null);
-      assertEquals(module.default()[0], count);
+      assertEquals(module.read()[0], count);
       const target = new EventTarget();
       const values: number[] = [];
       target.addEventListener(
         "signal",
-        (event) => values.push((event as Event & { value: number }).value),
+        (event) =>
+          values.push(
+            (event as Event & { signal: { value: number } }).signal.value,
+          ),
       );
       doubled.subscribe(target);
       doubled.subscribe(target);
@@ -156,48 +230,56 @@ Deno.test({
         "read-only",
       );
       const other = await load(second._handlerFilenames.get("count")!);
-      assertEquals(other.default().value, 1);
-      assertNotEquals(other.default(), count);
+      assertEquals(other.count().value, 1);
+      assertNotEquals(other.count(), count);
       const textModule = await load(first._handlerFilenames.get("text")!);
-      const input = Object.assign(new EventTarget(), { value: "typed" });
+      const input = Object.assign(new EventTarget(), {
+        value: "typed",
+        dataset: {},
+      });
       input.addEventListener(
         "input",
-        (event) => textModule.default.call(input, event),
+        (event) => textModule.text.call(input, event),
       );
       input.dispatchEvent(new Event("input"));
-      assertEquals(textModule.default().value, "typed");
+      assertEquals(textModule.text().value, "typed");
       const subscriber = Object.assign(new EventTarget(), {
         abortController: new AbortController(),
       });
       let notifications = 0;
       subscriber.addEventListener("signal", () => notifications++);
-      textModule.default.call(subscriber, new Event("load"));
-      textModule.default.call(subscriber, new Event("load"));
-      textModule.default().value = "first";
+      textModule.text.call(subscriber, new Event("load"));
+      textModule.text.call(subscriber, new Event("load"));
+      textModule.text().value = "first";
       assertEquals(notifications, 1);
       subscriber.abortController.abort();
-      textModule.default().value = "second";
+      textModule.text().value = "second";
       assertEquals(notifications, 1);
       subscriber.abortController = new AbortController();
-      textModule.default.call(subscriber, new Event("load"));
-      textModule.default().value = "third";
+      textModule.text.call(subscriber, new Event("load"));
+      textModule.text().value = "third";
       assertEquals(notifications, 2);
       const references = await imports(first);
       assertEquals(typeof references.signal.count, "object");
+      assertThrows(
+        () => references.signal.count.value,
+        Error,
+        "only a handler reference while rendering",
+      );
       assertEquals((references.fn as Record<string, unknown>).count, undefined);
       assertEquals(
         handlerReferenceAttributes("onInput", references.signal.text),
         {
           oninput: "tiny.runHandler(this,event)",
-          "tt-handler-input": first._handlerFilenames.get("text")!,
+          "tt-handler-input": `${first._handlerFilenames.get("text")}.text`,
         },
       );
       const checkTypes = () => {
-        const value: number = references.signal.count().value;
+        const value: number = references.signal.count.value;
         // @ts-expect-error Signals are not ordinary fn handlers.
         references.fn.count();
         // @ts-expect-error Computed values cannot be assigned.
-        references.signal.doubled().value = 3;
+        references.signal.doubled.value = 3;
         // @ts-expect-error Signal factories cannot return handlers.
         new Signals(import.meta.url, () => ({ bad: () => 1 }));
         return value;
@@ -207,13 +289,80 @@ Deno.test({
         const styles = new Styles(import.meta.url, { section: "color: red;" });
         const { fn, signal, styled } = await imports(consumer, styles, first);
         const section: string = styled.section;
-        const count: number = signal.count().value;
+        const count: number = signal.count.value;
         fn.read();
         // @ts-expect-error Unknown styles must not be exposed.
         styled.missing;
         return { section, count };
       };
       void checkMixedImports;
+    } finally {
+      await Deno.remove(directory, { recursive: true }).catch(() => {});
+      reset();
+      (await getEsbuild()).stop();
+    }
+  },
+});
+
+Deno.test({
+  name: "Signals unpack the toolkit for any factory shape",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  async fn() {
+    reset();
+    const directory = "./.test-build-output/signal-shapes";
+    const plain = new Signals(
+      import.meta.url,
+      (tools) => ({ total: new tools.Signal(2) }),
+    );
+    const expression = new Signals(
+      import.meta.url,
+      function ({ Signal }) {
+        return { label: new Signal("text") };
+      },
+    );
+    // A signal named like the toolkit falls back to calling the factory.
+    const clashing = new Signals(
+      import.meta.url,
+      ({ Signal }) => ({ Signal: new Signal(3) }),
+    );
+    try {
+      await buildScriptFiles({ fresh: true, publicDir: directory });
+      const load = async (
+        tools: {
+          _handlerFilenames: ReadonlyMap<string, string>;
+        },
+      ) => {
+        const filename = [...tools._handlerFilenames.values()][0];
+        const path = `${Deno.cwd()}/${directory}/handlers/${filename}.js`;
+        return {
+          code: await Deno.readTextFile(path),
+          module: await import(pathToFileURL(path).href),
+        };
+      };
+      const plainBundle = await load(plain);
+      assertStringIncludes(
+        plainBundle.code,
+        "const tools = fn.signalClasses();",
+      );
+      assertStringIncludes(plainBundle.code, "const signals = (() =>");
+      assertEquals(plainBundle.module.total().value, 2);
+      const expressionBundle = await load(expression);
+      assertStringIncludes(
+        expressionBundle.code,
+        "const { Signal } = fn.signalClasses();",
+      );
+      assertStringIncludes(
+        expressionBundle.code,
+        "const signals = (function()",
+      );
+      assertEquals(expressionBundle.module.label().value, "text");
+      const clashingBundle = await load(clashing);
+      assertStringIncludes(
+        clashingBundle.code,
+        "const signals = defineSignals(fn.signalClasses());",
+      );
+      assertEquals(clashingBundle.module.Signal().value, 3);
     } finally {
       await Deno.remove(directory, { recursive: true }).catch(() => {});
       reset();
@@ -341,25 +490,23 @@ Deno.test({
     const previousHandlers = registry.handlers;
     try {
       registry.handlers = {};
-      const compile = (filename: string) =>
-        compileHandlerNamespace(
+      const compile = () =>
+        compileOne(
           "function() { stored.count ??= 0; return ++stored.count; }",
+          [],
           "counter",
-          filename,
-          new Map(),
-          undefined,
-          true,
+          "stored",
         );
-      const first = await compile("first_store");
-      const second = await compile("second_store");
+      const first = await compile();
+      const second = await compile();
       const load = (code: string, filename: string) =>
         import(`data:text/javascript,${encodeURIComponent(code)}#${filename}`);
       const firstModule = await load(first.code, "first_store");
-      assertEquals(firstModule.default(), 1);
-      assertEquals(firstModule.default(), 2);
-      assertEquals((await load(first.code, "first_store")).default(), 3);
-      assertEquals((await load(second.code, "second_store")).default(), 1);
-      assertEquals(first.imports, []);
+      assertEquals(firstModule.counter(), 1);
+      assertEquals(firstModule.counter(), 2);
+      assertEquals((await load(first.code, "first_store")).counter(), 3);
+      assertEquals((await load(second.code, "second_store")).counter(), 1);
+      assertEquals(first.dependencies, []);
       assertEquals(Object.hasOwn(globalThis, "stored"), false);
     } finally {
       if (previousHandlers === undefined) delete registry.handlers;
@@ -417,18 +564,19 @@ Deno.test({
       const firstHandler = first._handlerDefinitions.get("counter")!;
       const secondHandler = second._handlerDefinitions.get("counter")!;
       assertNotEquals(firstHandler.filename, secondHandler.filename);
-      const load = async (collection: typeof first, name: string) => {
-        const handler = collection._handlerDefinitions.get(name)!;
-        const code = await handler.buildCode();
+      const load = async (collection: typeof first) => {
+        const bundle = collection._handlerDefinitions.get("counter")!.bundle;
+        const code = await bundle.buildCode();
         return await import(
-          `data:text/javascript,${encodeURIComponent(code)}#${handler.filename}`
+          `data:text/javascript,${encodeURIComponent(code)}#${bundle.filename}`
         );
       };
-      const firstModule = await load(first, "counter");
-      assertEquals(firstModule.default(), 1);
-      assertEquals(firstModule.default(2), 3);
-      assertEquals((await load(second, "counter")).default(), 1);
-      assertEquals((await load(first, "other")).default(), undefined);
+      const firstModule = await load(first);
+      assertEquals(firstModule.counter(), 1);
+      assertEquals(firstModule.counter(2), 3);
+      assertEquals((await load(second)).counter(), 1);
+      // Handlers of one Store share its state.
+      assertEquals((await load(first)).other(), 3);
       const createWithoutUrl = () =>
         new Store({
           counter: function () {
@@ -520,34 +668,31 @@ Deno.test({
       const consumerModule = await load(
         consumer._handlerFilenames.get("next")!,
       );
-      assertEquals(wrapperModule.default(), [1, 1]);
-      assertEquals(consumerModule.default(), 2);
-      assertEquals(wrapperModule.default(), [2, 3]);
+      assertEquals(wrapperModule.next(), [1, 1]);
+      assertEquals(consumerModule.next(), 2);
+      assertEquals(wrapperModule.next(), [2, 3]);
       assertEquals(
-        (await load(second._handlerFilenames.get("counter")!)).default(),
+        (await load(second._handlerFilenames.get("counter")!)).counter(),
         1,
       );
       const initialName = wrapper._handlerFilenames.get("next")!;
-      cache.beginChangeDetectionPass();
-      await wrapper._handlerDefinitions.get("next")!.revalidateAndBuild(
-        `${directory}/handlers`,
-      );
-      cache.commitPendingSourceMtimes();
+      const rebuild = async () => {
+        cache.beginChangeDetectionPass();
+        await wrapper._handlerDefinitions.get("next")!.bundle.ensureWritten(
+          `${directory}/handlers`,
+        );
+        cache.commitPendingSourceMtimes();
+      };
+      await rebuild();
       assertEquals(wrapper._handlerFilenames.get("next"), initialName);
       first._handlerDefinitions.get("counter")!.fn = function () {
         stored.count ??= 100;
         return ++stored.count;
       };
-      cache.files[first._handlerDefinitions.get("counter")!.sourceFileUrl!]
-        .mtimeMs = 0;
-      cache.beginChangeDetectionPass();
-      await wrapper._handlerDefinitions.get("next")!.revalidateAndBuild(
-        `${directory}/handlers`,
-      );
-      cache.commitPendingSourceMtimes();
+      await rebuild();
       const changedName = wrapper._handlerFilenames.get("next")!;
       assertNotEquals(changedName, initialName);
-      assertEquals((await load(changedName)).default(), [1, 101]);
+      assertEquals((await load(changedName)).next(), [1, 101]);
     } finally {
       if (previousHandlers === undefined) delete registry.handlers;
       else registry.handlers = previousHandlers;
@@ -600,12 +745,11 @@ Deno.test({
       const code = await consumer.buildCode();
       assertStringIncludes(
         code,
-        dependency._handlerDefinitions.get("used")!.filename,
+        `import { used } from "./${
+          dependency._handlerFilenames.get("used")
+        }.js"`,
       );
-      assertEquals(
-        code.includes(dependency._handlerDefinitions.get("unused")!.filename),
-        false,
-      );
+      assertEquals(code.includes("unused"), false);
       const reference: (value: number) => number =
         collection.getFunctionReferences.consumer;
       assertEquals(typeof reference, "string");
@@ -620,15 +764,15 @@ Deno.test({
 });
 
 Deno.test({
-  name: "handler namespace retains only statically used external handlers",
+  name: "handler bundles retain only statically used external handlers",
   sanitizeOps: false,
   sanitizeResources: false,
   async fn() {
     try {
-      const dependencies = new Map([
-        ["used", "./used_hash.js"],
-        ["unused", "./unused_hash.js"],
-      ]);
+      const dependencies: [string, string][] = [
+        ["used", "./leaf_hash.js"],
+        ["unused", "./leaf_hash.js"],
+      ];
       for (
         const body of [
           "function(event) { return fn.used(event); }",
@@ -639,15 +783,13 @@ Deno.test({
           "function(event) { return used(event); }",
         ]
       ) {
-        const result = await compileHandlerNamespace(
-          body,
-          "consumer",
-          "consumer_hash",
-          dependencies,
+        const result = await compileOne(body, dependencies);
+        assertEquals(result.dependencies, ["used"]);
+        assertStringIncludes(
+          result.code,
+          'import { used } from "./leaf_hash.js"',
         );
-        assertEquals(result.imports, ["./used_hash.js"]);
-        assertStringIncludes(result.code, 'import used from "./used_hash.js"');
-        assertEquals(result.code.includes("unused_hash"), false);
+        assertEquals(result.code.includes("unused"), false);
         if (body.includes("fn.")) {
           assertStringIncludes(result.code, "const fn = { used }");
           assertStringIncludes(result.code, "fn.used");
@@ -656,55 +798,49 @@ Deno.test({
           assertStringIncludes(result.code, "fn.used.call(this, event)");
         }
         assertEquals(result.code.includes("globalThis.handlers"), false);
-        assertEquals(result.code.includes("_handler"), false);
-        assertEquals(result.code.includes("consumer_default"), false);
-        if (body.startsWith("function")) {
-          assertStringIncludes(
-            result.code,
-            "export default function consumer(",
-          );
-        }
+        assertStringIncludes(result.code, "export ");
+        assertStringIncludes(result.code, "consumer(");
       }
-      const dynamic = await compileHandlerNamespace(
+      const dynamic = await compileOne(
         "function(name, event) { return fn[name](event); }",
-        "consumer",
-        "consumer_hash",
         dependencies,
       );
-      assertEquals(dynamic.imports.sort(), [...dependencies.values()].sort());
+      assertEquals(dynamic.dependencies.sort(), ["unused", "used"]);
       assertStringIncludes(dynamic.code, "fn[name](event)");
+      const dependencyUrl =
+        "data:text/javascript,export default value => value + 1";
       for (
-        const [source, expected, declaration] of [
+        const [source, expected, declaration, name] of [
           [
             "async function(value) { return value + 1; }",
             42,
-            "async function consumer",
+            "async function",
+            "consumer",
           ],
-          ["function*(value) { yield value + 1; }", 42, "function* consumer"],
+          [
+            "function*(value) { yield value + 1; }",
+            42,
+            "function*",
+            "consumer",
+          ],
           [
             "function recurse(value) { return value ? recurse(value - 1) + 1 : 0; }",
             41,
             "function recurse",
+            "consumer",
           ],
-          ["value => value + 1", 42, "=>"],
-          ["function(value) { return fn.used(value); }", 42, "export default"],
+          ["value => value + 1", 42, "=>", "consumer"],
+          ["function(value) { return fn.used(value); }", 42, "fn.used", "fn"],
         ] as const
       ) {
-        const result = await compileHandlerNamespace(
+        const result = await compileOne(
           source,
-          source.includes("fn.used") ? "fn" : "consumer",
-          "default_export_test",
-          new Map([[
-            "used",
-            "data:text/javascript,export default value => value + 1",
-          ]]),
+          [["used", dependencyUrl, "default"]],
+          name,
         );
         assertStringIncludes(result.code, declaration);
-        assertEquals(result.code.includes("_handler"), false);
-        const module = await import(
-          `data:text/javascript,${encodeURIComponent(result.code)}`
-        );
-        const value = await module.default(41);
+        const module = await loadCode(result.code);
+        const value = await module[name](41);
         assertEquals(
           source.startsWith("function*") ? value.next().value : value,
           expected,
@@ -717,7 +853,7 @@ Deno.test({
       try {
         delete registry.handlers;
         for (
-          const exportName of [
+          const key of [
             "used",
             "fn",
             "_handler",
@@ -726,21 +862,13 @@ Deno.test({
             "__proto__",
           ]
         ) {
-          const dependencyUrl =
-            "data:text/javascript,export default value => value + 1";
-          const result = await compileHandlerNamespace(
-            `function(used) { return fn[${
-              JSON.stringify(exportName)
-            }](used); }`,
-            "consumer",
-            "readable_names_test",
-            new Map([[exportName, dependencyUrl]]),
+          const result = await compileOne(
+            `function(used) { return fn[${JSON.stringify(key)}](used); }`,
+            [[key, dependencyUrl, "default"]],
           );
-          assertEquals(result.imports, [dependencyUrl]);
-          const module = await import(
-            `data:text/javascript,${encodeURIComponent(result.code)}`
-          );
-          assertEquals(module.default(41), 42);
+          assertEquals(result.dependencies, [key]);
+          const module = await loadCode(result.code);
+          assertEquals(module.consumer(41), 42);
           assertEquals(registry.handlers, undefined);
         }
       } finally {
@@ -757,25 +885,26 @@ Deno.test({
           "function() { return 1; }",
         ]
       ) {
-        const result = await compileHandlerNamespace(
-          body,
-          "consumer",
-          "consumer_hash",
-          dependencies,
-        );
-        assertEquals(result.imports, []);
+        const result = await compileOne(body, dependencies);
+        assertEquals(result.dependencies, []);
       }
       await assertRejects(
-        () =>
-          compileHandlerNamespace(
-            "function() { fn.missing(); }",
-            "consumer",
-            "consumer_hash",
-            dependencies,
-          ),
+        () => compileOne("function() { fn.missing(); }", dependencies),
         Error,
         "missing",
       );
+      const siblings = await compileHandlerBundle({
+        functions: new Map([
+          ["double", "function(value) { return value * 2; }"],
+          ["quadruple", "function(value) { return double(double(value)); }"],
+          ["not-an-identifier", "function() { return 'ok'; }"],
+        ]),
+        dependencies: new Map(),
+        stored: false,
+      });
+      const siblingModule = await loadCode(siblings.code);
+      assertEquals(siblingModule.quadruple(3), 12);
+      assertEquals(siblingModule["not-an-identifier"](), "ok");
     } finally {
       (await getEsbuild()).stop();
     }
@@ -1017,12 +1146,13 @@ Deno.test({
 
 Deno.test({
   name:
-    "Handlers lazy rebuild hashes track used dependencies only through multiple hops",
+    "Handlers lazy rebuild renames every bundle that imports a changed bundle",
   sanitizeOps: false,
   sanitizeResources: false,
   async fn() {
     reset();
     const directory = "./.test-build-output/new-handler-rebuild";
+    const handlerDir = `${directory}/handlers`;
     const leaf = new Handlers(import.meta.url, () => ({
       used: function () {
         return 1;
@@ -1047,55 +1177,55 @@ Deno.test({
         },
       };
     });
+    const unrelated = new Handlers(import.meta.url, () => ({
+      standalone: function () {
+        return "unchanged";
+      },
+    }));
+    const rebuild = async () => {
+      cache.beginChangeDetectionPass();
+      for (const tools of [root, unrelated]) {
+        for (const impl of tools._handlerDefinitions.values()) {
+          await impl.bundle.ensureWritten(handlerDir);
+        }
+      }
+      cache.commitPendingSourceMtimes();
+    };
     try {
       await buildScriptFiles({ publicDir: directory });
-      const initialName = root._handlerFilenames.get("consumer")!;
-      const initialCode = await Deno.readTextFile(
-        `${directory}/handlers/${initialName}.js`,
-      );
+      const initialRoot = root._handlerFilenames.get("consumer")!;
+      const initialUnrelated = unrelated._handlerFilenames.get("standalone")!;
+      await rebuild();
+      assertEquals(root._handlerFilenames.get("consumer"), initialRoot);
+
+      // Any change to the leaf bundle changes its file, so every bundle
+      // importing it (directly or not) needs a new URL.
       leaf._handlerDefinitions.get("unused")!.fn = function () {
         return 200;
       };
-      cache.beginChangeDetectionPass();
-      await leaf._handlerDefinitions.get("unused")!.revalidateAndBuild(
-        `${directory}/handlers`,
-      );
-      await root._handlerDefinitions.get("consumer")!.revalidateAndBuild(
-        `${directory}/handlers`,
-      );
-      cache.commitPendingSourceMtimes();
-      assertEquals(root._handlerFilenames.get("consumer"), initialName);
+      await rebuild();
+      const changedRoot = root._handlerFilenames.get("consumer")!;
+      assertNotEquals(changedRoot, initialRoot);
       assertEquals(
-        await Deno.readTextFile(`${directory}/handlers/${initialName}.js`),
-        initialCode,
-      );
-      leaf._handlerDefinitions.get("used")!.fn = function () {
-        return 2;
-      };
-      cache.beginChangeDetectionPass();
-      await root._handlerDefinitions.get("consumer")!.revalidateAndBuild(
-        `${directory}/handlers`,
-      );
-      cache.commitPendingSourceMtimes();
-      const changedName = root._handlerFilenames.get("consumer")!;
-      assertNotEquals(changedName, initialName);
-      const changedCode = await Deno.readTextFile(
-        `${directory}/handlers/${changedName}.js`,
+        unrelated._handlerFilenames.get("standalone"),
+        initialUnrelated,
       );
       assertStringIncludes(
-        changedCode,
+        await Deno.readTextFile(`${handlerDir}/${changedRoot}.js`),
         middle._handlerFilenames.get("forward")!,
       );
+      assertStringIncludes(
+        await Deno.readTextFile(
+          `${handlerDir}/${middle._handlerFilenames.get("forward")}.js`,
+        ),
+        leaf._handlerFilenames.get("used")!,
+      );
       await assertRejects(
-        () => Deno.stat(`${directory}/handlers/${initialName}.js`),
+        () => Deno.stat(`${handlerDir}/${initialRoot}.js`),
         Deno.errors.NotFound,
       );
-      cache.beginChangeDetectionPass();
-      await root._handlerDefinitions.get("consumer")!.revalidateAndBuild(
-        `${directory}/handlers`,
-      );
-      cache.commitPendingSourceMtimes();
-      assertEquals(root._handlerFilenames.get("consumer"), changedName);
+      await rebuild();
+      assertEquals(root._handlerFilenames.get("consumer"), changedRoot);
     } finally {
       await Deno.remove(directory, { recursive: true });
       reset();
@@ -1142,7 +1272,7 @@ Deno.test({
       const module = await import(
         pathToFileURL(`${Deno.cwd()}/${directory}/handlers/${filename}.js`).href
       );
-      assertEquals(module.default.call({ offset: 10 }, 4), 14);
+      assertEquals(module.consumer.call({ offset: 10 }, 4), 14);
       const browserGlobals = globalThis as unknown as {
         handlers?: Record<string, unknown>;
       };

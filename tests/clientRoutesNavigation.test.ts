@@ -7,6 +7,7 @@ import { navigationTools } from "../handlers/navigationTools.ts";
 import { partialInsertHandlers } from "../handlers/partialInsertHandlers.ts";
 import { routeCacheTools } from "../handlers/routeCacheTools.ts";
 import type { NavigationUrlResult } from "../handlers/navigationUrlTools.ts";
+import { loadHandler } from "./helpers/loadHandler.ts";
 
 void ClientRoutes;
 void navigationTools;
@@ -16,32 +17,10 @@ await Promise.all(
   [...registeredClientTools].map((tools) => tools.ensureDefined()),
 );
 
-const moduleUrls = new Map<string, string>();
 const builtHandlers = new Map<
   string,
   (this: unknown, ...args: unknown[]) => unknown
 >();
-async function buildHandler(filename: string): Promise<string> {
-  const cached = moduleUrls.get(filename);
-  if (cached) return cached;
-  const entry = [...handlers.values()].find((handler) =>
-    handler.filename === filename
-  );
-  assertExists(entry);
-  let code = await entry.buildCode();
-  for (const dependency of handlers.values()) {
-    const specifier = `"./${dependency.filename}.js"`;
-    if (code.includes(specifier)) {
-      code = code.replaceAll(
-        specifier,
-        JSON.stringify(await buildHandler(dependency.filename)),
-      );
-    }
-  }
-  const url = `data:text/javascript,${encodeURIComponent(code)}`;
-  moduleUrls.set(filename, url);
-  return url;
-}
 for (
   const name of [
     "getNavigationMethod",
@@ -76,8 +55,7 @@ for (
       false,
     );
   }
-  const url = await buildHandler(entry.filename);
-  builtHandlers.set(name, (await import(url)).default);
+  builtHandlers.set(name, await loadHandler(name, entry.filename));
 }
 
 class SourceElement {

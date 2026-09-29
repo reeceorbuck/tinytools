@@ -7,7 +7,8 @@ import {
 import { jsx, jsxAttr, jsxs, jsxTemplate } from "../jsx-runtime.ts";
 import { jsxDEV } from "../jsx-dev-runtime.ts";
 
-const resolve = (name: string) => `handlers.${name}_123.call(this, event)`;
+const resolve = (name: string) =>
+  `handlers.bundle_123.${name}.call(this, event)`;
 const handlers = createHandlerReferences<
   { click: (event: MouseEvent) => void }
 >(resolve);
@@ -39,7 +40,7 @@ Deno.test("precompiled attribute helper emits both escaped attributes", () => {
       }),
     ),
   );
-  assertStringIncludes(html, 'tt-handler-click="click_123"');
+  assertStringIncludes(html, 'tt-handler-click="bundle_123.click"');
 });
 
 Deno.test("ordinary attributes, inline expressions and component props are preserved", () => {
@@ -68,7 +69,7 @@ Deno.test("handler arrays expand in every JSX path and preserve component props"
   const references = [handlers.click, handlers.click] as const;
   const props = { onClick: references, children: "Count" };
   const expected =
-    `<button onclick="${eventHandlerBody}" tt-handler-click="click_123 click_123">Count</button>`;
+    `<button onclick="${eventHandlerBody}" tt-handler-click="bundle_123.click bundle_123.click">Count</button>`;
   for (const render of [jsx, jsxs, jsxDEV]) {
     assertEquals(String(render("button", props)), expected);
     assertEquals(

@@ -8,7 +8,7 @@ type Functions = {
 
 const resolve = (name: string) =>
   ["click", "keyboard"].includes(name)
-    ? `handlers.${name}_123.call(this, event)`
+    ? `handlers.bundle_123.${name}.call(this, event)`
     : undefined;
 const events = createEvents<Functions>(resolve);
 const handlers = createHandlerReferences<Functions>(resolve);
@@ -22,7 +22,7 @@ Deno.test("handler references emit the same attributes as names", () => {
 
 Deno.test("handler references reject foreign IDs and forged objects", () => {
   const foreign = createHandlerReferences<Functions>((name) =>
-    `handlers.${name}_other.call(this, event)`
+    `handlers.other_456.${name}.call(this, event)`
   );
   assertThrows(() => events({ click: foreign.click }), TypeError);
   assertThrows(() => events({ click: {} } as never), TypeError);

@@ -2,6 +2,7 @@ import { assertEquals, assertExists, assertStrictEquals } from "@std/assert";
 import { parseHTML } from "linkedom";
 import { handlers } from "../clientFunctions.ts";
 import { routeCacheTools } from "../handlers/routeCacheTools.ts";
+import { loadHandler } from "./helpers/loadHandler.ts";
 
 void routeCacheTools;
 const builtHandlers = new Map<
@@ -15,10 +16,7 @@ for (const name of ["observeRouteCache"]) {
   assertExists(entry);
   const code = await entry.buildCode();
   assertEquals(/navigation|navigate/.test(code), false);
-  builtHandlers.set(
-    name,
-    (await import(`data:text/javascript,${encodeURIComponent(code)}`)).default,
-  );
+  builtHandlers.set(name, await loadHandler(name));
 }
 
 Deno.test("cache observer captures replacements without navigation", async () => {

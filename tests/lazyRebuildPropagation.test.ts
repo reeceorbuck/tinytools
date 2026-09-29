@@ -1,75 +1,51 @@
 /**
- * Tests for lazy-mode handler rebuild propagation across imported files.
+ * Tests for lazy-mode rebuild propagation between handler bundles.
  *
- * The dental dev server uses lazy revalidation: a handler is only
- * rehashed/rebuilt when one of its routes is requested. When a handler
- * imports another handler from a different source file, three things
- * must happen on edit of the imported file even when the consumer file
- * itself was not edited:
+ * The dev server builds handler bundles on demand. Bundle filenames are
+ * content hashes over the bundle and everything it (transitively) imports,
+ * so when an imported bundle changes:
  *
- *   1. The imported handler is rehashed and renamed first (so that
- *      consumer code references the new filename in its emitted import
- *      statements).
- *   2. The consumer's local import registry is synced to the imported
- *      handler's CURRENT filename.
- *   3. The consumer's OWN filename hash also changes — otherwise the
- *      browser keeps the old cached `consumer_xxxx.js` URL and serves
- *      stale code that points to the old imported filename.
+ *   1. The imported bundle gets a new filename.
+ *   2. Every consumer's emitted file imports that new filename.
+ *   3. Every consumer's OWN filename also changes, so browsers never keep a
+ *      cached consumer pointing at the old import.
  *
- * These tests construct synthetic source files on disk so the cache's
- * mtime detection logic exercises real fs stat calls, then drive the
- * lazy revalidation pipeline directly via `revalidateAndBuild`.
+ * Bundles outside the changed import graph keep their filenames.
  *
  * Run with: deno test --allow-all tests/lazyRebuildPropagation.test.ts
  */
 
-import {
-  assert,
-  assertEquals,
-  assertExists,
-  assertNotEquals,
-} from "@std/assert";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { assert, assertEquals, assertNotEquals } from "@std/assert";
+import { pathToFileURL } from "node:url";
 import {
   changedHandlerKeys,
-  type ClientFunctionImpl,
   filesWithChangedHandlers,
-  getImportRegistry,
+  handlerBundles,
   handlers,
   resetImportRegistries,
 } from "../clientFunctions.ts";
-import {
-  cache,
-  Handlers,
-  normalizeSourceFileUrl,
-  registeredClientTools,
-} from "../clientTools.ts";
+import { cache, Handlers, registeredClientTools } from "../clientTools.ts";
 import {
   changedStyleKeys,
   scopedStylesRegistry,
   styleBundleRegistry,
 } from "../scopedStyles.ts";
 
-// ============================================================================
-// Test Utilities
-// ============================================================================
-
 const TEST_ROOT = "./.test-lazy-rebuild";
 const TEST_HANDLER_DIR = `${TEST_ROOT}/handlers`;
 const TEST_SRC_DIR = `${TEST_ROOT}/src`;
 
+type Tools = InstanceType<typeof Handlers>;
+
 async function cleanupTestDirs() {
-  try {
-    await Deno.remove(TEST_ROOT, { recursive: true });
-  } catch {
-    // not present
-  }
+  await Deno.remove(TEST_ROOT, { recursive: true }).catch(() => {});
 }
 
 function resetRegistries() {
   cache.resetHashDependentState();
   (cache as { trustCache: boolean }).trustCache = false;
   handlers.clear();
+  handlerBundles.clear();
   scopedStylesRegistry.clear();
   styleBundleRegistry.clear();
   changedHandlerKeys.clear();
@@ -79,1011 +55,321 @@ function resetRegistries() {
   resetImportRegistries();
 }
 
-/**
- * Write a fake source file at TEST_SRC_DIR/<name>.tsx containing the
- * given text. Returns the file:// URL string suitable for passing to
- * `new Handlers(...)` as its source file URL.
- *
- * The actual content does not matter for hash/rebuild logic — only the
- * file's mtime is consulted by `cache.checkAndTrackMtimeChange`.
- */
-async function writeFakeSource(name: string, body: string): Promise<string> {
+/** Write a fake source file and return its file:// URL. */
+async function writeFakeSource(name: string): Promise<string> {
   await Deno.mkdir(TEST_SRC_DIR, { recursive: true });
   const path = `${TEST_SRC_DIR}/${name}.tsx`;
-  await Deno.writeTextFile(path, body);
-  return pathToFileURL(
-    `${Deno.cwd()}/${path.replace(/^\.\//, "")}`,
-  ).toString();
+  await Deno.writeTextFile(path, "// source");
+  return pathToFileURL(`${Deno.cwd()}/${path.replace(/^\.\//, "")}`)
+    .toString();
 }
 
-/** Mutate a fake source file so its mtime advances. */
-async function touchFakeSource(url: string, body: string): Promise<void> {
-  const path = fileURLToPath(url);
-  // Wait long enough that filesystems with second-resolution mtime see a
-  // distinct value.
-  await new Promise((r) => setTimeout(r, 20));
-  await Deno.writeTextFile(path, body);
-}
-
-/**
- * Locate the registered impl for a function name on a given source url.
- * The registry cast is intentional — these tests poke at the internal
- * pipeline that the dental dev server relies on.
- */
-function getImpl(
-  sourceUrl: string,
-  fnName: string,
-): ClientFunctionImpl {
-  const normalized = normalizeSourceFileUrl(sourceUrl);
-  assertExists(normalized);
-  const set = cache.getHandlersForSource(normalized);
-  for (const h of set) {
-    const impl = h as ClientFunctionImpl;
-    if (impl.fnName === fnName) return impl;
-  }
-  throw new Error(`No impl named ${fnName} on ${sourceUrl}`);
-}
-
-/** Read the consumer's emitted handler file and assert it imports `expectedFilename`. */
-async function assertConsumerImports(
-  consumerFile: string,
-  expectedFilename: string,
-) {
-  const text = await Deno.readTextFile(consumerFile);
-  assert(
-    text.includes(expectedFilename),
-    `Expected consumer file to reference '${expectedFilename}'.\n` +
-      `Got:\n${text}`,
-  );
-}
-
-/**
- * Drive a full lazy revalidation pass for a single handler. Mirrors how
- * `_doEnsureBuilt` invokes the pipeline at request time, including
- * begin/commit pass bookkeeping.
- */
-async function lazyRevalidate(impl: ClientFunctionImpl): Promise<boolean> {
+/** Drive one lazy pass for the given tools, as `ensureBuilt` does per request. */
+async function lazyRevalidate(...tools: Tools[]): Promise<void> {
   cache.beginChangeDetectionPass();
   try {
-    return await impl.revalidateAndBuild(TEST_HANDLER_DIR);
+    for (const tool of tools) {
+      for (const impl of tool._handlerDefinitions.values()) {
+        await impl.bundle.ensureWritten(TEST_HANDLER_DIR);
+      }
+    }
   } finally {
     cache.commitPendingSourceMtimes();
   }
 }
 
-// ============================================================================
-// Test Suite: imported-handler renames propagate to consumer
-// ============================================================================
+/** Swap a handler's function, as a reloaded module would. */
+function edit(tool: Tools, name: string, fn: () => void) {
+  tool._handlerDefinitions.get(name)!.fn = fn;
+}
 
-Deno.test({
-  name:
-    "lazy rebuild - editing imported file rehashes the imported handler's filename",
-  async fn() {
-    await cleanupTestDirs();
-    resetRegistries();
+const filename = (tool: Tools, name: string) =>
+  tool._handlerFilenames.get(name)!;
 
-    const helperUrl = await writeFakeSource("helper", "// v1");
-    const consumerUrl = await writeFakeSource("consumer", "// v1");
+async function readBundle(tool: Tools, name: string): Promise<string> {
+  return await Deno.readTextFile(
+    `${TEST_HANDLER_DIR}/${filename(tool, name)}.js`,
+  );
+}
 
-    const helper = new Handlers(helperUrl, {
-      sharedFn(this: HTMLElement) {
-        console.log("v1");
-      },
-    });
-    const _consumer = new Handlers(consumerUrl, { imports: [helper] }, {
+async function exists(file: string): Promise<boolean> {
+  return await Deno.stat(`${TEST_HANDLER_DIR}/${file}.js`).then(
+    () => true,
+    () => false,
+  );
+}
+
+async function helperAndConsumer() {
+  const helper = new Handlers(await writeFakeSource("helper"), {
+    sharedFn(this: HTMLElement) {
+      console.log("v1");
+    },
+  });
+  const consumer = new Handlers(
+    await writeFakeSource("consumer"),
+    { imports: [helper] },
+    {
       consumerFn(this: HTMLElement) {
-        console.log("calls helper");
-      },
-    });
-    void _consumer;
-
-    // First build — every handler is "new", so both files must be written.
-    const helperImpl = getImpl(helperUrl, "sharedFn");
-    const consumerImpl = getImpl(consumerUrl, "consumerFn");
-    await lazyRevalidate(helperImpl);
-    await lazyRevalidate(consumerImpl);
-
-    const initialHelperFilename = helperImpl.filename;
-    assert(initialHelperFilename.startsWith("sharedFn_"));
-
-    // Edit helper.tsx (consumer.tsx untouched). The helper's body changes
-    // shape, but the function code captured in the impl does not — what
-    // we care about is that the source mtime advancing forces a rehash
-    // pass. The hash input still uses `fn.toString()`, which is stable
-    // for the JS function in memory; this confirms that an mtime-only
-    // edit does NOT rename the helper unless its hash genuinely shifts.
-    await touchFakeSource(helperUrl, "// v2");
-    // After resetHashDependentState we lost cache.files entries — the
-    // existing impls remain registered in handlersBySource via
-    // re-registration through revalidate; explicitly re-seed entries to
-    // simulate a real persisted cache snapshot loaded at startup.
-    cache.files[normalizeSourceFileUrl(helperUrl)!] ??= {
-      mtimeMs: 1,
-      externalImports: [],
-      handlers: { sharedFn: [initialHelperFilename] },
-      styles: {},
-    };
-    cache.files[normalizeSourceFileUrl(consumerUrl)!] ??= {
-      mtimeMs: 1,
-      externalImports: [
-        `${normalizeSourceFileUrl(helperUrl)!}::sharedFn`,
-      ],
-      handlers: { consumerFn: [consumerImpl.filename] },
-      styles: {},
-    };
-
-    // Replace the in-memory function body so `fn.toString()` differs and
-    // forces a content-driven rename. This mirrors what `deno run` does
-    // implicitly when the source file is reloaded — a different closure
-    // is captured, with different stringified code.
-    (helperImpl as unknown as { fn: () => void }).fn = function sharedFn(
-      this: HTMLElement,
-    ) {
-      console.log("v2 - completely different body");
-    };
-
-    await lazyRevalidate(helperImpl);
-
-    assertNotEquals(
-      helperImpl.filename,
-      initialHelperFilename,
-      "helper filename must change when its content hash shifts",
-    );
-
-    await cleanupTestDirs();
-  },
-  sanitizeOps: false,
-  sanitizeResources: false,
-});
-
-Deno.test({
-  name:
-    "lazy rebuild - consumer's import registry is synced to imported handler's new filename",
-  async fn() {
-    await cleanupTestDirs();
-    resetRegistries();
-
-    const helperUrl = await writeFakeSource("helper", "// v1");
-    const consumerUrl = await writeFakeSource("consumer", "// v1");
-
-    const helper = new Handlers(helperUrl, {
-      sharedFn(this: HTMLElement) {
-        console.log("v1 body");
-      },
-    });
-    const _consumer = new Handlers(consumerUrl, { imports: [helper] }, {
-      consumerFn(this: HTMLElement) {
-        // Reference the imported symbol so the build emits the import
-        // line and the imports fingerprint includes the helper's filename.
-        // @ts-ignore - sharedFn is provided by the emitted import line
+        // @ts-ignore - sharedFn is provided by the emitted import
         sharedFn();
-        console.log("consumer v1");
       },
-    });
-    void _consumer;
-
-    const helperImpl = getImpl(helperUrl, "sharedFn");
-    const consumerImpl = getImpl(consumerUrl, "consumerFn");
-
-    // Initial build pass for both
-    await lazyRevalidate(helperImpl);
-    await lazyRevalidate(consumerImpl);
-
-    const oldHelperFilename = helperImpl.filename;
-
-    // Mutate helper's function body so its hash genuinely shifts on
-    // next revalidate.
-    await touchFakeSource(helperUrl, "// v2");
-    const helperKey = normalizeSourceFileUrl(helperUrl)!;
-    const consumerKey = normalizeSourceFileUrl(consumerUrl)!;
-    cache.files[helperKey] ??= {
-      mtimeMs: 1,
-      externalImports: [],
-      handlers: { sharedFn: [oldHelperFilename] },
-      styles: {},
-    };
-    cache.files[consumerKey] ??= {
-      mtimeMs: 1,
-      externalImports: [`${helperKey}::sharedFn`],
-      handlers: { consumerFn: [consumerImpl.filename] },
-      styles: {},
-    };
-
-    (helperImpl as unknown as { fn: () => void }).fn = function sharedFn(
-      this: HTMLElement,
-    ) {
-      console.log("v2 different body");
-    };
-
-    // Drive the consumer's revalidate — its `revalidateExternalImports`
-    // hook must walk the helper, rehash it, and update the consumer's
-    // local import registry to the helper's new filename.
-    await lazyRevalidate(consumerImpl);
-
-    assertNotEquals(
-      helperImpl.filename,
-      oldHelperFilename,
-      "helper should have been rehashed by external-imports walk",
-    );
-
-    const consumerRegistry = getImportRegistry(consumerKey);
-    assertEquals(
-      consumerRegistry.get("sharedFn"),
-      helperImpl.filename,
-      "consumer's import registry must point at the helper's new filename",
-    );
-
-    // The consumer's emitted file must reference the new helper filename.
-    const consumerPath = `${TEST_HANDLER_DIR}/${consumerImpl.filename}.js`;
-    await assertConsumerImports(consumerPath, helperImpl.filename);
-
-    await cleanupTestDirs();
-  },
-  sanitizeOps: false,
-  sanitizeResources: false,
-});
-
-Deno.test({
-  name:
-    "lazy rebuild - consumer's OWN filename changes when an imported handler renames (cache busting)",
-  async fn() {
-    await cleanupTestDirs();
-    resetRegistries();
-
-    const helperUrl = await writeFakeSource("helper", "// v1");
-    const consumerUrl = await writeFakeSource("consumer", "// v1");
-
-    const helper = new Handlers(helperUrl, {
-      sharedFn(this: HTMLElement) {
-        console.log("v1 body");
-      },
-    });
-    const _consumer = new Handlers(consumerUrl, { imports: [helper] }, {
-      consumerFn(this: HTMLElement) {
-        // Reference helper so the emitted file actually imports it and
-        // the consumer's filename hash includes helper's filename.
-        // @ts-ignore - sharedFn is provided by the emitted import line
-        sharedFn();
-        console.log("consumer body \u2014 does not change");
-      },
-    });
-    void _consumer;
-
-    const helperImpl = getImpl(helperUrl, "sharedFn");
-    const consumerImpl = getImpl(consumerUrl, "consumerFn");
-
-    await lazyRevalidate(helperImpl);
-    await lazyRevalidate(consumerImpl);
-
-    const oldHelperFilename = helperImpl.filename;
-    const oldConsumerFilename = consumerImpl.filename;
-
-    // Edit ONLY the helper.
-    await touchFakeSource(helperUrl, "// v2");
-    const helperKey = normalizeSourceFileUrl(helperUrl)!;
-    const consumerKey = normalizeSourceFileUrl(consumerUrl)!;
-    cache.files[helperKey] ??= {
-      mtimeMs: 1,
-      externalImports: [],
-      handlers: { sharedFn: [oldHelperFilename] },
-      styles: {},
-    };
-    cache.files[consumerKey] ??= {
-      mtimeMs: 1,
-      externalImports: [`${helperKey}::sharedFn`],
-      handlers: { consumerFn: [oldConsumerFilename] },
-      styles: {},
-    };
-
-    (helperImpl as unknown as { fn: () => void }).fn = function sharedFn(
-      this: HTMLElement,
-    ) {
-      console.log("v2 totally different body");
-    };
-
-    // The consumer's body did NOT change, but its imports did. Its
-    // filename hash MUST shift so the browser cannot serve a stale
-    // cached `consumer_oldhash.js` that internally references
-    // `helper_oldhash.js`.
-    await lazyRevalidate(consumerImpl);
-
-    assertNotEquals(
-      helperImpl.filename,
-      oldHelperFilename,
-      "helper must rename",
-    );
-    assertNotEquals(
-      consumerImpl.filename,
-      oldConsumerFilename,
-      "consumer must also rename so the browser cache busts on the consumer URL",
-    );
-
-    // Both new files must exist on disk.
-    const helperPath = `${TEST_HANDLER_DIR}/${helperImpl.filename}.js`;
-    const consumerPath = `${TEST_HANDLER_DIR}/${consumerImpl.filename}.js`;
-    assertExists(await Deno.stat(helperPath));
-    assertExists(await Deno.stat(consumerPath));
-
-    // The new consumer file must reference the new helper filename.
-    await assertConsumerImports(consumerPath, helperImpl.filename);
-
-    // The OLD on-disk files must have been removed so they cannot be
-    // served stale.
-    let oldHelperGone = false;
-    try {
-      await Deno.stat(`${TEST_HANDLER_DIR}/${oldHelperFilename}.js`);
-    } catch {
-      oldHelperGone = true;
-    }
-    assert(oldHelperGone, "old helper file should be removed on rename");
-
-    let oldConsumerGone = false;
-    try {
-      await Deno.stat(`${TEST_HANDLER_DIR}/${oldConsumerFilename}.js`);
-    } catch {
-      oldConsumerGone = true;
-    }
-    assert(oldConsumerGone, "old consumer file should be removed on rename");
-
-    await cleanupTestDirs();
-  },
-  sanitizeOps: false,
-  sanitizeResources: false,
-});
-
-Deno.test({
-  name: "lazy rebuild - no-op when nothing changed (idempotent rebuild pass)",
-  async fn() {
-    await cleanupTestDirs();
-    resetRegistries();
-
-    const helperUrl = await writeFakeSource("helper", "// v1");
-    const consumerUrl = await writeFakeSource("consumer", "// v1");
-
-    const helper = new Handlers(helperUrl, {
-      sharedFn(this: HTMLElement) {
-        console.log("v1");
-      },
-    });
-    const _consumer = new Handlers(consumerUrl, { imports: [helper] }, {
-      consumerFn(this: HTMLElement) {
-        console.log("consumer");
-      },
-    });
-    void _consumer;
-
-    const helperImpl = getImpl(helperUrl, "sharedFn");
-    const consumerImpl = getImpl(consumerUrl, "consumerFn");
-
-    await lazyRevalidate(helperImpl);
-    await lazyRevalidate(consumerImpl);
-
-    const helperBefore = helperImpl.filename;
-    const consumerBefore = consumerImpl.filename;
-    const helperContent = await Deno.readTextFile(
-      `${TEST_HANDLER_DIR}/${helperBefore}.js`,
-    );
-    const consumerContent = await Deno.readTextFile(
-      `${TEST_HANDLER_DIR}/${consumerBefore}.js`,
-    );
-
-    // Second pass with no source mutations.
-    await lazyRevalidate(helperImpl);
-    await lazyRevalidate(consumerImpl);
-
-    assertEquals(
-      helperImpl.filename,
-      helperBefore,
-      "helper filename should be stable across no-op rebuild",
-    );
-    assertEquals(
-      consumerImpl.filename,
-      consumerBefore,
-      "consumer filename should be stable across no-op rebuild",
-    );
-    assertEquals(
-      await Deno.readTextFile(`${TEST_HANDLER_DIR}/${helperBefore}.js`),
-      helperContent,
-    );
-    assertEquals(
-      await Deno.readTextFile(`${TEST_HANDLER_DIR}/${consumerBefore}.js`),
-      consumerContent,
-    );
-
-    await cleanupTestDirs();
-  },
-  sanitizeOps: false,
-  sanitizeResources: false,
-});
-
-Deno.test({
-  name: "lazy rebuild - sibling changes do not leak into the next pass",
-  async fn() {
-    await cleanupTestDirs();
-    resetRegistries();
-
-    const sourceUrl = await writeFakeSource("siblings", "// v1");
-    new Handlers(sourceUrl, {
-      activateClientRoutes(this: HTMLElement) {
-        console.log("activate", this.tagName);
-      },
-      suspendClientRoutes(this: HTMLElement) {
-        console.log("suspend", this.tagName);
-      },
-    });
-
-    const activateImpl = getImpl(sourceUrl, "activateClientRoutes");
-    const suspendImpl = getImpl(sourceUrl, "suspendClientRoutes");
-    await lazyRevalidate(activateImpl);
-
-    await touchFakeSource(sourceUrl, "// v2");
-    (suspendImpl as unknown as { fn: () => void }).fn =
-      function suspendClientRoutes(this: HTMLElement) {
-        console.log("suspend changed", this.tagName);
-      };
-    await lazyRevalidate(activateImpl);
-
-    const rebuilt = await lazyRevalidate(activateImpl);
-
-    assertEquals(
-      rebuilt,
-      false,
-      "an unchanged handler must not rebuild because a sibling changed in a completed pass",
-    );
-
-    await cleanupTestDirs();
-  },
-  sanitizeOps: false,
-  sanitizeResources: false,
-});
-
-Deno.test({
-  name:
-    "lazy rebuild - editing only the consumer file does not rehash the imported helper",
-  async fn() {
-    await cleanupTestDirs();
-    resetRegistries();
-
-    const helperUrl = await writeFakeSource("helper", "// v1");
-    const consumerUrl = await writeFakeSource("consumer", "// v1");
-
-    const helper = new Handlers(helperUrl, {
-      sharedFn(this: HTMLElement) {
-        console.log("helper-v1 body");
-      },
-    });
-    const _consumer = new Handlers(consumerUrl, { imports: [helper] }, {
-      consumerFn(this: HTMLElement) {
-        console.log("consumer v1");
-      },
-    });
-    void _consumer;
-
-    const helperImpl = getImpl(helperUrl, "sharedFn");
-    const consumerImpl = getImpl(consumerUrl, "consumerFn");
-
-    await lazyRevalidate(helperImpl);
-    await lazyRevalidate(consumerImpl);
-    const helperBefore = helperImpl.filename;
-    const consumerBefore = consumerImpl.filename;
-
-    // Edit only consumer.
-    await touchFakeSource(consumerUrl, "// v2");
-    const helperKey = normalizeSourceFileUrl(helperUrl)!;
-    const consumerKey = normalizeSourceFileUrl(consumerUrl)!;
-    cache.files[helperKey] ??= {
-      mtimeMs: 1,
-      externalImports: [],
-      handlers: { sharedFn: [helperBefore] },
-      styles: {},
-    };
-    cache.files[consumerKey] ??= {
-      mtimeMs: 1,
-      externalImports: [`${helperKey}::sharedFn`],
-      handlers: { consumerFn: [consumerBefore] },
-      styles: {},
-    };
-
-    (consumerImpl as unknown as { fn: () => void }).fn = function consumerFn(
-      this: HTMLElement,
-    ) {
-      // Reference the imported `sharedFn` symbol so esbuild does NOT
-      // dead-code-eliminate the generated import line. The string is
-      // captured into the module scope by the wrapper code emitted in
-      // `buildHandlerCode`.
-      // @ts-ignore — sharedFn is provided by the emitted import line
-      sharedFn();
-      console.log("consumer v2 — completely new body");
-    };
-
-    await lazyRevalidate(consumerImpl);
-
-    assertNotEquals(
-      consumerImpl.filename,
-      consumerBefore,
-      "consumer must rename when its own body changes",
-    );
-    assertEquals(
-      helperImpl.filename,
-      helperBefore,
-      "helper must NOT rename when its own source is unchanged",
-    );
-
-    // Consumer's emitted file should still reference the (unchanged) helper.
-    await assertConsumerImports(
-      `${TEST_HANDLER_DIR}/${consumerImpl.filename}.js`,
-      helperImpl.filename,
-    );
-
-    await cleanupTestDirs();
-  },
-  sanitizeOps: false,
-  sanitizeResources: false,
-});
-
-Deno.test({
-  name:
-    "lazy rebuild - multi-hop import chain cascades renames from leaf to root",
-  async fn() {
-    await cleanupTestDirs();
-    resetRegistries();
-
-    // chain: leaf <- mid <- root
-    const leafUrl = await writeFakeSource("leaf", "// v1");
-    const midUrl = await writeFakeSource("mid", "// v1");
-    const rootUrl = await writeFakeSource("root", "// v1");
-
-    const leaf = new Handlers(leafUrl, {
-      leafFn(this: HTMLElement) {
-        console.log("leaf v1");
-      },
-    });
-    const mid = new Handlers(midUrl, { imports: [leaf] }, {
-      midFn(this: HTMLElement) {
-        // @ts-ignore - leafFn provided by the emitted import line
-        leafFn();
-        console.log("mid v1");
-      },
-    });
-    const _root = new Handlers(rootUrl, { imports: [mid] }, {
-      rootFn(this: HTMLElement) {
-        // @ts-ignore - midFn provided by the emitted import line
-        midFn();
-        console.log("root v1");
-      },
-    });
-    void _root;
-
-    const leafImpl = getImpl(leafUrl, "leafFn");
-    const midImpl = getImpl(midUrl, "midFn");
-    const rootImpl = getImpl(rootUrl, "rootFn");
-
-    // Initial build for all three.
-    await lazyRevalidate(leafImpl);
-    await lazyRevalidate(midImpl);
-    await lazyRevalidate(rootImpl);
-
-    const leafBefore = leafImpl.filename;
-    const midBefore = midImpl.filename;
-    const rootBefore = rootImpl.filename;
-
-    // Edit ONLY the leaf.
-    await touchFakeSource(leafUrl, "// v2");
-    const leafKey = normalizeSourceFileUrl(leafUrl)!;
-    const midKey = normalizeSourceFileUrl(midUrl)!;
-    const rootKey = normalizeSourceFileUrl(rootUrl)!;
-    cache.files[leafKey] ??= {
-      mtimeMs: 1,
-      externalImports: [],
-      handlers: { leafFn: [leafBefore] },
-      styles: {},
-    };
-    cache.files[midKey] ??= {
-      mtimeMs: 1,
-      externalImports: [`${leafKey}::leafFn`],
-      handlers: { midFn: [midBefore] },
-      styles: {},
-    };
-    cache.files[rootKey] ??= {
-      mtimeMs: 1,
-      externalImports: [`${midKey}::midFn`],
-      handlers: { rootFn: [rootBefore] },
-      styles: {},
-    };
-
-    (leafImpl as unknown as { fn: () => void }).fn = function leafFn(
-      this: HTMLElement,
-    ) {
-      console.log("leaf v2 totally different");
-    };
-
-    // Request only the root — the cascade must propagate through mid
-    // down to leaf and back up.
-    await lazyRevalidate(rootImpl);
-
-    assertNotEquals(leafImpl.filename, leafBefore, "leaf must rename");
-    assertNotEquals(midImpl.filename, midBefore, "mid must rename");
-    assertNotEquals(rootImpl.filename, rootBefore, "root must rename");
-
-    // The whole chain must reference the new downstream filenames.
-    await assertConsumerImports(
-      `${TEST_HANDLER_DIR}/${midImpl.filename}.js`,
-      leafImpl.filename,
-    );
-    await assertConsumerImports(
-      `${TEST_HANDLER_DIR}/${rootImpl.filename}.js`,
-      midImpl.filename,
-    );
-
-    await cleanupTestDirs();
-  },
-  sanitizeOps: false,
-  sanitizeResources: false,
-});
-
-Deno.test({
-  name:
-    "lazy rebuild - sibling consumer that does NOT import the helper is unaffected",
-  async fn() {
-    await cleanupTestDirs();
-    resetRegistries();
-
-    const helperUrl = await writeFakeSource("helper", "// v1");
-    const importerUrl = await writeFakeSource("importer", "// v1");
-    const independentUrl = await writeFakeSource("independent", "// v1");
-
-    const helper = new Handlers(helperUrl, {
-      sharedFn(this: HTMLElement) {
-        console.log("helper v1");
-      },
-    });
-    const _importer = new Handlers(importerUrl, { imports: [helper] }, {
-      importerFn(this: HTMLElement) {
-        // @ts-ignore - sharedFn provided by the emitted import line
-        sharedFn();
-        console.log("importer body");
-      },
-    });
-    const _independent = new Handlers(independentUrl, {
-      independentFn(this: HTMLElement) {
-        console.log("independent — never imports helper");
-      },
-    });
-    void _importer;
-    void _independent;
-
-    const helperImpl = getImpl(helperUrl, "sharedFn");
-    const importerImpl = getImpl(importerUrl, "importerFn");
-    const independentImpl = getImpl(independentUrl, "independentFn");
-
-    await lazyRevalidate(helperImpl);
-    await lazyRevalidate(importerImpl);
-    await lazyRevalidate(independentImpl);
-
-    const helperBefore = helperImpl.filename;
-    const importerBefore = importerImpl.filename;
-    const independentBefore = independentImpl.filename;
-
-    // Edit helper.
-    await touchFakeSource(helperUrl, "// v2");
-    const helperKey = normalizeSourceFileUrl(helperUrl)!;
-    const importerKey = normalizeSourceFileUrl(importerUrl)!;
-    const independentKey = normalizeSourceFileUrl(independentUrl)!;
-    cache.files[helperKey] ??= {
-      mtimeMs: 1,
-      externalImports: [],
-      handlers: { sharedFn: [helperBefore] },
-      styles: {},
-    };
-    cache.files[importerKey] ??= {
-      mtimeMs: 1,
-      externalImports: [`${helperKey}::sharedFn`],
-      handlers: { importerFn: [importerBefore] },
-      styles: {},
-    };
-    cache.files[independentKey] ??= {
-      mtimeMs: 1,
-      externalImports: [],
-      handlers: { independentFn: [independentBefore] },
-      styles: {},
-    };
-
-    (helperImpl as unknown as { fn: () => void }).fn = function sharedFn(
-      this: HTMLElement,
-    ) {
-      console.log("helper v2 different");
-    };
-
-    await lazyRevalidate(importerImpl);
-    await lazyRevalidate(independentImpl);
-
-    assertNotEquals(helperImpl.filename, helperBefore);
-    assertNotEquals(importerImpl.filename, importerBefore);
-    assertEquals(
-      independentImpl.filename,
-      independentBefore,
-      "an independent handler that does not import helper must not rename",
-    );
-
-    await cleanupTestDirs();
-  },
-  sanitizeOps: false,
-  sanitizeResources: false,
-});
-
-Deno.test({
-  name:
-    "lazy rebuild - externalImports is populated by `imports` option even on first build",
-  async fn() {
-    await cleanupTestDirs();
-    resetRegistries();
-
-    const helperUrl = await writeFakeSource("helper", "// v1");
-    const consumerUrl = await writeFakeSource("consumer", "// v1");
-
-    const helper = new Handlers(helperUrl, {
-      sharedFn(this: HTMLElement) {
-        console.log("v1");
-      },
-    });
-    const _consumer = new Handlers(consumerUrl, { imports: [helper] }, {
-      consumerFn(this: HTMLElement) {
-        console.log("consumer");
-      },
-    });
-    void _consumer;
-
-    // Without any rebuild pass having run, the consumer's cache entry
-    // must already contain the externalImports key — otherwise
-    // revalidateExternalImports has nothing to walk on the very first
-    // request and the propagation chain breaks for fresh-start dev
-    // sessions.
-    const consumerKey = normalizeSourceFileUrl(consumerUrl)!;
-    const consumerEntry = cache.files[consumerKey];
-    assertExists(consumerEntry);
-    const helperKey = normalizeSourceFileUrl(helperUrl)!;
-    const expectedImportKey = `${helperKey}::sharedFn`;
-    assert(
-      consumerEntry.externalImports.includes(expectedImportKey),
-      "consumer.externalImports should include the helper key after construction. " +
-        `Got: ${JSON.stringify(consumerEntry.externalImports)}`,
-    );
-
-    await cleanupTestDirs();
-  },
-  sanitizeOps: false,
-  sanitizeResources: false,
-});
-
-// ============================================================================
-// Test Suite: in-file sibling import cascade
-// ============================================================================
-//
-// Regression coverage for a bug where multiple handlers registered
-// against the same source file referenced each other directly (via
-// closure capture in their function bodies), producing a sibling
-// import chain inside one file:
-//
-//   saveNoteSnapshotNow  <- queueNoteSnapshotSave  <- supressChange
-//
-// Editing only the leaf handler's body correctly renamed the leaf and
-// updated the consumer siblings' EMITTED FILE CONTENT to reference the
-// new import filename, but the consumer siblings' OWN filename hashes
-// did not change — so the browser served cached stale bundles whose
-// internal import statements pointed at filenames that no longer
-// existed on disk.
-//
-// Root cause: the dep-aware imports fingerprint only walked
-// `cache.files[...].externalImports` (cross-file imports), ignoring
-// in-file siblings. Additionally, ordering inside the sibling
-// revalidation pass had to be settled with a fixed-point loop so each
-// sibling's hash was computed against finalized peer filenames.
-
-Deno.test({
-  name:
-    "lazy rebuild - in-file sibling import chain cascades renames within one source file",
-  async fn() {
-    await cleanupTestDirs();
-    resetRegistries();
-
-    // All three handlers live in ONE source file. They form a chain:
-    //   leafFn  <- midFn  <- rootFn
-    const sharedUrl = await writeFakeSource("shared", "// v1");
-
-    const _shared = new Handlers(sharedUrl, {
-      leafFn(this: HTMLElement) {
-        console.log("leaf v1 body");
-      },
-      midFn(this: HTMLElement) {
-        // @ts-ignore - sibling reference resolved by build registry
-        leafFn();
-      },
-      rootFn(this: HTMLElement) {
-        // @ts-ignore - sibling reference resolved by build registry
-        midFn();
-      },
-    });
-    void _shared;
-
-    const leafImpl = getImpl(sharedUrl, "leafFn");
-    const midImpl = getImpl(sharedUrl, "midFn");
-    const rootImpl = getImpl(sharedUrl, "rootFn");
-
-    await lazyRevalidate(leafImpl);
-    await lazyRevalidate(midImpl);
-    await lazyRevalidate(rootImpl);
-
-    const leafBefore = leafImpl.filename;
-    const midBefore = midImpl.filename;
-    const rootBefore = rootImpl.filename;
-
-    // Edit the shared source file. Only the leaf's function body
-    // changes; mid and root are byte-identical.
-    await touchFakeSource(sharedUrl, "// v2");
-    const sharedKey = normalizeSourceFileUrl(sharedUrl)!;
-    cache.files[sharedKey] ??= {
-      mtimeMs: 1,
-      externalImports: [],
-      handlers: {
-        leafFn: [leafBefore],
-        midFn: [midBefore],
-        rootFn: [rootBefore],
-      },
-      styles: {},
-    };
-
-    (leafImpl as unknown as { fn: () => void }).fn = function leafFn(
-      this: HTMLElement,
-    ) {
-      console.log("leaf v2 — totally different body");
-    };
-
-    await lazyRevalidate(rootImpl);
-    await lazyRevalidate(midImpl);
-    await lazyRevalidate(leafImpl);
-
-    // All three siblings must rename so the browser cache busts at
-    // every level of the in-file chain.
-    assertNotEquals(
-      leafImpl.filename,
-      leafBefore,
-      "leaf must rename when its body changes",
-    );
-    assertNotEquals(
-      midImpl.filename,
-      midBefore,
-      "mid must rename — it imports leaf via the in-file sibling registry",
-    );
-    assertNotEquals(
-      rootImpl.filename,
-      rootBefore,
-      "root must rename — it imports mid via the in-file sibling registry",
-    );
-
-    // Emitted file content for every consumer sibling must reference
-    // the NEW filename of the sibling it imports.
-    await assertConsumerImports(
-      `${TEST_HANDLER_DIR}/${midImpl.filename}.js`,
-      leafImpl.filename,
-    );
-    await assertConsumerImports(
-      `${TEST_HANDLER_DIR}/${rootImpl.filename}.js`,
-      midImpl.filename,
-    );
-
-    // Old on-disk files must be removed so they cannot be served stale.
-    for (const oldName of [leafBefore, midBefore, rootBefore]) {
-      let gone = false;
+    },
+  );
+  return { helper, consumer };
+}
+
+function lazyTest(name: string, fn: () => Promise<void>) {
+  Deno.test({
+    name: `lazy rebuild - ${name}`,
+    async fn() {
+      await cleanupTestDirs();
+      resetRegistries();
       try {
-        await Deno.stat(`${TEST_HANDLER_DIR}/${oldName}.js`);
-      } catch {
-        gone = true;
+        await fn();
+      } finally {
+        await cleanupTestDirs();
       }
-      assert(gone, `old file ${oldName}.js should have been removed`);
-    }
+    },
+    sanitizeOps: false,
+    sanitizeResources: false,
+  });
+}
 
-    await cleanupTestDirs();
-  },
-  sanitizeOps: false,
-  sanitizeResources: false,
+lazyTest("editing an imported file renames the imported bundle", async () => {
+  const { helper, consumer } = await helperAndConsumer();
+  await lazyRevalidate(consumer);
+  const initial = filename(helper, "sharedFn");
+  assert(initial.startsWith("helper_"));
+
+  edit(helper, "sharedFn", function sharedFn() {
+    console.log("v2 - completely different body");
+  });
+  await lazyRevalidate(consumer);
+
+  assertNotEquals(filename(helper, "sharedFn"), initial);
+  assert(await exists(filename(helper, "sharedFn")));
+  assertEquals(await exists(initial), false, "stale helper bundle removed");
 });
 
-Deno.test({
-  name:
-    "lazy rebuild - in-file sibling rename propagates through an external consumer",
-  async fn() {
-    // Models the dental dialogTemplate.tsx scenario: in-file siblings
-    // form the inner chain, and an external file consumes one of the
-    // top-level siblings. Editing the leaf sibling must cascade through
-    // the in-file chain AND across the file boundary.
-    await cleanupTestDirs();
-    resetRegistries();
+lazyTest(
+  "consumer imports the new helper filename and is itself renamed",
+  async () => {
+    const { helper, consumer } = await helperAndConsumer();
+    await lazyRevalidate(consumer);
+    const initialConsumer = filename(consumer, "consumerFn");
+    assert(initialConsumer.startsWith("consumer_"));
+    assert(
+      (await readBundle(consumer, "consumerFn")).includes(
+        `./${filename(helper, "sharedFn")}.js`,
+      ),
+    );
 
-    const sharedUrl = await writeFakeSource("shared", "// v1");
-    const externalUrl = await writeFakeSource("external", "// v1");
-
-    const shared = new Handlers(sharedUrl, {
-      leafFn(this: HTMLElement) {
-        console.log("leaf v1");
-      },
-      midFn(this: HTMLElement) {
-        // @ts-ignore - sibling
-        leafFn();
-      },
+    edit(helper, "sharedFn", function sharedFn() {
+      console.log("v2 different body");
     });
-    const _external = new Handlers(externalUrl, { imports: [shared] }, {
-      externalFn(this: HTMLElement) {
-        // @ts-ignore - cross-file import
-        midFn();
-      },
-    });
-    void _external;
+    await lazyRevalidate(consumer);
 
-    const leafImpl = getImpl(sharedUrl, "leafFn");
-    const midImpl = getImpl(sharedUrl, "midFn");
-    const externalImpl = getImpl(externalUrl, "externalFn");
-
-    await lazyRevalidate(leafImpl);
-    await lazyRevalidate(midImpl);
-    await lazyRevalidate(externalImpl);
-
-    const leafBefore = leafImpl.filename;
-    const midBefore = midImpl.filename;
-    const externalBefore = externalImpl.filename;
-
-    await touchFakeSource(sharedUrl, "// v2");
-    const sharedKey = normalizeSourceFileUrl(sharedUrl)!;
-    const externalKey = normalizeSourceFileUrl(externalUrl)!;
-    cache.files[sharedKey] ??= {
-      mtimeMs: 1,
-      externalImports: [],
-      handlers: { leafFn: [leafBefore], midFn: [midBefore] },
-      styles: {},
-    };
-    cache.files[externalKey] ??= {
-      mtimeMs: 1,
-      externalImports: [
-        `${sharedKey}::leafFn`,
-        `${sharedKey}::midFn`,
-      ],
-      handlers: { externalFn: [externalBefore] },
-      styles: {},
-    };
-
-    (leafImpl as unknown as { fn: () => void }).fn = function leafFn(
-      this: HTMLElement,
-    ) {
-      console.log("leaf v2 different body");
-    };
-
-    // Request only the external consumer — the cascade must reach all
-    // the way down through the in-file siblings to the leaf and back
-    // up through every consumer at every layer.
-    await lazyRevalidate(externalImpl);
-
-    assertNotEquals(leafImpl.filename, leafBefore, "leaf must rename");
-    assertNotEquals(
-      midImpl.filename,
-      midBefore,
-      "in-file sibling consumer must rename",
+    assertNotEquals(filename(consumer, "consumerFn"), initialConsumer);
+    assert(
+      (await readBundle(consumer, "consumerFn")).includes(
+        `./${filename(helper, "sharedFn")}.js`,
+      ),
     );
-    assertNotEquals(
-      externalImpl.filename,
-      externalBefore,
-      "cross-file consumer must rename",
-    );
-
-    await assertConsumerImports(
-      `${TEST_HANDLER_DIR}/${midImpl.filename}.js`,
-      leafImpl.filename,
-    );
-    await assertConsumerImports(
-      `${TEST_HANDLER_DIR}/${externalImpl.filename}.js`,
-      midImpl.filename,
-    );
-
-    await cleanupTestDirs();
+    assertEquals(await exists(initialConsumer), false);
   },
-  sanitizeOps: false,
-  sanitizeResources: false,
+);
+
+lazyTest("no-op when nothing changed (idempotent rebuild pass)", async () => {
+  const { helper, consumer } = await helperAndConsumer();
+  await lazyRevalidate(consumer);
+  const before = [
+    filename(helper, "sharedFn"),
+    filename(consumer, "consumerFn"),
+  ];
+  const contents = await readBundle(consumer, "consumerFn");
+
+  changedHandlerKeys.clear();
+  await lazyRevalidate(consumer);
+  await lazyRevalidate(consumer, helper);
+
+  assertEquals(
+    [filename(helper, "sharedFn"), filename(consumer, "consumerFn")],
+    before,
+  );
+  assertEquals(await readBundle(consumer, "consumerFn"), contents);
+  assertEquals(changedHandlerKeys.size, 0);
+});
+
+lazyTest("editing only the consumer does not rename the helper", async () => {
+  const { helper, consumer } = await helperAndConsumer();
+  await lazyRevalidate(consumer);
+  const helperName = filename(helper, "sharedFn");
+  const consumerName = filename(consumer, "consumerFn");
+
+  edit(consumer, "consumerFn", function consumerFn() {
+    // @ts-ignore - provided by the emitted import
+    sharedFn();
+    console.log("edited consumer");
+  });
+  await lazyRevalidate(consumer);
+
+  assertEquals(filename(helper, "sharedFn"), helperName);
+  assertNotEquals(filename(consumer, "consumerFn"), consumerName);
+});
+
+lazyTest(
+  "multi-hop import chain cascades renames from leaf to root",
+  async () => {
+    const leaf = new Handlers(await writeFakeSource("leaf"), {
+      leafFn() {
+        return "leaf v1";
+      },
+    });
+    const middle = new Handlers(
+      await writeFakeSource("middle"),
+      { imports: [leaf] },
+      {
+        middleFn() {
+          // @ts-ignore - provided by the emitted import
+          return leafFn();
+        },
+      },
+    );
+    const root = new Handlers(
+      await writeFakeSource("root"),
+      { imports: [middle] },
+      {
+        rootFn() {
+          // @ts-ignore - provided by the emitted import
+          return middleFn();
+        },
+      },
+    );
+    await lazyRevalidate(root);
+    const before = {
+      leaf: filename(leaf, "leafFn"),
+      middle: filename(middle, "middleFn"),
+      root: filename(root, "rootFn"),
+    };
+
+    edit(leaf, "leafFn", function leafFn() {
+      return "leaf v2";
+    });
+    await lazyRevalidate(root);
+
+    assertNotEquals(filename(leaf, "leafFn"), before.leaf);
+    assertNotEquals(filename(middle, "middleFn"), before.middle);
+    assertNotEquals(filename(root, "rootFn"), before.root);
+    assert(
+      (await readBundle(middle, "middleFn")).includes(filename(leaf, "leafFn")),
+    );
+    assert(
+      (await readBundle(root, "rootFn")).includes(filename(middle, "middleFn")),
+    );
+  },
+);
+
+lazyTest(
+  "a consumer that does NOT import the helper is unaffected",
+  async () => {
+    const { helper, consumer } = await helperAndConsumer();
+    const bystander = new Handlers(
+      await writeFakeSource("bystander"),
+      { imports: [helper] },
+      {
+        bystanderFn() {
+          console.log("never calls the helper");
+        },
+      },
+    );
+    await lazyRevalidate(consumer, bystander);
+    const bystanderName = filename(bystander, "bystanderFn");
+
+    edit(helper, "sharedFn", function sharedFn() {
+      console.log("v2");
+    });
+    await lazyRevalidate(consumer, bystander);
+
+    assertEquals(filename(bystander, "bystanderFn"), bystanderName);
+    assertEquals(
+      (await readBundle(bystander, "bystanderFn")).includes("helper_"),
+      false,
+    );
+  },
+);
+
+lazyTest(
+  "in-file sibling bundles reach each other by name and cascade renames",
+  async () => {
+    const shared = await writeFakeSource("shared");
+    const leaf = new Handlers(shared, {
+      leafFn() {
+        return "leaf v1";
+      },
+    });
+    const middle = new Handlers(shared, {
+      middleFn() {
+        // @ts-ignore - provided by the emitted import
+        return leafFn();
+      },
+    });
+    const unrelated = new Handlers(shared, {
+      unrelatedFn() {
+        return "unrelated";
+      },
+    });
+    const external = new Handlers(
+      await writeFakeSource("external"),
+      { imports: [middle] },
+      {
+        externalFn() {
+          // @ts-ignore - provided by the emitted import
+          return middleFn();
+        },
+      },
+    );
+    await lazyRevalidate(external, unrelated);
+    const before = {
+      middle: filename(middle, "middleFn"),
+      unrelated: filename(unrelated, "unrelatedFn"),
+      external: filename(external, "externalFn"),
+    };
+    assert(
+      (await readBundle(middle, "middleFn")).includes(filename(leaf, "leafFn")),
+    );
+
+    edit(leaf, "leafFn", function leafFn() {
+      return "leaf v2";
+    });
+    await lazyRevalidate(external, unrelated);
+
+    assertNotEquals(filename(middle, "middleFn"), before.middle);
+    assertNotEquals(filename(external, "externalFn"), before.external);
+    assertEquals(filename(unrelated, "unrelatedFn"), before.unrelated);
+  },
+);
+
+lazyTest("bundles that import each other hash and build", async () => {
+  const shared = await writeFakeSource("cycle");
+  const ping = new Handlers(shared, {
+    ping(count: number): number {
+      // @ts-ignore - provided by the emitted import
+      return count > 0 ? pong(count - 1) : 0;
+    },
+  });
+  const pong = new Handlers(shared, {
+    pong(count: number): number {
+      // @ts-ignore - provided by the emitted import
+      return count > 0 ? ping(count - 1) + 1 : 0;
+    },
+  });
+  await lazyRevalidate(ping, pong);
+  assert((await readBundle(ping, "ping")).includes(filename(pong, "pong")));
+  assert((await readBundle(pong, "pong")).includes(filename(ping, "ping")));
+  const module = await import(
+    pathToFileURL(
+      `${Deno.cwd()}/${TEST_HANDLER_DIR}/${filename(ping, "ping")}.js`,
+    ).href
+  );
+  assertEquals(module.ping(4), 2);
 });

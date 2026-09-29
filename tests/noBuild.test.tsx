@@ -120,7 +120,7 @@ if (!Deno.args.includes("--none")) {
         const compiled = await import(
           `data:text/javascript,${encodeURIComponent(await dependency.text())}`
         );
-        assertEquals(compiled.default(41), 42);
+        assertEquals(compiled.increment(41), 42);
         const stylePath = html.match(/href="(\/styles\/[^"]+\.css)"/)?.[1];
         assertEquals(typeof stylePath, "string");
         const stylesheet = await app.request(stylePath!);
