@@ -1,9 +1,12 @@
 import type { ActivatedClientFunction } from "./jsx-runtime.ts";
+import { tryGetContext } from "hono/context-storage";
+
+export const CSP_ENABLED_KEY = "tinyToolsCspEnabled";
 
 // export const eventHandlerBody =
 //   'return globalThis.handlers[this.getAttribute("tt-handler-"+event.type)].call(this,event)';
 
-export const eventHandlerBody = "handlers.fn.call(this,event)";
+export const eventHandlerBody = "tiny.runHandler(this,event)";
 
 declare const handlerReferenceBrand: unique symbol;
 
@@ -15,10 +18,12 @@ export type HandlerReference<TName extends string, TFunction> = {
 };
 
 export type HandlerReferences<TFunctions> = {
-  readonly [Name in keyof TFunctions]: HandlerReference<
-    Name & string,
-    TFunctions[Name]
-  >;
+  readonly [Name in keyof TFunctions]:
+    & HandlerReference<
+      Name & string,
+      TFunctions[Name]
+    >
+    & TFunctions[Name];
 };
 
 const referenceDetails = new WeakMap<
@@ -30,21 +35,49 @@ export function handlerReferenceAttributes(
   attributeName: string,
   value: unknown,
 ): Record<string, string> | undefined {
-  const details = typeof value === "object" && value !== null
-    ? referenceDetails.get(value)
-    : undefined;
-  if (!details) return undefined;
   const eventName = /^on([a-z]+)$/i.exec(attributeName)?.[1].toLowerCase();
+  const multiple = Array.isArray(value) && !!eventName;
+  const values = multiple ? value : [value];
+  const references = values.map((reference) =>
+    typeof reference === "object" && reference !== null
+      ? referenceDetails.get(reference)
+      : undefined
+  );
+  if (!multiple && !references[0]) return undefined;
   if (!eventName || eventName === "mount" || eventName === "unmount") {
     throw new TypeError(
       `Handler references cannot be used for ${attributeName}`,
     );
   }
-  const match = /^handlers\.(\w+)\.call\(this, event\)$/.exec(details.resolved);
-  if (!match) throw new TypeError(`Invalid handler reference: ${details.name}`);
+  const handlerNames = references.map((details) => {
+    if (!details) {
+      throw new TypeError(
+        "Expected an imported handler reference in event handler array",
+      );
+    }
+    const match = /^handlers\.(\w+)\.call\(this, event\)$/.exec(
+      details.resolved,
+    );
+    if (!match) {
+      throw new TypeError(`Invalid handler reference: ${details.name}`);
+    }
+    return match[1];
+  });
+  if (!handlerNames.length) return {};
+  if (
+    tryGetContext<{ Variables: { [CSP_ENABLED_KEY]: boolean } }>()?.get(
+      CSP_ENABLED_KEY,
+    ) === false
+  ) {
+    return {
+      [attributeName]: references.map((details) => details!.resolved).join(
+        "; ",
+      ),
+    };
+  }
   return {
     [`on${eventName}`]: eventHandlerBody,
-    [`tt-handler-${eventName}`]: match[1],
+    [`tt-handler-${eventName}`]: handlerNames.join(" "),
   };
 }
 

@@ -1,745 +1,91 @@
-/**
- * Hono Factory module for @tinytools/hono-tools
- *
- * Provides setup functions and middleware for enhancing Hono apps with
- * Handlers and Styles (client-side functions and scoped styles).
- *
- * @module
- */
-
+/** Hono middleware and request rendering for TinyTools. */
 import { Hono as HonoBase } from "hono";
+import type { Context, MiddlewareHandler } from "hono";
 import type { BlankEnv, Env } from "hono/types";
 import type { HonoOptions } from "hono/hono-base";
-import type { Context, MiddlewareHandler } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { raw } from "hono/html";
 import type { Child } from "hono/jsx";
+import { contextStorage } from "hono/context-storage";
+import { jsxRenderer } from "hono/jsx-renderer";
+import type { JSX } from "hono/jsx/jsx-runtime";
 import {
-  contextStorage,
-  getContext as honoGetContext,
-} from "hono/context-storage";
-import {
-  type ActivatedClientTools,
-  type ClientTools,
   Handlers,
-  imports as importTools,
-  NewHandlers,
-  resolveToolAccessFromChain,
+  imports,
+  memoryAssets,
+  memoryBuild,
   setGeneratedFilenameHashLength,
   setGeneratedHandlerHashLength,
   setGeneratedStyleHashLength,
+  Signals,
+  Store,
   Styles,
-  type ToolResolutionTarget,
 } from "./clientTools.ts";
 import { getContextTitle } from "./titled.ts";
-import type { ActivateClientFunctions } from "./jsx-runtime.ts";
-import { type ActivateScopedStyles, css } from "./scopedStyles.ts";
-import { jsxRenderer } from "hono/jsx-renderer";
+import { css } from "./scopedStyles.ts";
 import { AssetTags } from "./components/AssetTags.tsx";
 import { NewPartial } from "./components/NewPartial.tsx";
-import type { JSX } from "hono/jsx/jsx-runtime";
-import { clientFiles } from "./client/dist/manifest.ts";
-import { addStream, removeStream, trackConnectedClients } from "./sse.ts";
-import { readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
-import type { PartialAbortableHTMLElement } from "./client/wc-lifecycleAbortable.ts";
-import {
-  createEvents,
-  createHandlerReferences,
-  type Events,
-  type HandlerReferences,
-} from "./eventAttributes.ts";
-
-export type { PartialAbortableHTMLElement };
-
-/** URL prefix for package-provided client scripts */
-export const TINYTOOLS_CLIENT_PREFIX = "/_tinytools";
+import { CSP_ENABLED_KEY, eventHandlerBody } from "./eventAttributes.ts";
 
 const ROUTE_LAYOUT_APPLIED_KEY = "tinyToolsRouteLayoutApplied";
+const runHandlerScript = `${runHandler.toString()}; const tiny = {runHandler};`;
 
-// Pre-resolve URLs for all package client files (works for both file:// and https://)
-const packageClientFileUrls = new Map<string, string>();
-for (const file of clientFiles) {
-  packageClientFileUrls.set(file, import.meta.resolve(`./client/dist/${file}`));
-}
+export type RouteLayoutProps = { children: Child };
+type RouteLayoutComponent = (
+  props: RouteLayoutProps,
+  context: Context,
+) => JSX.Element | Promise<JSX.Element>;
 
-// ============================================================================
-// Type Helpers
-// ============================================================================
-
-// deno-lint-ignore no-explicit-any
-type AnyClientTools = ClientTools<any, any, any>;
-
-/** Extract raw functions type from ClientTools */
-// deno-lint-ignore no-explicit-any
-type ExtractFunctions<T> = T extends ClientTools<infer F, any, any> ? F
-  : object;
-
-/** Extract raw styles type from ClientTools */
-// deno-lint-ignore no-explicit-any
-type ExtractStyles<T> = T extends ClientTools<any, infer S, any> ? S : object;
-
-/**
- * Infer the activated tools type from a ClientTools instance.
- * Use this for optional ContextVariableMap augmentation or manual type imports.
- *
- * @example
- * ```ts
- * // Optional: augment ContextVariableMap for typed c.var.tools
- * declare module "hono" {
- *   interface ContextVariableMap {
- *     tools: InferTools<typeof myTools>;
- *   }
- * }
- *
- * // Or import for manual typing
- * import type { InferTools } from "@tinytools/hono-tools";
- * type MyTools = InferTools<typeof myTools>;
- * ```
- */
-export type InferTools<T extends AnyClientTools> = T extends // deno-lint-ignore no-explicit-any
-ClientTools<infer F, infer S, any> ? ActivatedClientTools<F, S>
-  : never;
-
-/**
- * Helper to extract all functions from a tools intersection.
- * Works with RawToolsType, MergedToolsAccess, or intersections thereof.
- * Returns object when property doesn't exist instead of never.
- */
-type ExtractAllFunctions<T> = T extends { __functions: infer F } ? F : object;
-
-/**
- * Helper to extract all styles from a tools intersection.
- * Works with RawToolsType, MergedToolsAccess, or intersections thereof.
- * Returns object when property doesn't exist instead of never.
- */
-type ExtractAllStyles<T> = T extends { __styles: infer S } ? S : object;
-
-/**
- * Raw tools type for middleware - stores raw F/S types in __functions/__styles.
- * When intersected, these phantom properties merge correctly.
- */
-interface RawToolsType<TFunctions, TStyles> {
-  readonly events: Events<TFunctions>;
-  readonly handlers: HandlerReferences<TFunctions>;
-  /** Phantom property for type merging - stores function types */
-  readonly __functions: TFunctions;
-  /** Phantom property for type merging - stores style types */
-  readonly __styles: TStyles;
-  /**
-   * Access functions - type comes from __functions.
-   */
-  readonly fn: ActivateClientFunctions<TFunctions>;
-  /**
-   * Access styles - type comes from __styles.
-   */
-  readonly styled: ActivateScopedStyles<TStyles>;
-  /**
-   * Extend with local tools. Returns typed access to all merged functions and styles.
-   * Uses `this` to capture the actual object type (including any intersections),
-   * then extracts __functions/__styles from it.
-   */
-  extendWithImports<TLocalTools extends [AnyClientTools, ...AnyClientTools[]]>(
-    ...localTools: TLocalTools
-  ): Promise<
-    MergedToolsAccess<
-      TFunctions,
-      TStyles,
-      TLocalTools
-    >
-  >;
-}
-
-/**
- * Result of extend - provides typed access to merged functions and styles.
- */
-type MergedToolsAccess<
-  TAccumulatedFunctions,
-  TAccumulatedStyles,
-  TLocalTools extends AnyClientTools[],
-> = {
-  readonly handlers: HandlerReferences<
-    & TAccumulatedFunctions
-    & UnionToIntersection<ExtractFunctions<TLocalTools[number]>>
-  >;
-  readonly events: Events<
-    & TAccumulatedFunctions
-    & UnionToIntersection<ExtractFunctions<TLocalTools[number]>>
-  >;
-  readonly __functions:
-    & TAccumulatedFunctions
-    & UnionToIntersection<ExtractFunctions<TLocalTools[number]>>;
-  readonly __styles:
-    & TAccumulatedStyles
-    & UnionToIntersection<ExtractStyles<TLocalTools[number]>>;
-  readonly fn: ActivateClientFunctions<
-    & TAccumulatedFunctions
-    & UnionToIntersection<ExtractFunctions<TLocalTools[number]>>
-  >;
-  readonly styled: ActivateScopedStyles<
-    TAccumulatedStyles & UnionToIntersection<ExtractStyles<TLocalTools[number]>>
-  >;
-  extendWithImports<TNextTools extends [AnyClientTools, ...AnyClientTools[]]>(
-    ...localTools: TNextTools
-  ): Promise<
-    MergedToolsAccess<
-      & TAccumulatedFunctions
-      & UnionToIntersection<ExtractFunctions<TLocalTools[number]>>,
-      & TAccumulatedStyles
-      & UnionToIntersection<ExtractStyles<TLocalTools[number]>>,
-      TNextTools
-    >
-  >;
-};
-
-/** Convert ClientTools to RawToolsType for middleware typing */
-type InferRawTools<T extends AnyClientTools> = T extends // deno-lint-ignore no-explicit-any
-ClientTools<infer F, infer S, any> ? RawToolsType<F, S>
-  : never;
-
-// Helper type to convert union to intersection
-// deno-lint-ignore no-explicit-any
-type UnionToIntersection<U> = (U extends any ? (k: U) => void : never) extends
-  ((k: infer I) => void) ? I : never;
-
-/** Extract merged functions from RawToolsType intersection */
-type ExtractMergedFunctions<T> = T extends { __functions: infer F } ? F : never;
-
-/** Extract merged styles from RawToolsType intersection */
-type ExtractMergedStyles<T> = T extends { __styles: infer S } ? S : never;
-
-// Helper type to combine tools array into merged raw tools
-type CombinedToolsRaw<T extends AnyClientTools[]> = UnionToIntersection<
-  { [K in keyof T]: InferRawTools<T[K]> }[number]
->;
-
-type CombinedTools<T extends AnyClientTools[]> = RawToolsType<
-  ExtractMergedFunctions<CombinedToolsRaw<T>>,
-  ExtractMergedStyles<CombinedToolsRaw<T>>
->;
-
-/**
- * Base type for tools when no type parameter is provided to getTools().
- * Provides the extendWithImports() method for adding local tools.
- * Uses `this` type parameter to preserve accumulated types from middleware.
- */
-export type BaseTools = {
-  /** Phantom property for type merging - stores function types */
-  readonly __functions?: unknown;
-  /** Phantom property for type merging - stores style types */
-  readonly __styles?: unknown;
-  /**
-   * Extend with component-local tools.
-   * Returns a typed tools object that merges accumulated types with local tools.
-   * Uses `this` to properly infer accumulated types from middleware.
-   */
-  extendWithImports<
-    TSelf,
-    TLocalTools extends [AnyClientTools, ...AnyClientTools[]],
-  >(
-    this: TSelf,
-    ...localTools: TLocalTools
-  ): Promise<
-    MergedToolsAccess<
-      ExtractAllFunctions<TSelf>,
-      ExtractAllStyles<TSelf>,
-      TLocalTools
-    >
-  >;
-};
-
-/**
- * Helper type for augmenting Hono's ContextVariableMap with TinyTools.
- * Merges your custom variables with the required `tools` property.
- *
- * @example
- * ```ts
- * type Variables = {
- *   user: User;
- *   session: Session;
- * };
- *
- * declare module "hono" {
- *   interface ContextVariableMap extends TinyToolsVariables<Variables> {}
- * }
- * ```
- */
-export type TinyToolsVariables<V = object> = V & { tools: BaseTools };
-
-/**
- * Get tools from the current request context.
- * Primary API for accessing ClientTools in components.
- *
- * @example Without type parameter - local tools only
- * ```tsx
- * // Returns BaseTools - extendWithImports() returns only local tool types
- * const { fn } = getTools().extendWithImports(localTools);
- * ```
- *
- * @example With ancestor tools
- * ```tsx
- * import type { globalTools } from "./main.tsx";
- *
- * // Returns typed tools with ancestors, extendWithImports() merges local + ancestors
- * const { fn } = getTools<[typeof globalTools]>().extendWithImports(localTools);
- * ```
- *
- * @example With multiple ancestor tools
- * ```tsx
- * import type { globalTools } from "./main.tsx";
- * import type { parentTools } from "./parent.tsx";
- *
- * // Combine multiple ancestor tools
- * const { fn } = getTools<[typeof parentTools, typeof globalTools]>().extendWithImports(localTools);
- * ```
- */
-export function getTools<
-  TAncestorTools extends AnyClientTools[] | undefined = undefined,
->(): TAncestorTools extends AnyClientTools[] ? CombinedTools<TAncestorTools>
-  : BaseTools {
-  const c = honoGetContext<{ Variables: { tools: BaseTools } }>();
-  return c.var.tools as TAncestorTools extends AnyClientTools[]
-    ? CombinedTools<TAncestorTools>
-    : BaseTools;
-}
-
-// ============================================================================
-// sharedImports middleware implementation
-// ============================================================================
-
-/**
- * Create a typed middleware that extends tools with one or more local tools.
- * The local tools type is automatically inferred and merged by Hono's `.use()`.
- *
- * @example Root route (no ancestors):
- * ```ts
- * const localHandlers = new tiny.Handlers(import.meta.url, {
- *   handleClick() { console.log("clicked"); },
- * });
- *
- * export const route = new Hono()
- *   .use(tiny.middleware.sharedImports(localHandlers))
- *   .get("/", (c) => {
- *     const { fn } = c.var.tools;  // Fully typed!
- *     return c.render(<div onClick={fn.handleClick}>Click</div>);
- *   });
- * ```
- *
- * @example Root route with multiple tool groups:
- * ```ts
- * export const route = new Hono()
- *   .use(tiny.middleware.sharedImports(localStyles, localHandlers))
- *   .get("/", (c) => {
- *     c.var.tools.fn.handleClick;
- *     c.var.tools.styled.panel;
- *   });
- * ```
- *
- * @example Child route with ancestor tools:
- * ```tsx
- * import type { globalTools } from "./main.tsx";
- * import type { localTools as parentTools } from "./parent.tsx";
- *
- * const localHandlers = new tiny.Handlers(import.meta.url, {
- *   localHandler() {},
- * });
- *
- * // Only specify ancestors - localTools type is inferred from tiny.middleware.sharedImports!
- * export const route = new Hono<withAncestors<[typeof parentTools, typeof globalTools]>>()
- *   .use(tiny.middleware.sharedImports(localHandlers))
- *   .get("/", (c) => {
- *     c.var.tools.fn.localHandler;   // Inferred from tiny.middleware.sharedImports
- *     c.var.tools.fn.parentHandler;  // From ancestors
- *     c.var.tools.fn.globalHandler;  // From ancestors
- *   });
- * @example Without tools (just declares BaseTools for type inference):
- * ```tsx
- * export const route = new Hono()
- *   .use(tiny.middleware.sharedImports())  // Declares tools: BaseTools for downstream handlers
- *   .get("/", (c) => {
- *     const { fn } = c.var.tools.extendWithImports(localTools);
- *   });
- * ```
- */
-function createSharedImportsMiddleware(): MiddlewareHandler<
-  { Variables: { tools: BaseTools } }
->;
-function createSharedImportsMiddleware<
-  const TTools extends [AnyClientTools, ...AnyClientTools[]],
->(
-  ...tools: TTools
-): MiddlewareHandler<{ Variables: { tools: CombinedTools<TTools> } }>;
-function createSharedImportsMiddleware(
-  ...tools: AnyClientTools[]
-  // deno-lint-ignore no-explicit-any
-): MiddlewareHandler<any> {
-  return async (c, next) => {
-    if (tools.length > 0) {
-      const toolsToExtend = tools as [AnyClientTools, ...AnyClientTools[]];
-      // Ensure deferred build runs for tools accessed via c.var.tools (without engage())
-      await Promise.all(
-        toolsToExtend.map(
-          // deno-lint-ignore no-explicit-any
-          (tool) => (tool as any).ensureBuilt(),
-        ),
-      );
-      const currentTools = c.var.tools as BaseTools;
-      c.set(
-        "tools",
-        // deno-lint-ignore no-explicit-any
-        await currentTools.extendWithImports(...toolsToExtend) as any,
-      );
-    }
-    await next();
-  };
-}
-
-/**
- * Pre-render layout JSX to ensure all tools/styles are registered before
- * the root middleware's AssetTags renders.
- *
- * In nested jsxRenderer middleware, the return JSX renders AFTER the parent
- * middleware's JSX (where AssetTags lives). This function pre-renders the
- * layout JSX to a string, which triggers all component renders and tool
- * registrations, then returns it as raw HTML.
- *
- * This is more convenient than `preregisterTools` because:
- * - Works automatically with any components the layout uses
- * - No need to manually track which tools each component needs
- * - Just wrap your return JSX once
- *
- * @example
- * ```tsx
- * jsxRenderer(({ children, Layout, title }) => {
- *   // Instead of manually preregistering tools:
-/**
- * Register layout tools/styles by doing a dummy render.
- * Takes a render function that receives children placeholder, runs it once
- * to trigger tool/style registration, then discards the result.
- *
- * @param renderLayout - Function that takes children placeholder and returns layout JSX
- *
- * @example
- * ```tsx
- * jsxRenderer(async ({ children, Layout, title }) => {
- *   if (partialNav) return <>{children}</>;
- *
- *   // Dummy render to register TwoColumnSplit's tools/styles
- *   await withLayoutTools((content) => (
- *     <TwoColumnSplit contentPanelChildren={content}>
- *       <Navigation ... />
- *     </TwoColumnSplit>
- *   ));
- *
- *   // Return actual JSX normally
- *   return (
- *     <Layout title={title}>
- *       <TwoColumnSplit contentPanelChildren={children}>
- *         <Navigation ... />
- *       </TwoColumnSplit>
- *     </Layout>
- *   );
- * })
- * ```
- */
-export async function withLayoutTools(
-  renderLayout: (children: Child) => JSX.Element | Promise<JSX.Element>,
-): Promise<void> {
-  // Dummy render with null to register tools/styles
-  (await renderLayout(null)).toString();
-}
-
-/**
- * Type for route layout component props
- */
-export type RouteLayoutProps = {
-  children: Child;
-};
-
-/**
- * Create a middleware that wraps routes with a layout component.
- * Handles partial navigation (source-url header) by returning children directly,
- * otherwise wraps children in the provided layout component.
- *
- * The layout is rendered once as a dummy (with empty fragment) to register
- * any tools/styles before the actual render.
- *
- * @param LayoutComponent - A JSX component that receives children and context
- *
- * @example With a simple component
- * ```tsx
- * const MyLayout = ({ children }: { children: Child }) => (
- *   <TwoColumnSplit contentPanelChildren={children}>
- *     <nav>Sidebar</nav>
- *   </TwoColumnSplit>
- * );
- *
- * export const route = new Hono()
- *   .use(addRouteLayout(MyLayout))
- *   .get("/", (c) => c.render(<div>Content</div>));
- * ```
- *
- * @example With inline JSX function
- * ```tsx
- * export const route = new Hono()
- *   .use(tiny.middleware.sharedImports())
- *   .use(addRouteLayout(({ children }, c) => (
- *     <TwoColumnSplit contentPanelChildren={children}>
- *       <nav>Sidebar</nav>
- *     </TwoColumnSplit>
- *   )))
- *   .get("/", (c) => c.render(<div>Content</div>));
- * ```
- */
-export function addRouteLayout<
-  V extends Record<string, unknown> = Record<string, never>,
->(
-  LayoutComponent: (
-    props: RouteLayoutProps,
-    c: Context,
-  ) => JSX.Element | Promise<JSX.Element>,
-): MiddlewareHandler {
-  return createRouteLayout<V>(LayoutComponent, false);
-}
-
-export function addPartialRouteLayout<
-  V extends Record<string, unknown> = Record<string, never>,
->(
-  LayoutComponent: Parameters<typeof addRouteLayout>[0],
-): MiddlewareHandler {
-  return createRouteLayout<V>(LayoutComponent, true);
-}
-
-function createRouteLayout<
-  V extends Record<string, unknown>,
->(
-  LayoutComponent: Parameters<typeof addRouteLayout>[0],
+function createRouteLayout(
+  LayoutComponent: RouteLayoutComponent,
   renderOnPartial: boolean,
 ): MiddlewareHandler {
   // deno-lint-ignore no-explicit-any
-  return jsxRenderer(async ({ children, Layout, title }: any, c: any) => {
-    const sourceUrl = !!c.req.header("source-url");
-    if (!sourceUrl) {
-      c.set(ROUTE_LAYOUT_APPLIED_KEY, true);
-    }
-
-    // Await children to ensure they are rendered
+  return jsxRenderer(async ({ children, Layout, title }: any, context) => {
+    const partialNavigation = !!context.req.header("source-url");
+    if (!partialNavigation) context.set(ROUTE_LAYOUT_APPLIED_KEY, true);
     await children;
-
-    // Partial navigation - return children inside Layout without our route layout
-    if (sourceUrl && !renderOnPartial) {
-      return <Layout title={title}>{children}</Layout>;
-    }
-
-    // Full page navigation - dummy render to register tools/styles defined in the layout
-    await withLayoutTools((content) => (
-      LayoutComponent({ children: content }, c)
-    ));
-
-    // Return actual JSX with layout wrapping children
     return (
       <Layout title={title}>
-        {LayoutComponent({ children }, c)}
+        {partialNavigation && !renderOnPartial
+          ? children
+          : LayoutComponent({ children }, context)}
       </Layout>
     );
-  }, {
-    stream: true,
-  }) as MiddlewareHandler<{ Variables: V & { tools: BaseTools } }>;
+  }, { stream: true });
 }
 
-/**
- * Type helper for Hono generic to declare ancestor tools.
- * Local tools are inferred from tiny.middleware.sharedImports() - only ancestors need to be declared.
- *
- * @example
- * ```tsx
- * // Ancestors only - local type comes from tiny.middleware.sharedImports(localTools)
- * new Hono<withAncestors<[typeof parentTools, typeof globalTools]>>()
- *   .use(tiny.middleware.sharedImports(localTools))
- * ```
- */
-export type withAncestors<TAncestors extends AnyClientTools[]> = {
-  Variables: { tools: CombinedTools<TAncestors> };
-};
-
-// ============================================================================
-// tiny - Opt-in middleware API for Hono apps
-// ============================================================================
-
-/** Internal type for the tools proxy object */
-interface ToolsProxy {
-  events: Events<unknown>;
-  handlers: HandlerReferences<unknown>;
-  fn: unknown;
-  styled: unknown;
-  extendWithImports(...localTools: AnyClientTools[]): Promise<ToolsProxy>;
-}
-
-/**
- * Options for `tiny.middleware.core()` and `tiny.middleware.all()`.
- */
 export type ClientToolsOptions = {
-  /**
-   * Number of hash characters used in generated client function/style filenames.
-   * Valid range is 1-8, values outside range are clamped.
-   */
+  /** Enable CSP and JSX reference transforms. Defaults to true. */
+  csp?: boolean;
+  /** Generated filename hash length, clamped to 1-8. */
   generatedFilenameHashLength?: number;
-  /**
-   * Number of hash characters used in generated client handler filenames.
-   * Valid range is 1-8, values outside range are clamped.
-   */
   generatedHandlerHashLength?: number;
-  /**
-   * Number of hash characters used in generated style filenames and class names.
-   * Valid range is 1-8, values outside range are clamped.
-   */
   generatedStyleHashLength?: number;
-  /**
-   * Static file serving middleware factory. If not provided, auto-detects
-   * the runtime and uses the appropriate Hono adapter.
-   *
-   * - Deno: `import { serveStatic } from "hono/deno"`
-   * - Bun: `import { serveStatic } from "hono/bun"`
-   * - Node: `import { serveStatic } from "@hono/node-server/serve-static"`
-   */
+  /** Runtime-specific static serving adapter; auto-detected when omitted. */
   // deno-lint-ignore no-explicit-any
   serveStatic?: (options: any) => MiddlewareHandler;
 };
 
-/** Options for `tiny.middleware.navApiTools()`. Reserved for future use. */
-export type NavApiToolsOptions = Record<string, never>;
-
-/** Options for `tiny.middleware.sseTools()`. Reserved for future use. */
-export type SseToolsOptions = Record<string, never>;
-
-/** Options for `tiny.middleware.localRoutes()`. Reserved for future use. */
-export type LocalRoutesOptions = Record<string, never>;
-
-/** Options for `tiny.middleware.webComponents()`. Reserved for future use. */
-export type WebComponentsOptions = Record<string, never>;
-
-/**
- * Create a middleware that sets up request-scoped tracking for both
- * functions and styles. Internal use only.
- * @internal
- */
-function createToolsMiddleware(): MiddlewareHandler {
-  return async (c, next) => {
-    // Initialize fresh tracking sets for this request
-    const accessedHandlerFiles = new Set<string>();
-    const accessedStyleFiles = new Set<string>();
-    c.set("accessedHandlerFiles", accessedHandlerFiles);
-    c.set("accessedStyleFiles", accessedStyleFiles);
-
-    // Feature flags set — feature middleware adds entries before rendering
-    c.set("tinyToolsFeatures", new Set<string>());
-
-    // Helper to create a tracking proxy for functions or styles
-    const createTrackingProxy = (
-      tools: ToolResolutionTarget,
-      type: "function" | "style",
-      parentProxy?: unknown,
-    ): unknown => {
-      const accessedFiles = type === "function"
-        ? accessedHandlerFiles
-        : accessedStyleFiles;
-      const extension = type === "function" ? ".js" : ".css";
-
-      return new Proxy(tools, {
-        get(_target, prop, receiver) {
-          const resolved = resolveToolAccessFromChain(
-            [tools],
-            type,
-            prop,
-            (_usageType, filename) => {
-              accessedFiles.add(filename + extension);
-            },
-          );
-
-          if (resolved !== undefined) {
-            return resolved;
-          }
-
-          // Fall through to parent proxy for inherited items
-          if (parentProxy && typeof prop === "string") {
-            const parentValue = (parentProxy as Record<string, unknown>)[prop];
-            if (parentValue !== undefined) {
-              return parentValue;
-            }
-          }
-
-          return Reflect.get(tools as object, prop, receiver);
-        },
-      });
-    };
-
-    // Helper to create the combined tools object
-    const createToolsProxy = (
-      functionsProxy: unknown,
-      stylesProxy: unknown,
-    ): ToolsProxy => ({
-      handlers: createHandlerReferences((name) =>
-        (functionsProxy as Record<string, unknown>)[name]
-      ),
-      events: createEvents((name) =>
-        (functionsProxy as Record<string, unknown>)[name]
-      ),
-      get fn() {
-        return functionsProxy;
-      },
-      get styled() {
-        return stylesProxy;
-      },
-      async extendWithImports(...localTools: AnyClientTools[]) {
-        // Ensure deferred build runs for tools extended at request time
-        await Promise.all(
-          // deno-lint-ignore no-explicit-any
-          localTools.map((t) => (t as any).ensureBuilt()),
-        );
-
-        let nextFunctionsProxy = functionsProxy;
-        let nextStylesProxy = stylesProxy;
-
-        for (const tools of localTools) {
-          nextFunctionsProxy = createTrackingProxy(
-            tools,
-            "function",
-            nextFunctionsProxy,
-          );
-          nextStylesProxy = createTrackingProxy(
-            tools,
-            "style",
-            nextStylesProxy,
-          );
-        }
-
-        return createToolsProxy(
-          nextFunctionsProxy,
-          nextStylesProxy,
-        );
-      },
-    });
-
-    // Create root tools proxy - starts empty, extended via extendWithImports()
-    const emptyTarget: ToolResolutionTarget = {
-      _handlerFilenames: new Map<string, string>(),
-      _styleFilenames: new Map<string, string>(),
-      _styles: new Map(),
-    };
-
-    c.set(
-      "tools",
-      createToolsProxy(
-        createTrackingProxy(emptyTarget, "function"),
-        createTrackingProxy(emptyTarget, "style"),
-      ) as unknown as BaseTools,
-    );
-
+function createCspMiddleware(): MiddlewareHandler {
+  const policy = Promise.all(
+    [runHandlerScript, eventHandlerBody].map(async (source) => {
+      const digest = await crypto.subtle.digest(
+        "SHA-256",
+        new TextEncoder().encode(source),
+      );
+      return btoa(String.fromCharCode(...new Uint8Array(digest)));
+    }),
+  ).then(([scriptHash, eventHash]) => {
+    return `script-src 'self' 'sha256-${scriptHash}'; script-src-attr 'unsafe-hashes' 'sha256-${eventHash}'`;
+  });
+  return async (context, next) => {
     await next();
+    context.header("Content-Security-Policy", await policy);
   };
 }
 
-async function resolveRendererChildren(children: Child) {
+async function resolveRendererChildren(children: Child): Promise<string> {
   try {
     const resolved = await children;
     return resolved == null || typeof resolved === "boolean"
@@ -754,47 +100,8 @@ async function resolveRendererChildren(children: Child) {
   }
 }
 
-/**
- * Middleware that serves pre-built package client JS files from /_tinytools/*.
- * Resolves files via import.meta.resolve so it works for both local and JSR.
- */
-function servePackageClientFiles(): MiddlewareHandler {
-  return async (c, next) => {
-    const path = c.req.path;
-    if (!path.startsWith(TINYTOOLS_CLIENT_PREFIX + "/")) {
-      return next();
-    }
-
-    const fileName = path.slice(TINYTOOLS_CLIENT_PREFIX.length + 1);
-    const resolvedUrl = packageClientFileUrls.get(fileName);
-    if (!resolvedUrl) {
-      return next();
-    }
-
-    if (resolvedUrl.startsWith("file://")) {
-      const content = await readFile(fileURLToPath(resolvedUrl), "utf-8");
-      c.header("Content-Type", "application/javascript; charset=utf-8");
-      c.header("Cache-Control", "public, max-age=31536000, immutable");
-      return c.body(content);
-    } else {
-      const response = await fetch(resolvedUrl);
-      if (!response.ok) return next();
-      c.header("Content-Type", "application/javascript; charset=utf-8");
-      c.header("Cache-Control", "public, max-age=31536000, immutable");
-      return c.body(await response.text());
-    }
-  };
-}
-
-/**
- * Auto-detect the runtime's serveStatic adapter.
- * Tries hono/deno, hono/bun, then @hono/node-server in order.
- * @internal
- */
-
 async function detectServeStatic(): Promise<
-  // deno-lint-ignore no-explicit-any
-  (options: any) => MiddlewareHandler
+  NonNullable<ClientToolsOptions["serveStatic"]>
 > {
   try {
     return (await import("hono/deno")).serveStatic;
@@ -808,87 +115,8 @@ async function detectServeStatic(): Promise<
   } catch { /* not available */ }
   throw new Error(
     "[tiny-tools] No serveStatic adapter found. " +
-      "Pass serveStatic in options: tiny.middleware.all({ serveStatic })",
+      "Pass serveStatic in options: tiny.middleware.core({ serveStatic })",
   );
-}
-
-/**
- * Create a middleware that lazily initializes serveStatic on first request.
- * Uses user-provided serveStatic or auto-detects runtime adapter.
- * @internal
- */
-function createLazyServeStaticMiddleware(
-  // deno-lint-ignore no-explicit-any
-  userServeStatic: ((options: any) => MiddlewareHandler) | undefined,
-  // deno-lint-ignore no-explicit-any
-  staticOptions: any,
-): MiddlewareHandler {
-  let middleware: MiddlewareHandler | null = null;
-  return async (c, next) => {
-    if (!middleware) {
-      const serveStaticFn = userServeStatic ?? await detectServeStatic();
-      middleware = serveStaticFn(staticOptions);
-    }
-    return middleware(c, next);
-  };
-}
-
-/**
- * @internal
- */
-function createFeatureMiddleware(featureName: string): MiddlewareHandler {
-  return async (c, next) => {
-    const features = c.get("tinyToolsFeatures") as Set<string> | undefined;
-    if (features) {
-      features.add(featureName);
-    }
-    await next();
-  };
-}
-
-function createSseFeatureMiddleware(): MiddlewareHandler {
-  return async (c, next) => {
-    const features = c.get("tinyToolsFeatures") as Set<string> | undefined;
-    if (features) {
-      features.add("sse");
-    }
-    await trackConnectedClients(c, next);
-
-    // Default SSE endpoint — only activates if no user-defined route handled it
-    if (
-      c.req.method === "GET" &&
-      c.req.path === "/sse" &&
-      c.res.status === 404
-    ) {
-      const { streamSSE } = await import("hono/streaming");
-      const { getCookie } = await import("hono/cookie");
-      const sseId = getCookie(c, "sseId");
-      if (!sseId) {
-        c.res = c.json({ error: "No SSE ID cookie" }, 400);
-        return;
-      }
-      c.res = streamSSE(c, async (stream) => {
-        c.req.raw.signal.addEventListener("abort", () => {
-          stream.close();
-          removeStream(stream);
-        });
-        addStream({
-          id: sseId,
-          userName: "Unknown",
-          userAgent: c.req.header("user-agent") || "Unknown",
-          stream,
-        });
-        await stream.writeSSE({
-          event: "info",
-          data:
-            "Connected to default SSE endpoint. User tracking is not configured. Define your own /sse route to enable user identification and tracking.",
-        });
-        return new Promise((resolve) => {
-          stream.onAbort(resolve);
-        });
-      });
-    }
-  };
 }
 
 function isImmutablePublicAssetPath(path: string): boolean {
@@ -898,7 +126,6 @@ function isImmutablePublicAssetPath(path: string): boolean {
     : normalizedPath.startsWith("/")
     ? normalizedPath.slice(1)
     : normalizedPath;
-
   return relativePath.startsWith("handlers/") ||
     relativePath.startsWith("styles/");
 }
@@ -907,72 +134,55 @@ function isLikelyAssetRequestPath(path: string): boolean {
   const normalizedPath = path.split("?")[0]?.split("#")[0] ?? "";
   const segments = normalizedPath.split("/");
   if (segments.includes("api")) return false;
-  const lastSegment = segments.at(-1) ?? "";
-  return /\.[a-z0-9]{1,8}$/i.test(lastSegment);
+  return /\.[a-z0-9]{1,8}$/i.test(segments.at(-1) ?? "");
 }
 
 export const headHandler = new Handlers(import.meta.url, {
   importIntoHead: async function (this: HTMLTemplateElement) {
     const head = this.content;
     if (head) {
-      const headChildren = Array.from(head.children);
-      await Promise.all(headChildren.map((child) => {
-        if (child.tagName === "TITLE") {
-          globalThis.document.title = child.textContent ?? "";
-          return;
-        }
-
-        // Check if the element already exists in the head
-        if (child instanceof HTMLScriptElement && child.src) {
-          const srcAttr = child.getAttribute("src");
-          const exists = globalThis.document.head.querySelector(
-            `script[src="${srcAttr}"]`,
-          );
-          if (exists) return;
-        } else if (
-          child instanceof HTMLLinkElement &&
-          child.rel === "stylesheet" &&
-          child.href
-        ) {
-          const hrefAttr = child.getAttribute("href");
-          const exists = globalThis.document.head.querySelector(
-            `link[rel="stylesheet"][href="${hrefAttr}"]`,
-          );
-          if (exists) return;
-          // Return a promise that resolves when stylesheet loads
-          return new Promise<void>((resolve, reject) => {
-            child.onload = () => resolve();
-            child.onerror = () =>
-              reject(new Error(`Failed to load stylesheet: ${hrefAttr}`));
-            globalThis.document.head.appendChild(child);
-          });
-        }
-        globalThis.document.head.appendChild(child);
-      }));
+      await Promise.all(
+        Array.from(head.children).map((child) => {
+          if (child.tagName === "TITLE") {
+            globalThis.document.title = child.textContent ?? "";
+            return;
+          }
+          if (child instanceof HTMLScriptElement && child.src) {
+            const srcAttr = child.getAttribute("src");
+            if (
+              globalThis.document.head.querySelector(`script[src="${srcAttr}"]`)
+            ) return;
+          } else if (
+            child instanceof HTMLLinkElement && child.rel === "stylesheet" &&
+            child.href
+          ) {
+            const hrefAttr = child.getAttribute("href");
+            if (
+              globalThis.document.head.querySelector(
+                `link[rel="stylesheet"][href="${hrefAttr}"]`,
+              )
+            ) return;
+            return new Promise<void>((resolve, reject) => {
+              child.onload = () => resolve();
+              child.onerror = () =>
+                reject(new Error(`Failed to load stylesheet: ${hrefAttr}`));
+              globalThis.document.head.appendChild(child);
+            });
+          }
+          globalThis.document.head.appendChild(child);
+        }),
+      );
       this.remove();
     }
   },
   cacheRoute: function (this: HTMLTemplateElement) {
-    // Do two things with the content
-    // 1. Append it to the body
-    // 2. Cache it separately for future partial navigation requests
-    const content = this.content;
-    console.log("cacheRoute content: ", content);
-    if (content) {
-      const Children = Array.from(content.children);
-      Children.forEach((child) => {
-        document.body.appendChild(child);
-      });
+    for (const child of Array.from(this.content.children)) {
+      document.body.appendChild(child);
     }
     this.remove();
   },
 });
 
-/**
- * Create the core middleware array.
- * Sets up static file serving, context storage, tools tracking, and JSX rendering.
- * @internal
- */
 function createCoreMiddleware(
   options: ClientToolsOptions = {},
 ): MiddlewareHandler[] {
@@ -985,52 +195,62 @@ function createCoreMiddleware(
   if (options.generatedStyleHashLength !== undefined) {
     setGeneratedStyleHashLength(options.generatedStyleHashLength);
   }
-
   performance.mark("startup:appCreated");
-
+  let staticMiddleware: MiddlewareHandler | undefined;
   return [
-    // Serve package client JS files from /_tinytools/
-    servePackageClientFiles(),
-    // Static file serving for user's public directory with aggressive caching for content-hashed files
-    createLazyServeStaticMiddleware(options.serveStatic, {
-      root: "./public/",
-      onFound: (path: string, c: Context) => {
-        // Handler files (public/handlers/*.js) and style files (public/styles/*.css)
-        // have content-hashed filenames, so they're immutable and can be cached forever
-        if (isImmutablePublicAssetPath(path)) {
-          c.header("Cache-Control", "public, max-age=31536000, immutable");
-        }
-      },
-      onNotFound: (path: string, c: Context) => {
-        if (isImmutablePublicAssetPath(path)) {
-          console.error(`Handler or style file not found: ${path}`);
-        }
-
-        if (isLikelyAssetRequestPath(c.req.path)) {
-          throw new HTTPException(404);
-        }
-      },
-    }),
-
-    // Context storage for getContext() in async components
+    async (context, next) => {
+      context.set(CSP_ENABLED_KEY, options.csp !== false);
+      await next();
+    },
+    ...(options.csp === false ? [] : [createCspMiddleware()]),
+    async (context, next) => {
+      if (memoryBuild && /^\/(handlers|styles)\//.test(context.req.path)) {
+        const content = memoryAssets.get(context.req.path);
+        if (content === undefined) return context.notFound();
+        context.header(
+          "Content-Type",
+          context.req.path.startsWith("/handlers/")
+            ? "application/javascript; charset=utf-8"
+            : "text/css; charset=utf-8",
+        );
+        context.header("Cache-Control", "public, max-age=31536000, immutable");
+        return context.body(content);
+      }
+      if (!staticMiddleware) {
+        const serveStatic = options.serveStatic ?? await detectServeStatic();
+        staticMiddleware = serveStatic({
+          root: "./public/",
+          onFound: (path: string, context: Context) => {
+            if (isImmutablePublicAssetPath(path)) {
+              context.header(
+                "Cache-Control",
+                "public, max-age=31536000, immutable",
+              );
+            }
+          },
+          onNotFound: (path: string, context: Context) => {
+            if (isImmutablePublicAssetPath(path)) {
+              console.error(`Handler or style file not found: ${path}`);
+            }
+            if (isLikelyAssetRequestPath(context.req.path)) {
+              throw new HTTPException(404);
+            }
+          },
+        });
+      }
+      return staticMiddleware(context, next);
+    },
     contextStorage(),
-    // Initialize empty tools with tracking infrastructure
-    createToolsMiddleware(),
-    // JSX renderer with AssetTags (features are read from context by AssetTags)
-    jsxRenderer(async (
-      // deno-lint-ignore no-explicit-any
-      { children, title }: any,
-      c,
-    ) => {
-      title ??= getContextTitle(c);
-      const routeLayoutApplied = c.get(ROUTE_LAYOUT_APPLIED_KEY) === true;
-
-      const { fn } = await tiny.imports(headHandler);
-
-      // Await children so route/layout rendering populates tool tracking sets
-      // for AssetTags to read. Re-wrap as Promise to preserve streaming callbacks
-      // (childrenToStringToBuffer drops .callbacks via string concat for isEscaped
-      // strings, but preserves them through the Promise/async path).
+    async (context, next) => {
+      context.set("accessedHandlerFiles", new Set<string>());
+      context.set("accessedStyleFiles", new Set<string>());
+      await next();
+    },
+    // deno-lint-ignore no-explicit-any
+    jsxRenderer(async ({ children, title }: any, context) => {
+      title ??= getContextTitle(context);
+      const routeLayoutApplied = context.get(ROUTE_LAYOUT_APPLIED_KEY) === true;
+      const { fn } = await imports(headHandler);
       const evaluatedChildren = await children;
       const evaluatedBody = await resolveRendererChildren(evaluatedChildren);
       const callbackChildren = evaluatedChildren as string & {
@@ -1049,16 +269,17 @@ function createCoreMiddleware(
       const body = callbacks.length
         ? Promise.resolve(escapedBody)
         : escapedBody;
-
-      const accessedHandlerFiles = c.get("accessedHandlerFiles") as Set<string>;
-      const accessedStyleFiles = c.get("accessedStyleFiles") as Set<string>;
+      const accessedHandlerFiles = context.get("accessedHandlerFiles") as Set<
+        string
+      >;
+      const accessedStyleFiles = context.get("accessedStyleFiles") as Set<
+        string
+      >;
       const handlerFiles = Array.from(accessedHandlerFiles);
       const styleFiles = Array.from(accessedStyleFiles);
       accessedHandlerFiles.clear();
       accessedStyleFiles.clear();
-
-      const sourceUrl = c.req.header("source-url");
-      if (sourceUrl) {
+      if (context.req.header("source-url")) {
         return (
           <update>
             <NewPartial onLoad={fn.importIntoHead}>
@@ -1066,26 +287,14 @@ function createCoreMiddleware(
               <AssetTags
                 accessedHandlerFiles={handlerFiles}
                 accessedStyleFiles={styleFiles}
-                fullPageLoad={false}
               />
             </NewPartial>
-            <NewPartial onLoad={fn.cacheRoute}>
-              {body}
-            </NewPartial>
+            <NewPartial onLoad={fn.cacheRoute}>{body}</NewPartial>
           </update>
         );
       }
-
-      const url = new URL(c.req.url);
-      const urlPathVars = url.pathname
-        .split("/")
-        .filter(Boolean)
-        .map((part, i) => `--path-${i}: ${part};`);
-      const urlQueryVars = Array.from(url.searchParams.entries())
-        .map(([key, value]) => `--param-${key}: ${value};`);
-
       return (
-        <html style={[...urlPathVars, ...urlQueryVars].join(" ")}>
+        <html>
           <head>
             <title>{title}</title>
             <meta
@@ -1099,147 +308,80 @@ function createCoreMiddleware(
               accessedHandlerFiles={handlerFiles}
               accessedStyleFiles={styleFiles}
             />
+            <script>{raw(runHandlerScript)}</script>
           </head>
           {routeLayoutApplied ? body : <body>{body}</body>}
         </html>
       );
-    }, {
-      stream: true,
-      docType: true,
-    }),
+    }, { stream: true, docType: true }),
   ];
 }
 
-// ============================================================================
-// tiny - Pre-built singleton with composable middleware
-// ============================================================================
-
-/**
- * TinyTools middleware API.
- *
- * Provides opt-in middleware for enhancing Hono apps with client-side tools,
- * SPA navigation, SSE, local routes, web components, and route layouts.
- *
- * @example Granular opt-in
- * ```ts
- * import { Hono } from "hono";
- * import { tiny, ClientTools, css } from "@tinytools/hono-tools";
- *
- * const app = new Hono()
- *   .use(...tiny.middleware.core({ generatedStyleHashLength: 4 }))
- *   .use(tiny.middleware.navApiTools())
- *   .use(tiny.middleware.sseTools())
- *   .use(tiny.middleware.layout(MyLayout))
- * ```
- *
- * @example Complete mode (all features)
- * ```ts
- * const app = new Hono()
- *   .use(...tiny.middleware.all({ generatedStyleHashLength: 4 }))
- *   .use(tiny.middleware.layout(MyLayout))
- * ```
- *
- * @example Minimal (client tools only, no SPA features)
- * ```ts
- * const app = new Hono()
- *   .use(...tiny.middleware.core())
- *   .use(tiny.middleware.layout(MyLayout))
- * ```
- *
- * @example Using tiny.Hono wrapper
- * ```ts
- * // Plain Hono instance (for sub-routes)
- * const sub = new tiny.Hono();
- *
- * // With core middleware
- * const app = new tiny.Hono({ includeMiddleware: "core" });
- *
- * // With all middleware
- * const app = new tiny.Hono({ includeMiddleware: "all" });
- * ```
- */
-
-/**
- * Options for `new tiny.Hono()`.
- * Extends Hono's native options with an optional `tools` setting.
- */
 export type TinyHonoOptions<E extends Env = BlankEnv> =
   & HonoOptions<E>
   & ClientToolsOptions
-  & {
-    /**
-     * Opt in to automatic middleware setup.
-     *
-     * - `"core"` — applies `tiny.middleware.core()` (static serving, context storage, tools tracking, JSX rendering)
-     * - `"all"`  — applies `tiny.middleware.all()` (core + navigation, SSE, local routes, web components)
-     *
-     * Omit to create a plain Hono instance (useful for sub-routes).
-     */
-    tools?: "core" | "all";
-  };
+  & { tools?: "core" };
 
-/**
- * A Hono subclass that can optionally apply tinytools middleware on construction.
- *
- * - `new tiny.Hono()` — plain Hono instance, no middleware (for sub-routes)
- * - `new tiny.Hono({ tools: "core" })` — core middleware applied
- * - `new tiny.Hono({ tools: "all" })` — all middleware applied
- *
- * All standard `HonoOptions` are forwarded to the underlying Hono constructor.
- */
 class TinyHono<E extends Env = BlankEnv> extends HonoBase<E> {
   constructor(options: TinyHonoOptions<E> = {} as TinyHonoOptions<E>) {
     const {
       tools,
+      csp,
+      serveStatic,
       generatedFilenameHashLength,
       generatedHandlerHashLength,
       generatedStyleHashLength,
       ...honoOptions
     } = options;
     super(honoOptions as HonoOptions<E>);
-
     if (tools) {
-      const clientToolsOptions: ClientToolsOptions = {
-        generatedFilenameHashLength,
-        generatedHandlerHashLength,
-        generatedStyleHashLength,
-      };
-
-      const middleware = tools === "all"
-        ? createAllMiddleware(clientToolsOptions)
-        : createCoreMiddleware(clientToolsOptions);
-
-      for (const mw of middleware) {
-        this.use(mw);
-      }
+      for (
+        const middleware of createCoreMiddleware({
+          csp,
+          serveStatic,
+          generatedFilenameHashLength,
+          generatedHandlerHashLength,
+          generatedStyleHashLength,
+        })
+      ) this.use(middleware);
     }
   }
 }
 
-/** Public API exposed by the `tiny` singleton. */
+export function runHandler(
+  el: HTMLElement | typeof globalThis,
+  e: Event,
+) {
+  const element = el === globalThis ? document.body : el as HTMLElement;
+
+  for (
+    const name of (element.getAttribute("tt-handler-" + e.type) ?? "").split(
+      " ",
+    )
+  ) {
+    if (!name) continue;
+    import(`/handlers/${name}.js`).then(({ default: scriptContent }) => {
+      return scriptContent.call(el, e);
+    });
+  }
+}
+
 export type TinyApi = {
   readonly Hono: typeof TinyHono;
   readonly Handlers: typeof Handlers;
-  readonly NewHandlers: typeof NewHandlers;
+  readonly Store: typeof Store;
+  readonly Signals: typeof Signals;
+  readonly runHandler: typeof runHandler;
   readonly Styles: typeof Styles;
   readonly css: typeof css;
-  readonly imports: typeof importTools;
+  readonly imports: typeof imports;
   readonly middleware: {
     readonly core: (options?: ClientToolsOptions) => MiddlewareHandler[];
-    readonly sharedImports: typeof createSharedImportsMiddleware;
-    readonly navApiTools: (
-      options?: NavApiToolsOptions,
+    readonly csp: () => MiddlewareHandler;
+    readonly layout: (component: RouteLayoutComponent) => MiddlewareHandler;
+    readonly partialLayout: (
+      component: RouteLayoutComponent,
     ) => MiddlewareHandler;
-    readonly sseTools: (options?: SseToolsOptions) => MiddlewareHandler;
-    readonly localRoutes: (
-      options?: LocalRoutesOptions,
-    ) => MiddlewareHandler;
-    readonly webComponents: (
-      options?: WebComponentsOptions,
-    ) => MiddlewareHandler;
-    readonly layout: typeof addRouteLayout;
-    readonly partialLayout: typeof addPartialRouteLayout;
-    readonly all: (options?: ClientToolsOptions) => MiddlewareHandler[];
   };
   readonly build: (
     options?: import("./build.ts").BuildOptions,
@@ -1249,206 +391,20 @@ export type TinyApi = {
 export const tiny: TinyApi = {
   Hono: TinyHono,
   Handlers,
-  NewHandlers,
+  Store,
+  Signals,
   Styles,
   css,
-  imports: importTools,
+  imports,
+  runHandler,
   middleware: {
-    /**
-     * Core middleware that sets up static file serving, context storage,
-     * tools tracking, and JSX rendering. Required as the foundation for all
-     * other tiny middleware.
-     *
-     * Returns an array of middleware handlers (use spread operator).
-     *
-     * @param options - Optional configuration for hash lengths
-     *
-     * @example
-     * ```ts
-     * const app = new Hono()
-     *   .use(...tiny.middleware.core({ generatedStyleHashLength: 4 }))
-     * ```
-     */
-    core(options?: ClientToolsOptions): MiddlewareHandler[] {
-      return createCoreMiddleware(options);
-    },
-
-    /**
-     * Extend the request tools context with handlers and styles.
-     *
-     * @example
-     * ```ts
-     * const app = new Hono()
-     *   .use(...tiny.middleware.core())
-     *   .use(tiny.middleware.sharedImports(tools))
-     * ```
-     */
-    sharedImports: createSharedImportsMiddleware,
-
-    /**
-     * Enable SPA navigation with partial page updates and lazy event handler loading.
-     *
-     * Adds client scripts: navigation.js, processIncomingData.js,
-     * processIncomingHtml.js, performFetchAndUpdate.js, eventHandlers.js
-     *
-     * @param _options - Reserved for future use
-     *
-     * @example
-     * ```ts
-     * const app = new Hono()
-     *   .use(...tiny.middleware.core())
-     *   .use(tiny.middleware.navApiTools())
-     * ```
-     */
-    navApiTools(_options?: NavApiToolsOptions): MiddlewareHandler {
-      return createFeatureMiddleware("navigation");
-    },
-
-    /**
-     * Enable Server-Sent Events for live updates from the server.
-     *
-     * Adds client script: sse.js and request middleware that tracks SSE client
-     * identity and recent route paths.
-     *
-     * @param _options - Reserved for future use
-     *
-     * @example
-     * ```ts
-     * const app = new Hono()
-     *   .use(...tiny.middleware.core())
-     *   .use(tiny.middleware.sseTools())
-     * ```
-     */
-    sseTools(_options?: SseToolsOptions): MiddlewareHandler {
-      return createSseFeatureMiddleware();
-    },
-
-    /**
-     * Enable client-side template routing.
-     *
-     * Adds client script: localRoutes.js
-     *
-     * @param _options - Reserved for future use
-     *
-     * @example
-     * ```ts
-     * const app = new Hono()
-     *   .use(...tiny.middleware.core())
-     *   .use(tiny.middleware.localRoutes())
-     * ```
-     */
-    localRoutes(_options?: LocalRoutesOptions): MiddlewareHandler {
-      return createFeatureMiddleware("localRoutes");
-    },
-
-    /**
-    * Enable the abortable lifecycle web component script.
-     *
-    * Adds client scripts: wc-lifecycleAbortable.js
-     *
-     * @param _options - Reserved for future use
-     *
-     * @example
-     * ```ts
-     * const app = new Hono()
-     *   .use(...tiny.middleware.core())
-     *   .use(tiny.middleware.webComponents())
-     * ```
-     */
-    webComponents(_options?: WebComponentsOptions): MiddlewareHandler {
-      return createFeatureMiddleware("webComponents");
-    },
-
-    /**
-     * Create a middleware that wraps routes with a layout component.
-     * Handles partial navigation (source-url header) by returning children directly,
-     * otherwise wraps children in the provided layout component.
-     *
-     * The layout is rendered once as a dummy (with empty fragment) to register
-     * any tools/styles before the actual render.
-     *
-     * @param LayoutComponent - A JSX component that receives children and context
-     *
-     * @example With a simple component
-     * ```tsx
-     * const MyLayout = ({ children }: { children: Child }) => (
-     *   <TwoColumnSplit contentPanelChildren={children}>
-     *     <nav>Sidebar</nav>
-     *   </TwoColumnSplit>
-     * );
-     *
-     * const app = new Hono()
-     *   .use(...tiny.middleware.core())
-     *   .use(tiny.middleware.layout(MyLayout))
-     * ```
-     *
-     * @example With inline JSX function
-     * ```tsx
-     * const app = new Hono()
-     *   .use(...tiny.middleware.core())
-     *   .use(tiny.middleware.layout(({ children }, c) => (
-     *     <TwoColumnSplit contentPanelChildren={children}>
-     *       <nav>Sidebar</nav>
-     *     </TwoColumnSplit>
-     *   )))
-     * ```
-     */
-    layout: addRouteLayout,
-    partialLayout: addPartialRouteLayout,
-
-    /**
-     * Enable all features: navigation, SSE, local routes, and web components.
-     *
-     * Returns an array of middleware handlers (use spread operator).
-     * Equivalent to using core() + navApiTools() + sseTools() +
-     * localRoutes() + webComponents() individually.
-     *
-     * @param options - Optional configuration for hash lengths (passed to core)
-     *
-     * @example
-     * ```ts
-     * const app = new Hono()
-     *   .use(...tiny.middleware.all({ generatedStyleHashLength: 4 }))
-     *   .use(tiny.middleware.layout(MyLayout))
-     * ```
-     */
-    all(options?: ClientToolsOptions): MiddlewareHandler[] {
-      return createAllMiddleware(options);
-    },
+    core: createCoreMiddleware,
+    csp: createCspMiddleware,
+    layout: (component) => createRouteLayout(component, false),
+    partialLayout: (component) => createRouteLayout(component, true),
   },
-
-  /**
-   * Build all registered client functions and scoped styles to the public directory.
-   * Dynamically imports the build module so esbuild is only loaded when needed.
-   *
-   * @param options - Build configuration options
-   *
-   * @example
-   * ```ts
-   * import { tiny } from "@tinytools/hono-tools";
-   * import "./main.tsx";
-   *
-   * await tiny.build();
-   * ```
-   */
-  async build(options?: import("./build.ts").BuildOptions) {
+  async build(options) {
     const { buildScriptFiles } = await import("./build.ts");
     await buildScriptFiles(options);
   },
-} as const;
-
-/**
- * Create the full middleware array (core + all features).
- * @internal
- */
-function createAllMiddleware(
-  options?: ClientToolsOptions,
-): MiddlewareHandler[] {
-  return [
-    ...createCoreMiddleware(options),
-    // createFeatureMiddleware("navigation"),
-    // createSseFeatureMiddleware(),
-    // createFeatureMiddleware("localRoutes"),
-    createFeatureMiddleware("webComponents"),
-  ];
-}
+};

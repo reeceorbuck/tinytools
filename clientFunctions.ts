@@ -65,6 +65,8 @@ export const filesWithChangedHandlers = new Set<string>();
 import {
   cache,
   generateHandlerHash,
+  memoryAssets,
+  memoryBuild,
   normalizeSourceFileUrl,
 } from "./clientTools.ts";
 
@@ -117,6 +119,8 @@ export class ClientFunctionImpl<
       this.fnName,
       "__tiny_analysis",
       logicalPaths,
+      undefined,
+      this.stateful ? this.storedBinding : false,
     );
     const live = new Set(result.imports);
     this.namespaceDependencies = new Map(
@@ -127,8 +131,10 @@ export class ClientFunctionImpl<
   }
 
   private _computeHashInput(): string {
-    const base = this.fn.toString() + "::" + (this.sourceFileUrl ?? "") +
-      (this.namespaceDependencies ? `::namespace-v2:${this.cacheName}` : "");
+    const base =
+      (this.stateful ? `store-v1:${this.cacheName}:${this.occurrenceIndex}::` : "") +
+      this.fn.toString() + "::" + (this.sourceFileUrl ?? "") +
+      (this.namespaceDependencies ? `::namespace-v4:${this.cacheName}` : "");
     const fingerprint = this._currentImportsFingerprint();
     return fingerprint ? `${base}::imports[${fingerprint}]` : base;
   }
@@ -241,21 +247,28 @@ export class ClientFunctionImpl<
     importsFingerprint = "",
     namespaceDependencies?: ReadonlyMap<string, ClientFunctionImpl>,
     namespaceId?: number,
+    private readonly stateful = false,
+    private readonly storedBinding = "stored",
   ) {
     if (typeof fn !== "function") {
       throw new Error("ClientFunction requires a function");
     }
 
     const normalizedSourceFileUrl = normalizeSourceFileUrl(sourceFileUrl);
-    const cacheName = namespaceId === undefined
+    const baseCacheName = namespaceId === undefined
       ? fnName
       : `${fnName}::factory:${namespaceId}`;
+    const cacheName = stateful ? `${baseCacheName}::store-v1` : baseCacheName;
 
     // Get the occurrence index for this name in this file (0 for first, 1 for second, etc.)
     const occurrenceIndex = namespaceId !== undefined
       ? 0
-      : normalizedSourceFileUrl
-      ? cache.getNextOccurrenceIndex(normalizedSourceFileUrl, fnName, "handler")
+      : normalizedSourceFileUrl || stateful
+      ? cache.getNextOccurrenceIndex(
+        normalizedSourceFileUrl ?? "",
+        fnName,
+        "handler",
+      )
       : 0;
 
     let cachedFilename: string | undefined;
@@ -277,8 +290,9 @@ export class ClientFunctionImpl<
       );
       resolvedFilename = `${fnName}_${
         generateHandlerHash(
-          fn.toString() + "::" + (normalizedSourceFileUrl ?? "") +
-            (namespaceDependencies ? `::namespace-v2:${cacheName}` : "") +
+          (stateful ? `store-v1:${cacheName}:${occurrenceIndex}::` : "") +
+            fn.toString() + "::" + (normalizedSourceFileUrl ?? "") +
+            (namespaceDependencies ? `::namespace-v4:${cacheName}` : "") +
             (importsFingerprint ? `::imports[${importsFingerprint}]` : ""),
         )
       }`;
@@ -408,11 +422,19 @@ export class ClientFunctionImpl<
         this.fnName,
         this.filename,
         dependencies,
+        undefined,
+        this.stateful ? this.storedBinding : false,
       )).code;
     }
     const { buildHandlerCode } = await import("./build.ts");
     const registry = getImportRegistry(this.sourceFileUrl);
-    return buildHandlerCode(this.fnName, this.fn, this.filename, registry);
+    const code = await buildHandlerCode(
+      this.fnName,
+      this.fn,
+      this.filename,
+      registry,
+    );
+    return this.stateful ? `const stored = Object.create(null);\n${code}` : code;
   }
 
   /**
@@ -577,8 +599,10 @@ export class ClientFunctionImpl<
       // on-disk file is now orphaned — remove it before writing the
       // fresh one under the new filename.
       if (this._pendingOldFilename) {
-        await rm(`${handlerDir}/${this._pendingOldFilename}.js`)
-          .catch(() => {});
+        if (!memoryBuild) {
+          await rm(`${handlerDir}/${this._pendingOldFilename}.js`)
+            .catch(() => {});
+        }
         this._pendingOldFilename = undefined;
       } else if (mtimeChanged) {
         // Filename unchanged, but still ensure the cache entry exists
@@ -590,6 +614,15 @@ export class ClientFunctionImpl<
           this.filename,
         );
       }
+    }
+
+    if (memoryBuild) {
+      const assetPath = `/handlers/${this.filename}.js`;
+      if (memoryAssets.has(assetPath) && !mtimeChanged && !depsChanged) {
+        return false;
+      }
+      memoryAssets.set(assetPath, await this.buildCode());
+      return true;
     }
 
     try {

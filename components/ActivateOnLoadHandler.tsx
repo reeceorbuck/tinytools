@@ -1,3 +1,7 @@
+export interface PartialAbortableHTMLElement extends HTMLElement {
+  abortController: AbortController;
+}
+
 import type { PropsWithChildren } from "hono/jsx";
 import type { HtmlEscapedString } from "hono/utils/html";
 import { tiny } from "../mod.ts";
@@ -175,3 +179,186 @@ export const buildTemplateHandlers = new Handlers(import.meta.url, {
     replaceElement.replaceWith(textarea);
   },
 });
+
+const partialLogic = new Handlers(import.meta.url, {
+  passLoadEvent: function (this: HTMLElement) {
+    const precedingTemplate = this.previousElementSibling;
+    if (precedingTemplate && precedingTemplate.tagName === "TEMPLATE") {
+      precedingTemplate.dispatchEvent(new Event("load"));
+      this.remove();
+    } else {
+      console.error(
+        "No preceding template found for loadPartialTemplate handler.",
+      );
+    }
+  },
+});
+
+// export async function ReferLifecycleEventsOntoParentElement() {
+//   const { fn } = await tiny.imports(partialLogic);
+//   return (
+//     <abortable-lifecycle-element
+//       onLoad={fn.referToPrecedingOnConnect}
+//       onSuspend={fn.referToPrecedingOnSuspend}
+//     >
+//     </abortable-lifecycle-element>
+//   );
+// }
+
+const upgradePrecedingTools = new Handlers(import.meta.url, {
+  upgradePrecedingCustomElement: function (this: HTMLElement) {
+    const precedingCustomElement = this.previousElementSibling as
+      | HTMLElement
+      | null;
+    console.log("UPGRADING precedingCustomElement: ", precedingCustomElement);
+
+    if (!precedingCustomElement) {
+      console.error("No preceding custom element found");
+      return;
+    }
+
+    let upgradeTagName = precedingCustomElement.tagName.toLowerCase();
+    if (!upgradeTagName.includes("-")) {
+      upgradeTagName = "upgrade-preceding";
+      const proxyElement = document.createElement(
+        upgradeTagName,
+      ) as PartialAbortableHTMLElement;
+      proxyElement.addEventListener("load", function () {
+        tiny.runHandler(
+          precedingCustomElement,
+          new Event("load"),
+        );
+        // Mutation observer if the previous element is replaced?
+        const observer = new MutationObserver((mutations) => {
+          for (const mutation of mutations) {
+            if (mutation.type === "childList") {
+              for (const removedNode of Array.from(mutation.removedNodes)) {
+                if (removedNode === precedingCustomElement) {
+                  // Remove the new element if the preceding custom element is removed
+                  proxyElement.remove();
+                }
+              }
+            }
+          }
+        });
+
+        observer.observe(precedingCustomElement.parentElement!, {
+          childList: true,
+        });
+        proxyElement.addEventListener("load", () => {
+          tiny.runHandler(
+            precedingCustomElement,
+            new Event("load"),
+          );
+          observer.observe(precedingCustomElement.parentElement!, {
+            childList: true,
+          });
+        }, { signal: proxyElement.abortController.signal });
+        proxyElement.addEventListener("suspend", () => {
+          tiny.runHandler(
+            precedingCustomElement,
+            new Event("suspend"),
+          );
+          // stop observing when the element is disconnected
+          observer.disconnect();
+        }, { signal: proxyElement.abortController.signal });
+      }, { once: true });
+      precedingCustomElement.insertAdjacentElement("afterend", proxyElement);
+    }
+
+    const isDefined = customElements.get(
+      upgradeTagName,
+    );
+    if (!isDefined) {
+      // register it
+      customElements.define(
+        upgradeTagName,
+        class extends HTMLElement {
+          abortController: AbortController;
+
+          constructor() {
+            super();
+            this.abortController = new AbortController();
+          }
+
+          connectedCallback() {
+            this.abortController = new AbortController();
+            this.dispatchEvent(new Event("load"));
+            try {
+              tiny.runHandler(
+                this,
+                new Event("connect"),
+              );
+            } catch (error) {
+              // May just be because there is no listener for this event
+              console.warn(
+                "Error during connect event (no listener?):",
+                error,
+              );
+            }
+          }
+
+          disconnectedCallback() {
+            // this next one should allow for custom events on the element
+            try {
+              tiny.runHandler(
+                this,
+                new Event("disconnect"),
+              );
+            } catch (error) {
+              // May just be because there is no listener for this event
+              console.warn(
+                "Error during disconnect event (no listener?):",
+                error,
+              );
+            }
+            this.abortController.abort();
+          }
+        },
+      );
+    }
+    this.remove();
+  },
+  testSuspension: function (this: HTMLElement) {
+    console.log("testSuspension activated for element: ", this);
+  },
+});
+
+export async function UpgradeCustomElement(props: PropsWithChildren) {
+  const { fn } = await tiny.imports(upgradePrecedingTools, lifecycleHandlers);
+  const childElements = Array.isArray(props.children)
+    ? props.children.flat()
+    : [props.children];
+  return (
+    <>
+      {childElements.map((child) => (
+        <>
+          {child}
+          <link
+            rel="modulepreload"
+            href={`/handlers/${
+              lifecycleHandlers._handlerFilenames.get(
+                "referOnLoad",
+              )
+            }.js`}
+            onLoad={fn.upgradePrecedingCustomElement}
+          />
+        </>
+      ))}
+    </>
+  );
+}
+
+const usageExampleComponent = async () => {
+  const { fn } = await tiny.imports(upgradePrecedingTools);
+  return (
+    <UpgradeCustomElement>
+      <upgradeable-element
+        onLoad={fn.upgradePrecedingCustomElement}
+        onDisconnect={fn.testSuspension}
+      >
+        <h1>Hello World</h1>
+      </upgradeable-element>
+    </UpgradeCustomElement>
+  );
+};

@@ -1,54 +1,49 @@
-import { tiny } from "../mod.ts";
+import { type Signal, type SignalValue, tiny } from "../mod.ts";
+
+type EffectFn = () => void;
+export interface SignalEvent extends Event {
+  signal: Signal<SignalValue>;
+}
+
+export interface SignalElement extends HTMLElement {
+  abortController: AbortController;
+}
+
+// When I left TODO: signals should have a name assigned if the setting element has a name
+// plus an override if they have a data-bind-name attribute.
+// However, we should only use onSignal as an event name and not as a signal name
+// We casn identify signals in handlers rather than using a name
+// Also, are all the methods still used now?
 
 export const signalTools = new tiny.Handlers(import.meta.url, {
-  useSignal: function (e: CommandEvent) {
-    const returnValue = new Map<string, string>();
-    if (e.command !== "--signal") {
-      console.error("useSignal with non-signal command: ", e);
-      return returnValue;
-    }
-    const source = e.source as HTMLSelectElement | HTMLInputElement | null;
-    if (!source || !source.name) {
-      console.error("No source or name found for useSignal");
-      return returnValue;
-    }
-    returnValue.set(source.name, source.value || "");
-    return returnValue;
-  },
-
-  sendSignal: function (
-    source: HTMLSelectElement | HTMLInputElement,
-    container?: HTMLElement | null,
+  effect: function (
+    callback: EffectFn,
+    deps: Signal<SignalValue>[],
+    abortController: AbortController,
   ) {
-    if (!container) {
-      console.warn(
-        "Firing signal without container, using source form instead, or entire document, source: ",
-        source,
-      );
-    }
-    const root = container || source.form || globalThis.document;
-    const selector = `[data-signal-tracking~="${source.name}"]`;
-    const signalTargets: Element[] = Array.from(
-      root.querySelectorAll(selector),
-    );
-    if (
-      root instanceof Element &&
-      root.matches(selector) &&
-      !signalTargets.includes(root)
-    ) {
-      signalTargets.unshift(root);
-    }
-    console.log(
-      `Found ${signalTargets.length} signal targets for name ${source.name} in container:`,
-      signalTargets,
-    );
-    signalTargets.forEach((target) => {
-      target.dispatchEvent(
-        new CommandEvent("command", {
-          source: source,
-          command: "--signal",
-        }),
+    const target = new EventTarget();
+    deps.forEach((signal) => {
+      signal.subscribe(target);
+      target.addEventListener(
+        `signal${signal.name ? signal.name.toLowerCase() : ""}`,
+        callback,
+        {
+          signal: abortController.signal,
+        },
       );
     });
+  },
+  setTextContent: function (
+    this: SignalElement,
+    event: SignalEvent,
+  ) {
+    this.textContent = `${event.signal.value}`;
+  },
+  setValue: function (this: HTMLInputElement, event: SignalEvent) {
+    this.value = event.signal.value?.toString() ?? "";
+  },
+  setCssProperty: function (this: HTMLElement, event: SignalEvent) {
+    const { name, value } = event.signal;
+    this.style.setProperty(`--${name}`, value?.toString() ?? "");
   },
 });

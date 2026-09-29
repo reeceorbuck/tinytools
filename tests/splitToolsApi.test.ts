@@ -65,7 +65,7 @@ Deno.test({
       },
     });
 
-    const { fn } = await imports(localHandlers);
+    const { handlers: fn } = await imports(localHandlers);
     assertEquals(String(fn.sharedHandler).includes("handlers."), true);
     assertEquals(String(fn.localHandler).includes("handlers."), true);
   },
@@ -88,7 +88,7 @@ Deno.test({
       },
     });
 
-    const { fn, styled } = await imports(styles, handlers);
+    const { handlers: fn, styled } = await imports(styles, handlers);
     assertEquals(String(fn.clickHandler).includes("handlers."), true);
     assertEquals(styled.button.includes("button_"), true);
   },
@@ -123,7 +123,7 @@ Deno.test({
       },
     });
 
-    const { fn, styled } = await imports(
+    const { handlers: fn, styled } = await imports(
       baseStyles,
       accentStyles,
       buttonStyles,

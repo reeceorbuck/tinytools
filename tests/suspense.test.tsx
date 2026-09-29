@@ -19,7 +19,7 @@ import {
   assertStringIncludes,
 } from "@std/assert";
 import { Hono } from "hono";
-import { addRouteLayout, tiny } from "../honoFactory.tsx";
+import { tiny } from "../honoFactory.tsx";
 import { CustomSuspense, Suspense } from "../components/Suspense.tsx";
 import type { Child, FC } from "hono/jsx";
 import { jsxTemplate } from "hono/jsx/jsx-runtime";
@@ -152,10 +152,10 @@ Deno.test("Suspense - streams fallback then resolved async content", async () =>
 
   // Later chunk(s) contain the resolved content
   const laterContent = chunks.slice(1).join("");
-  assertStringIncludes(laterContent, "<partial-content");
+  assertStringIncludes(laterContent, '<template for-partial-id="suspended-');
   assert(
     !laterContent.includes("processIncomingHtml"),
-    "Full-page Suspense should mount through the partial-content lifecycle",
+    "Full-page Suspense should insert through its template handler",
   );
   assertStringIncludes(laterContent, "Hello World");
   assertStringIncludes(laterContent, "resolved");
@@ -187,9 +187,8 @@ Deno.test("Suspense - resolves promise-valued markup alongside async siblings", 
 Deno.test("CustomSuspense - streams with the supplied mount handler", async () => {
   const app = new Hono()
     .use(...tiny.middleware.core())
-    .use(tiny.middleware.sharedImports(customSuspenseHandlers))
-    .get("/", (c) => {
-      const { fn } = c.var.tools;
+    .get("/", async (c) => {
+      const { fn } = await tiny.imports(customSuspenseHandlers);
       return c.render(
         <CustomSuspense
           fallback={<div>Loading custom...</div>}
@@ -205,7 +204,7 @@ Deno.test("CustomSuspense - streams with the supplied mount handler", async () =
   assertStringIncludes(body, "Custom content");
   assertMatch(
     body,
-    /onMount="handlers\.customSuspenseMount_[a-z0-9]+\.call\(this, event\)"/,
+    /tt-handler-load="customSuspenseMount_[a-z0-9]+"/,
   );
 });
 
@@ -256,10 +255,11 @@ Deno.test("Suspense - multiple Suspense components stream independently", async 
   assertStringIncludes(body, "Content B");
 
   // Both should have independently mounted streaming partials
-  const partialCount = (body.match(/<partial-content /g) || []).length;
+  const partialCount =
+    (body.match(/<template for-partial-id="suspended-/g) || []).length;
   assert(
     partialCount >= 2,
-    `Expected at least 2 <partial-content> tags, got ${partialCount}`,
+    `Expected at least 2 insertion templates, got ${partialCount}`,
   );
 });
 
@@ -294,7 +294,11 @@ Deno.test("Suspense - callbacks survive core jsxRenderer await+rewrap", async ()
 Deno.test("Suspense - works inside route layout", async () => {
   const app = new Hono()
     .use(...tiny.middleware.core())
-    .use(addRouteLayout(({ children }) => <TestLayout>{children}</TestLayout>))
+    .use(
+      tiny.middleware.layout(({ children }) => (
+        <TestLayout>{children}</TestLayout>
+      )),
+    )
     .get("/", (c) =>
       c.render(
         <Suspense fallback={<div>Layout loading...</div>}>
@@ -339,19 +343,16 @@ Deno.test("Suspense - partial navigation returns update without full page shell"
   const body = await fullBody(res);
   // Partial navigation wraps in <update><template>...
   assertStringIncludes(body, "<update>");
-  assertStringIncludes(body, "<head-update>");
-  assertStringIncludes(
-    body,
-    "<head-update><title>Partial page title</title>",
-  );
-  assertStringIncludes(body, "<body-update>");
-  const bodyUpdate = body.slice(body.indexOf("<body-update>"));
+  assertStringIncludes(body, 'tt-handler-load="importIntoHead_');
+  assertStringIncludes(body, 'tt-handler-load="cacheRoute_');
+  const bodyUpdate = body.slice(body.indexOf('tt-handler-load="cacheRoute_'));
   assert(
     !bodyUpdate.includes("<title>"),
-    "Partial title must not be emitted in body-update",
+    "Partial title must not be emitted in the body template",
   );
   // Should NOT contain the full <html><head><body> shell
   assert(!body.includes("<html"), "Partial nav should not have html element");
+  assertStringIncludes(body, "<title>Partial page title</title>");
 });
 
 Deno.test("core renderer preserves pre-resolved Suspense callbacks", async () => {
@@ -431,7 +432,7 @@ Deno.test("partial navigation without a title omits the title update", async () 
   assertEquals(res.status, 200);
 
   const body = await fullBody(res);
-  assertStringIncludes(body, "<head-update>");
+  assertStringIncludes(body, 'tt-handler-load="importIntoHead_');
   assert(
     !body.includes("<title>"),
     "A title-less partial must preserve the current document title",

@@ -3,6 +3,9 @@ import { Hono } from "hono";
 import { Handlers, Styles } from "../clientTools.ts";
 import { tiny } from "../mod.ts";
 import { eventHandlerBody } from "../eventAttributes.ts";
+import { jsx, jsxAttr, jsxs } from "../jsx-runtime.ts";
+import { jsxDEV } from "../jsx-dev-runtime.ts";
+import { ActivateLifecycleHandlers } from "../components/ActivateOnLoadHandler.tsx";
 
 const handlers = new Handlers(import.meta.url, {
   click(this: HTMLButtonElement, event: MouseEvent) {
@@ -19,20 +22,150 @@ const unrelated = new Handlers(import.meta.url, {
 });
 const styles = new Styles(import.meta.url, { button: "color: red;" });
 
-Deno.test("events work alongside fn in request rendering and local imports", async () => {
+Deno.test("partial responses use reference bindings unless CSP is disabled", async () => {
+  for (const csp of [true, false]) {
+    const app = new tiny.Hono({ tools: "core", csp });
+    app.get("/", (context) => context.render(<div>Updated</div>));
+    const response = await app.request("/", {
+      headers: { "source-url": "http://localhost/previous" },
+    });
+    const html = await response.text();
+    assertEquals(response.status, 200, html);
+    assertStringIncludes(html, "<update>");
+    assertEquals(html.includes("[object Object]"), false);
+    for (const name of ["cacheRoute", "importIntoHead"]) {
+      assertEquals(html.includes(`tt-handler-load="${name}_`), csp);
+      assertEquals(
+        new RegExp(
+          `onload="handlers\\.${name}_\\w+\\.call\\(this, event\\)"`,
+          "i",
+        ).test(html),
+        !csp,
+      );
+    }
+    if (csp) assertStringIncludes(html, eventHandlerBody);
+  }
+});
+
+Deno.test("package lifecycle components transform references with the package JSX runtime", async () => {
+  const app = new tiny.Hono({ tools: "core" });
+  app.get("/", async (context) =>
+    context.html(
+      await ActivateLifecycleHandlers({ children: jsx("template", {}) }),
+    ));
+  const response = await app.request("/");
+  const html = await response.text();
+  assertEquals(response.status, 200, html);
+  assertEquals(html.includes("[object Object]"), false);
+  assertStringIncludes(html, 'tt-handler-load="referOnConnect_');
+  assertStringIncludes(html, 'tt-handler-suspend="referOnSuspend_');
+  assertStringIncludes(html, eventHandlerBody);
+});
+
+for (const mode of ["core"] as const) {
+  for (const constructor of [false, true]) {
+    Deno.test(`CSP defaults on and supports opt-out: ${mode}, constructor=${constructor}`, async () => {
+      const [scriptHash, eventHash] = await Promise.all(
+        [
+          `${tiny.runHandler.toString()}; const tiny = {runHandler};`,
+          eventHandlerBody,
+        ].map(async (source) => {
+          const digest = await crypto.subtle.digest(
+            "SHA-256",
+            new TextEncoder().encode(source),
+          );
+          return btoa(String.fromCharCode(...new Uint8Array(digest)));
+        }),
+      );
+      const expected =
+        `script-src 'self' 'sha256-${scriptHash}'; script-src-attr 'unsafe-hashes' 'sha256-${eventHash}'`;
+
+      for (const csp of [undefined, true, false]) {
+        const app = constructor
+          ? new tiny.Hono({ tools: mode, csp })
+          : new Hono().use(...tiny.middleware[mode]({ csp }));
+        app.get("/", (context) => context.html("<button>Events</button>"));
+        const response = await app.request("/");
+        assertEquals(response.status, 200);
+        assertEquals(
+          response.headers.get("Content-Security-Policy"),
+          csp === false ? null : expected,
+        );
+        assertEquals(await response.text(), "<button>Events</button>");
+      }
+    });
+  }
+}
+
+Deno.test("CSP hash matches the inline runHandler script in rendered pages", async () => {
+  const app = new tiny.Hono({ tools: "core" });
+  app.get("/", (context) => context.render(<div>Events</div>));
+  const response = await app.request("/");
+  const html = await response.text();
+  assertEquals(response.status, 200, html);
+  const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+  assertEquals(
+    script,
+    `${tiny.runHandler.toString()}; const tiny = {runHandler};`,
+  );
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(script),
+  );
+  const hash = btoa(String.fromCharCode(...new Uint8Array(digest)));
+  const scriptPolicy = response.headers.get("Content-Security-Policy")?.split(
+    ";",
+  )[0];
+  assertEquals(scriptPolicy, `script-src 'self' 'sha256-${hash}'`);
+});
+
+Deno.test("CSP middleware works standalone and opt-out preserves application policies", async () => {
+  const standalone = new Hono().use(tiny.middleware.csp());
+  standalone.get("/", () => new Response("OK"));
+  const response = await standalone.request("/");
+  assertMatch(
+    response.headers.get("Content-Security-Policy") ?? "",
+    /^script-src 'self' 'sha256-[A-Za-z0-9+/=]+'; script-src-attr 'unsafe-hashes' 'sha256-[A-Za-z0-9+/=]+'$/,
+  );
+  assertEquals(await response.text(), "OK");
+
+  const plain = new tiny.Hono();
+  plain.get("/", (context) => context.text("OK"));
+  assertEquals(
+    (await plain.request("/")).headers.get("Content-Security-Policy"),
+    null,
+  );
+
+  const custom = new Hono()
+    .use(async (context, next) => {
+      context.header(
+        "Content-Security-Policy",
+        "script-src 'self' 'unsafe-inline'",
+      );
+      await next();
+    })
+    .use(...tiny.middleware.core({ csp: false }));
+  custom.get("/", (context) => context.text("OK"));
+  assertEquals(
+    (await custom.request("/")).headers.get("Content-Security-Policy"),
+    "script-src 'self' 'unsafe-inline'",
+  );
+});
+
+Deno.test("events work alongside legacy handlers in request rendering and local imports", async () => {
   let expectedButton = "";
   const app = new Hono()
-    .use(...tiny.middleware.core())
-    .use(tiny.middleware.sharedImports(unrelated));
+    .use(...tiny.middleware.core());
 
   app.get("/", async (context) => {
-    const { fn, events, handlers: references } = await tiny.imports(
+    const { handlers: legacy, events, fn: references } = await tiny.imports(
       handlers,
       styles,
     );
-    const local = await context.var.tools.extendWithImports(handlers);
+    const local = await tiny.imports(handlers);
+    const other = await tiny.imports(unrelated);
     assertEquals(
-      String(local.events({ click: local.handlers.click }).onclick),
+      String(local.events({ click: local.fn.click }).onclick),
       eventHandlerBody,
     );
     const attributes = events({
@@ -45,8 +178,8 @@ Deno.test("events work alongside fn in request rendering and local imports", asy
     assertEquals(attributes, events({ click: "click", mouseover: "click" }));
     assertEquals(
       String(
-        context.var.tools.events({
-          click: context.var.tools.handlers.unrelatedClick,
+        other.events({
+          click: other.fn.unrelatedClick,
         }).onclick,
       ),
       eventHandlerBody,
@@ -59,7 +192,7 @@ Deno.test("events work alongside fn in request rendering and local imports", asy
     );
     return context.html(
       <div>
-        <button type="button" onClick={fn.click}>Inline</button>
+        <button type="button" onClick={legacy.click}>Inline</button>
         <button type="button" {...attributes}>Events</button>
       </div>,
     );
@@ -73,18 +206,67 @@ Deno.test("events work alongside fn in request rendering and local imports", asy
 });
 
 async function checkImportTypes() {
-  const { fn, events } = await tiny.imports(handlers, styles);
+  const { handlers: legacy, events } = await tiny.imports(handlers, styles);
   events({ click: "click", keydown: "keyboard" });
   // @ts-expect-error Names must come from the explicit imports.
   events({ click: "unrelatedClick" });
   // @ts-expect-error Keyboard handlers cannot handle mouse events.
   events({ click: "keyboard" });
   // @ts-expect-error Activated inline expressions are not handler names.
-  events({ click: fn.click });
+  events({ click: legacy.click });
   const onlyStyles = await tiny.imports(styles);
   // @ts-expect-error Styles do not import handlers.
   onlyStyles.events({ click: "click" });
-  const extended = await unrelated.extend(handlers).engage();
+  const extended = await tiny.imports(handlers, unrelated);
   extended.events({ click: "unrelatedClick", keydown: "keyboard" });
 }
 void checkImportTypes;
+
+Deno.test("fn references and legacy handlers stay isolated across CSP modes and JSX runtimes", async () => {
+  await Promise.all([true, false, true, false].map(async (csp) => {
+    const app = new tiny.Hono({ tools: "core", csp });
+    app.get("/", async (context) => {
+      const { fn, handlers: legacy } = await tiny.imports(handlers);
+      await Promise.resolve();
+      assertEquals(typeof fn.click, "object");
+      assertEquals(typeof legacy.click, "string");
+      for (const render of [jsx, jsxs, jsxDEV]) {
+        const html = String(render("button", { onClick: fn.click }));
+        assertEquals(html.includes("tt-handler-click="), csp);
+        assertStringIncludes(
+          html,
+          csp ? eventHandlerBody : String(legacy.click),
+        );
+        const legacyHtml = String(render("button", { onClick: legacy.click }));
+        assertEquals(legacyHtml.includes("tt-handler-"), false);
+        assertStringIncludes(legacyHtml, String(legacy.click));
+        const multipleHtml = String(
+          render("button", { onClick: [fn.click, fn.click] }),
+        );
+        assertEquals(multipleHtml.includes("tt-handler-click="), csp);
+        assertStringIncludes(
+          multipleHtml,
+          csp ? eventHandlerBody : `${legacy.click}; ${legacy.click}`,
+        );
+      }
+      const attribute = String(jsxAttr("onClick", fn.click));
+      assertEquals(attribute.includes("tt-handler-click="), csp);
+      assertStringIncludes(
+        attribute,
+        csp ? eventHandlerBody : String(legacy.click),
+      );
+      const multipleAttribute = String(
+        jsxAttr("onClick", [fn.click, fn.click]),
+      );
+      assertEquals(multipleAttribute.includes("tt-handler-click="), csp);
+      assertStringIncludes(
+        multipleAttribute,
+        csp ? eventHandlerBody : `${legacy.click}; ${legacy.click}`,
+      );
+      return context.text("OK");
+    });
+    const response = await app.request("/");
+    assertEquals(await response.text(), "OK");
+    assertEquals(response.status, 200);
+  }));
+});

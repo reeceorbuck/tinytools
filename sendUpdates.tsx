@@ -30,7 +30,6 @@ export async function sendUpdateStream(
   //     <template>
   //       <head-update>
   //         <AssetTags
-  //           fullPageLoad={false}
   //           accessedHandlerFiles={toolUsageTracker.accessedHandlerFiles}
   //           accessedStyleFiles={toolUsageTracker.accessedStyleFiles}
   //         />
@@ -50,7 +49,6 @@ export async function sendUpdateStream(
         <AssetTags
           accessedHandlerFiles={toolUsageTracker.accessedHandlerFiles}
           accessedStyleFiles={toolUsageTracker.accessedStyleFiles}
-          fullPageLoad={false}
         />
       </NewPartial>
       {jsxContent}

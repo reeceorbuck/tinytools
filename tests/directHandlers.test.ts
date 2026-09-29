@@ -63,3 +63,36 @@ Deno.test("ordinary attributes, inline expressions and component props are prese
     TypeError,
   );
 });
+
+Deno.test("handler arrays expand in every JSX path and preserve component props", () => {
+  const references = [handlers.click, handlers.click] as const;
+  const props = { onClick: references, children: "Count" };
+  const expected =
+    `<button onclick="${eventHandlerBody}" tt-handler-click="click_123 click_123">Count</button>`;
+  for (const render of [jsx, jsxs, jsxDEV]) {
+    assertEquals(String(render("button", props)), expected);
+    assertEquals(
+      String(render("button", { onClick: [] })),
+      "<button></button>",
+    );
+  }
+  assertEquals(props.onClick, references);
+  assertEquals(Object.keys(props), ["onClick", "children"]);
+  assertEquals(
+    String(
+      jsxTemplate`<button ${jsxAttr("onClick", references)}>Count</button>`,
+    ),
+    expected,
+  );
+  assertEquals(String(jsxAttr("onClick", [])), "");
+  const Component = (forwarded: Record<string, unknown>) => {
+    assertEquals(forwarded.onClick, references);
+    return jsx("button", forwarded);
+  };
+  assertEquals(String(jsx(Component, props)), expected);
+  assertThrows(
+    () => jsx("button", { onClick: [handlers.click, () => {}] }),
+    TypeError,
+  );
+  assertThrows(() => jsx("div", { onMount: references }), TypeError);
+});

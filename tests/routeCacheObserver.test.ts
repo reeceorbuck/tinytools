@@ -4,8 +4,11 @@ import { handlers } from "../clientFunctions.ts";
 import { routeCacheTools } from "../handlers/routeCacheTools.ts";
 
 void routeCacheTools;
-const builtHandlers = new Map<string, CallableFunction>();
-for (const name of ["observeRouteCache", "suspendRouteCache"]) {
+const builtHandlers = new Map<
+  string,
+  (this: unknown, ...args: unknown[]) => unknown
+>();
+for (const name of ["observeRouteCache"]) {
   const entry = [...handlers.values()].find((handler) =>
     handler.fnName === name
   );
@@ -29,16 +32,18 @@ Deno.test("cache observer captures replacements without navigation", async () =>
   }
   try {
     const target = document.getElementById("panel")!;
-    const lifecycle = document.createElement("abortable-lifecycle-element");
-    const watcher = document.createElement("template");
+    const watcher = Object.assign(document.createElement("cache-collector"), {
+      abortController: new AbortController(),
+    });
     watcher.setAttribute("cache-partial-id", "panel");
     watcher.innerHTML =
-      '<client-route path="/a" once data-nav-block interpolate="false"><template for-partial-id="panel"></template><link rel="modulepreload"></client-route><client-router for-partial-id="panel"><abortable-lifecycle-element><template></template></abortable-lifecycle-element></client-router>';
-    lifecycle.append(watcher);
-    target.append(lifecycle);
-    const observe = () => builtHandlers.get("observeRouteCache")!.call(watcher);
-    const suspend = () => builtHandlers.get("suspendRouteCache")!.call(watcher);
-    observe();
+      '<template><client-route path="/a" once data-nav-block interpolate="false"><template for-partial-id="panel"></template><link rel="modulepreload"></client-route><client-router cache-owner-id="panel"><template></template></client-router></template>';
+    target.append(watcher);
+    const observe = () => {
+      watcher.abortController = new AbortController();
+      builtHandlers.get("observeRouteCache")!.call(watcher);
+    };
+    const suspend = () => watcher.abortController.abort();
     observe();
     const routes = target.nextElementSibling!.querySelector("template")!;
     assertEquals(routes.content.children.length, 0);
@@ -51,7 +56,7 @@ Deno.test("cache observer captures replacements without navigation", async () =>
     assertEquals(routes.content.children.length, 0);
     const extra = document.createElement("input");
     extra.value = "added immediately before replacement";
-    target.insertBefore(extra, lifecycle);
+    target.insertBefore(extra, watcher);
     const originalNodes = Array.from(target.childNodes);
     target.replaceChildren(document.createElement("p"));
     await Promise.resolve();
@@ -92,7 +97,7 @@ Deno.test("cache observer captures replacements without navigation", async () =>
     target.replaceChildren();
     await Promise.resolve();
     assertEquals(routes.content.children.length, 1);
-    builtHandlers.get("suspendRouteCache")!.call(watcher);
+    suspend();
 
     const parentRoute = routes.content.firstElementChild!;
     target.replaceChildren(
@@ -104,15 +109,16 @@ Deno.test("cache observer captures replacements without navigation", async () =>
     inner.id = "inner";
     const innerInput = document.createElement("input");
     innerInput.value = "nested state";
-    const innerLifecycle = document.createElement(
-      "abortable-lifecycle-element",
+    const innerWatcher = Object.assign(
+      document.createElement("cache-collector"),
+      {
+        abortController: new AbortController(),
+      },
     );
-    const innerWatcher = document.createElement("template");
     innerWatcher.setAttribute("cache-partial-id", "inner");
     innerWatcher.innerHTML =
-      '<client-route path="/a/child" once data-nav-block interpolate="false"><template for-partial-id="inner"></template></client-route><client-router for-partial-id="inner"><abortable-lifecycle-element><template></template></abortable-lifecycle-element></client-router>';
-    innerLifecycle.append(innerWatcher);
-    inner.append(innerInput, innerLifecycle);
+      '<template><client-route path="/a/child" once data-nav-block interpolate="false"><template for-partial-id="inner"></template></client-route><client-router cache-owner-id="inner"><template></template></client-router></template>';
+    inner.append(innerInput, innerWatcher);
     target.append(inner);
     builtHandlers.get("observeRouteCache")!.call(innerWatcher);
     const innerRoutes = inner.nextElementSibling!.querySelector("template")!;
@@ -128,7 +134,7 @@ Deno.test("cache observer captures replacements without navigation", async () =>
     innerRoute.remove();
     builtHandlers.get("observeRouteCache")!.call(innerWatcher);
     target.replaceChildren(document.createElement("article"));
-    builtHandlers.get("suspendRouteCache")!.call(innerWatcher);
+    innerWatcher.abortController.abort();
     suspend();
     assertEquals(innerRoutes.content.children.length, 0);
     assertStrictEquals(inner.querySelector("input"), innerInput);
@@ -139,6 +145,7 @@ Deno.test("cache observer captures replacements without navigation", async () =>
     );
     savedParent.remove();
     observe();
+    innerWatcher.abortController = new AbortController();
     builtHandlers.get("observeRouteCache")!.call(innerWatcher);
     inner.replaceChildren();
     await Promise.resolve();

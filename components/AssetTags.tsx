@@ -1,15 +1,7 @@
 import type { FC } from "hono/jsx";
 import { tryGetContext } from "hono/context-storage";
-import { getClientFileName } from "../client/dist/manifest.ts";
-
-/** URL prefix for package-provided client scripts */
-const P = "/_tinytools";
 
 type AssetTagsProps = {
-  /** Whether to include full page load scripts (navigation, updates, etc.)
-   * @default true
-   */
-  fullPageLoad?: boolean;
   /** Optional explicit handler assets (e.g. for non-request update rendering) */
   accessedHandlerFiles?: Iterable<string>;
   /** Optional explicit style assets (e.g. for non-request update rendering) */
@@ -17,30 +9,14 @@ type AssetTagsProps = {
 };
 
 /**
- * Renders script and link tags for handler and style assets, along with
- * client-side scripts for enabled features.
- *
- * Feature scripts are controlled by the `tinyToolsFeatures` context set,
- * populated by individual feature middleware (e.g. `tiny.middleware.navApiTools()`).
- *
- * Features and their scripts:
- * - `"navigation"` - navigation.js, processIncomingData.js, processIncomingHtml.js,
- *                     performFetchAndUpdate.js, eventHandlers.js
- * - `"sse"` - sse.js
- * - `"localRoutes"` - localRoutes.js
- * - `"webComponents"` - wc-lifecycleAbortable.js
+ * Renders accessed handler and style assets.
  *
  * @example
  * ```tsx
- * // Scripts are determined by which feature middleware is active
  * <AssetTags />
- *
- * // For partial nav / SSE updates (no framework scripts)
- * <AssetTags fullPageLoad={false} />
  * ```
  */
 export const AssetTags: FC<AssetTagsProps> = ({
-  fullPageLoad = true,
   accessedHandlerFiles: explicitHandlerFiles,
   accessedStyleFiles: explicitStyleFiles,
 }) => {
@@ -57,10 +33,6 @@ export const AssetTags: FC<AssetTagsProps> = ({
     // These are set internally by the tools middleware initialized by tiny.middleware.core()
     const accessedStyleFiles = c?.var?.accessedStyleFiles as Set<string> ||
       new Set<string>();
-    console.log(
-      "[AssetTags] Reading accessedStyleFiles:",
-      Array.from(accessedStyleFiles),
-    );
     const accessedHandlerFiles = c?.var?.accessedHandlerFiles as Set<string> ||
       new Set<string>();
 
@@ -71,22 +43,8 @@ export const AssetTags: FC<AssetTagsProps> = ({
     accessedHandlerFiles.clear();
   }
 
-  // Read enabled features from context (populated by feature middleware)
-  const features = c?.var?.tinyToolsFeatures as Set<string> | undefined;
-  const hasNavigation = features?.has("navigation") ?? false;
-  const hasSse = features?.has("sse") ?? false;
-  const hasLocalRoutes = features?.has("localRoutes") ?? false;
-  const hasWebComponents = features?.has("webComponents") ?? false;
-
   return (
     <>
-      {fullPageLoad && hasWebComponents && (
-        <script
-          src={`${P}/${getClientFileName("wc-lifecycleAbortable.js")}`}
-          type="module"
-        />
-      )}
-
       {/* User-defined handler scripts */}
       {accessedHandlerFilesArray.map((file) => (
         <script src={`/handlers/${file}`} type="module" />
@@ -99,13 +57,6 @@ export const AssetTags: FC<AssetTagsProps> = ({
           href={`/styles/${file}`}
         />
       ))}
-
-      {/* Event handler proxy for lazy-loading user handlers */}
-      {fullPageLoad && (
-        <script
-          src={`${P}/${getClientFileName("eventHandlers.js")}`}
-        />
-      )}
     </>
   );
 };

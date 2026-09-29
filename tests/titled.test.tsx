@@ -36,7 +36,7 @@ Deno.test("titled - supplies the partial head-update title", async () => {
   const body = await response.text();
   assertStringIncludes(
     body,
-    "<head-update><title>Recalls Due</title>",
+    "<title>Recalls Due</title></template>",
   );
 });
 

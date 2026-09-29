@@ -1,6 +1,7 @@
 import { assertEquals, assertExists, assertStrictEquals } from "@std/assert";
 import { parseHTML } from "linkedom";
 import { handlers } from "../clientFunctions.ts";
+import { registeredClientTools } from "../clientTools.ts";
 import { ClientRoutes } from "../components/ClientRoutes.tsx";
 import { navigationTools } from "../handlers/navigationTools.ts";
 import { partialInsertHandlers } from "../handlers/partialInsertHandlers.ts";
@@ -11,9 +12,36 @@ void ClientRoutes;
 void navigationTools;
 void partialInsertHandlers;
 void routeCacheTools;
+await Promise.all(
+  [...registeredClientTools].map((tools) => tools.ensureDefined()),
+);
 
 const moduleUrls = new Map<string, string>();
-const builtHandlers = new Map<string, CallableFunction>();
+const builtHandlers = new Map<
+  string,
+  (this: unknown, ...args: unknown[]) => unknown
+>();
+async function buildHandler(filename: string): Promise<string> {
+  const cached = moduleUrls.get(filename);
+  if (cached) return cached;
+  const entry = [...handlers.values()].find((handler) =>
+    handler.filename === filename
+  );
+  assertExists(entry);
+  let code = await entry.buildCode();
+  for (const dependency of handlers.values()) {
+    const specifier = `"./${dependency.filename}.js"`;
+    if (code.includes(specifier)) {
+      code = code.replaceAll(
+        specifier,
+        JSON.stringify(await buildHandler(dependency.filename)),
+      );
+    }
+  }
+  const url = `data:text/javascript,${encodeURIComponent(code)}`;
+  moduleUrls.set(filename, url);
+  return url;
+}
 for (
   const name of [
     "getNavigationMethod",
@@ -26,10 +54,9 @@ for (
     "compileClientRoute",
     "interpolateClientRouteValue",
     "cloneClientRoute",
-    "activateClientRoutes",
-    "suspendClientRoutes",
+    "applyNavigationListener",
+    "matchClientRoutes",
     "observeRouteCache",
-    "suspendRouteCache",
   ]
 ) {
   const entry = [...handlers.values()].find((handler) =>
@@ -38,20 +65,18 @@ for (
       : handler.fnName === name
   );
   assertExists(entry);
-  let code = await entry.buildCode();
+  const code = await entry.buildCode();
   if (
-    ["handleNavigate", "partialReplace", "activateClientRoutes"].includes(name)
+    ["handleNavigate", "partialReplace", "applyNavigationListener"].includes(
+      name,
+    )
   ) {
     assertEquals(
       /routeCache|snapshotRoute|clientRoutePhases/.test(code),
       false,
     );
   }
-  for (const [filename, url] of moduleUrls) {
-    code = code.replaceAll(`"./${filename}.js"`, JSON.stringify(url));
-  }
-  const url = `data:text/javascript,${encodeURIComponent(code)}`;
-  moduleUrls.set(entry.filename, url);
+  const url = await buildHandler(entry.filename);
   builtHandlers.set(name, (await import(url)).default);
 }
 
@@ -138,6 +163,15 @@ Deno.test("ClientRoutes cooperate with core navigation", async (test) => {
     assertExists(handler);
     handler.call(receiver, new Event("load"));
   }
+  function activateRoutes(template: HTMLTemplateElement) {
+    const router = template.parentElement as HTMLElement & {
+      abortController?: AbortController;
+    };
+    router.abortController?.abort();
+    router.abortController = new AbortController();
+    router.setAttribute("tt-handler-navigate", "matchClientRoutes");
+    invoke("applyNavigationListener", router);
+  }
   function setup(coreFirst = true) {
     const navigation = new EventTarget();
     const location = { href: "https://example.com/current?keep=1" };
@@ -162,6 +196,15 @@ Deno.test("ClientRoutes cooperate with core navigation", async (test) => {
     setGlobal("MutationObserver", MutationObserver);
     setGlobal("HTMLTemplateElement", HTMLTemplateElement);
     setGlobal("NodeFilter", { SHOW_ELEMENT: 1, SHOW_TEXT: 4 });
+    setGlobal("tiny", {
+      runHandler(element: HTMLElement, event: Event) {
+        const handler = builtHandlers.get(
+          element.getAttribute(`tt-handler-${event.type}`)!,
+        );
+        assertExists(handler);
+        return handler.call(element, event);
+      },
+    });
     setGlobal("fetch", (url: URL, init: RequestInit) => {
       requests.push({
         url: url.href,
@@ -173,10 +216,12 @@ Deno.test("ClientRoutes cooperate with core navigation", async (test) => {
     });
     if (coreFirst) invoke("handleNavigate", {});
     function addRoutes(...routes: HTMLElement[]) {
+      const router = document.createElement("client-router");
       const template = document.createElement("template");
       template.content.append(...routes);
-      document.head.append(template);
-      invoke("activateClientRoutes", template);
+      router.append(template);
+      document.head.append(router);
+      activateRoutes(template);
       return template;
     }
     async function navigate(
@@ -217,7 +262,7 @@ Deno.test("ClientRoutes cooperate with core navigation", async (test) => {
     await test.step("disconnected containers neither render nor block fetch", async () => {
       const state = setup();
       const container = state.addRoutes(createRoute("/next", "detached", true));
-      container.remove();
+      container.parentElement!.remove();
       await state.navigate(new NavigationEvent("/next"));
       assertEquals(state.inserted, []);
       assertEquals(state.requests.length, 1);
@@ -324,16 +369,19 @@ Deno.test("ClientRoutes cooperate with core navigation", async (test) => {
         let clicks = 0;
         button.addEventListener("click", () => clicks++);
         document.body.append(target);
-        const lifecycle = document.createElement("abortable-lifecycle-element");
-        const watcher = document.createElement("template");
+        const watcher = Object.assign(
+          document.createElement("cache-collector"),
+          {
+            abortController: new AbortController(),
+          },
+        );
         watcher.setAttribute("cache-partial-id", "source-panel");
         watcher.innerHTML =
-          '<client-route path="/current" once data-nav-block interpolate="false"><template for-partial-id="source-panel"></template></client-route><client-router for-partial-id="source-panel"><abortable-lifecycle-element><template></template></abortable-lifecycle-element></client-router>';
-        lifecycle.append(watcher);
-        target.append(lifecycle);
+          '<template><client-route path="/current" once data-nav-block interpolate="false"><template for-partial-id="source-panel"></template></client-route><client-router cache-owner-id="source-panel"><template></template></client-router></template>';
+        target.append(watcher);
         invoke("observeRouteCache", watcher);
         const container = target.nextElementSibling!.querySelector("template")!;
-        invoke("activateClientRoutes", container);
+        activateRoutes(container);
         const fallback = createRoute("/current", "loading");
         fallback.setAttribute("fallback", "");
         state.addRoutes(fallback);
@@ -398,8 +446,6 @@ Deno.test("ClientRoutes cooperate with core navigation", async (test) => {
         assertEquals(state.requests, []);
         assertEquals(event.interceptions.length, 3);
         assertEquals(state.redirects, ["https://example.com/next?value=2"]);
-        assertEquals(state.styles.get("--path-0"), "next");
-        assertEquals(state.styles.get("--param-value"), "2");
         assertEquals(source.partialAttributeReads, 1);
       });
     }
@@ -636,17 +682,18 @@ Deno.test("ClientRoutes cooperate with core navigation", async (test) => {
       assertEquals(state.requests, []);
     });
 
-    await test.step("suspended routes stop blocking and can reactivate once", async () => {
+    await test.step("aborted route listeners stop blocking and reconnect", async () => {
       const state = setup();
       const template = state.addRoutes(
         createRoute("/next", "local", true),
       );
-      invoke("suspendClientRoutes", template);
+      (template.parentElement as HTMLElement & {
+        abortController: AbortController;
+      }).abortController.abort();
       await state.navigate(new NavigationEvent("/next"));
       assertEquals(state.inserted, []);
       assertEquals(state.requests.length, 1);
-      invoke("activateClientRoutes", template);
-      invoke("activateClientRoutes", template);
+      activateRoutes(template);
       await state.navigate(new NavigationEvent("/next"));
       assertEquals(state.inserted, ["local"]);
       assertEquals(state.requests.length, 1);

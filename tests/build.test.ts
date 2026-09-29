@@ -11,7 +11,7 @@
  */
 
 import { assertEquals, assertExists, assertNotEquals } from "@std/assert";
-import { buildScriptFiles } from "../build.ts";
+import { buildHandlerCode, buildScriptFiles } from "../build.ts";
 import {
   changedHandlerKeys,
   filesWithChangedHandlers,
@@ -33,6 +33,50 @@ import {
 } from "../clientTools.ts";
 import { registeredClientTools } from "../clientTools.ts";
 import { css } from "../scopedStyles.ts";
+
+Deno.test({
+  name:
+    "handler builds emit executable shorthand methods and function expressions",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  async fn() {
+    const definitions = {
+      method(this: { value: number }, amount: number) {
+        return this.value + amount;
+      },
+      async asyncMethod(this: { value: number }, amount: number) {
+        return await Promise.resolve(this.value + amount);
+      },
+      expression: function (this: { value: number }, amount: number) {
+        return this.value + amount;
+      },
+      arrow: (amount: number) => amount + 2,
+    };
+    for (const [name, definition] of Object.entries(definitions)) {
+      const code = await buildHandlerCode(
+        name,
+        definition,
+        name,
+        new Map([[name, name]]),
+      );
+      assertEquals(code.includes("globalThis.handlers"), false);
+      assertEquals(code.includes("_handler"), false);
+      if (name === "expression") {
+        assertEquals(
+          code.includes("export default function expression("),
+          true,
+        );
+      }
+      if (name === "arrow") {
+        assertEquals(code.includes("=>"), true);
+      }
+      const module = await import(
+        `data:text/javascript,${encodeURIComponent(code)}`
+      );
+      assertEquals(await module.default.call({ value: 2 }, 3), 5);
+    }
+  },
+});
 
 // ============================================================================
 // Test Utilities

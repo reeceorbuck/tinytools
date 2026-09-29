@@ -1,15 +1,14 @@
 import { Hono } from "hono";
-import { NewPartial, tiny } from "../../honoFactory.tsx";
+import { tiny } from "../../honoFactory.tsx";
+import { NewPartial } from "../../components/NewPartial.tsx";
 import { ClientRoutes } from "../../components/ClientRoutes.tsx";
 import { navigationTools } from "../../handlers/navigationTools.ts";
 import { partialInsertHandlers } from "../../handlers/partialInsertHandlers.ts";
 
 const app = new Hono()
   .use(...tiny.middleware.core())
-  .use(tiny.middleware.webComponents())
-  .use(tiny.middleware.sharedImports(navigationTools, partialInsertHandlers))
-  .use(tiny.middleware.layout(({ children }, context) => {
-    const { fn } = context.var.tools;
+  .use(tiny.middleware.layout(async ({ children }) => {
+    const { fn } = await tiny.imports(navigationTools, partialInsertHandlers);
     return (
       <body onLoad={fn.handleNavigate}>
         <nav>
@@ -32,8 +31,8 @@ const app = new Hono()
     );
   }));
 
-app.get("/nested/:type?", (context) => {
-  const { fn } = context.var.tools;
+app.get("/nested/:type?", async (context) => {
+  const { fn } = await tiny.imports(partialInsertHandlers);
   const type = context.req.param("type") ?? "a";
   const source = context.req.header("source-url");
   const sourcePath = source ? new URL(source, context.req.url).pathname : "";
@@ -59,8 +58,8 @@ app.get("/nested/:type?", (context) => {
   );
 });
 
-app.get("/:page", (context) => {
-  const { fn } = context.var.tools;
+app.get("/:page", async (context) => {
+  const { fn } = await tiny.imports(partialInsertHandlers);
   return context.render(
     <NewPartial id="panel" cache onLoad={fn.partialReplace}>
       <h1>Cache {context.req.param("page")}</h1>

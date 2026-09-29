@@ -1,4 +1,9 @@
-import { Handlers, imports } from "../mod.ts";
+import {
+  Handlers,
+  imports,
+  PartialAbortableHTMLElement,
+  tiny,
+} from "../mod.ts";
 import {
   type NavigationUrlResult,
   navigationUrlTools,
@@ -138,58 +143,6 @@ export const navigationHandlerTools = new Handlers(
           return e.info as NavigationClientInfo;
         }
 
-        function setVariablesFromUrl(fromUrl: URL, toUrl: URL) {
-          const fromSplitPath = fromUrl.pathname.split("/").filter(Boolean);
-          const toSplitPath = toUrl.pathname.split("/").filter(Boolean);
-          toSplitPath.forEach((partPath, i) => {
-            // Only update path variables if they have changed
-            if (partPath !== fromSplitPath[i]) {
-              document.documentElement.style.setProperty(
-                `--path-${i}`,
-                partPath,
-              );
-            }
-          });
-          if (fromSplitPath.length > toSplitPath.length) {
-            // Remove extra path parts
-            for (let i = toSplitPath.length; i < fromSplitPath.length; i++) {
-              document.documentElement.style.removeProperty(`--path-${i}`);
-            }
-          }
-          const fromParams = fromUrl.searchParams;
-          const paramChanges = toUrl.searchParams.entries().toArray().map(
-            ([key, value]) => {
-              if (fromParams.get(key) === value) return null;
-              return {
-                key,
-                from: fromParams.get(key),
-                to: value || null,
-              };
-            },
-          ).concat(
-            fromParams.entries().toArray().map(([key, value]) => {
-              if (toUrl.searchParams.has(key)) return null;
-              return {
-                key,
-                from: value || null,
-                to: null,
-              };
-            }),
-          ).filter((change) => change !== null);
-          const changeMap = new Map(paramChanges.map(({ key, ...rest }) => [
-            key,
-            rest,
-          ]));
-          changeMap.forEach(({ to }, key) => {
-            if (!to) {
-              document.documentElement.style.removeProperty(`--param-${key}`);
-            } else {document.documentElement.style.setProperty(
-                `--param-${key}`,
-                to,
-              );}
-          });
-        }
-
         console.log("Core Navigation event: ", e);
         if (e.defaultPrevented || !e.canIntercept) return;
         try {
@@ -218,7 +171,6 @@ export const navigationHandlerTools = new Handlers(
                 if (shouldRedirect) {
                   controller.redirect(displayUrl.href);
                 }
-                setVariablesFromUrl(fromUrl, displayUrl);
               } catch (err) {
                 console.error("Error in pre-commit handler: ", err);
               }
@@ -282,9 +234,10 @@ export const navigationHandlerTools = new Handlers(
 export const navigationTools = new Handlers(import.meta.url, async () => {
   const { fn } = await imports(
     navigationHandlerTools,
+    applyNavigationHandlers,
   );
   return {
-    handleNavigate: function (this: HTMLElement, _e: Event) {
+    handleNavigate: function (this: HTMLElement) {
       const navigationApi = globalThis.navigation as AppNavigation;
       if (!navigationApi.controller) {
         navigationApi.controller = new AbortController();
@@ -308,5 +261,119 @@ export const navigationTools = new Handlers(import.meta.url, async () => {
       navigationApi.controller?.abort();
       console.log("Aborted navigation");
     },
+    setPathVariables: function () {
+      console.log("setPathVariables activated, this: ", this);
+      const html = globalThis.document
+        .documentElement as PartialAbortableHTMLElement;
+      const url = new URL(globalThis.location.href);
+      url.pathname
+        .split("/")
+        .filter(Boolean)
+        .forEach((part, i) => {
+          html.style.setProperty(`--path-${i}`, part);
+        });
+      Array.from(url.searchParams.entries())
+        .forEach(([key, value]) => {
+          html.style.setProperty(`--param-${key}`, value);
+        });
+
+      fn.applyCurrentEntryChangeListener.apply(html);
+    },
+    setVariablesFromUrl: function (event: NavigationCurrentEntryChangeEvent) {
+      const fromUrl = new URL(event.from.url!);
+      const toUrl = new URL(globalThis.location.href);
+
+      const fromSplitPath = fromUrl.pathname.split("/").filter(Boolean);
+      const toSplitPath = toUrl.pathname.split("/").filter(Boolean);
+      toSplitPath.forEach((partPath, i) => {
+        // Only update path variables if they have changed
+        if (partPath !== fromSplitPath[i]) {
+          document.documentElement.style.setProperty(
+            `--path-${i}`,
+            partPath,
+          );
+        }
+      });
+      if (fromSplitPath.length > toSplitPath.length) {
+        // Remove extra path parts
+        for (let i = toSplitPath.length; i < fromSplitPath.length; i++) {
+          document.documentElement.style.removeProperty(`--path-${i}`);
+        }
+      }
+      const fromParams = fromUrl.searchParams;
+      const paramChanges = toUrl.searchParams.entries().toArray().map(
+        ([key, value]) => {
+          if (fromParams.get(key) === value) return null;
+          return {
+            key,
+            from: fromParams.get(key),
+            to: value || null,
+          };
+        },
+      ).concat(
+        fromParams.entries().toArray().map(([key, value]) => {
+          if (toUrl.searchParams.has(key)) return null;
+          return {
+            key,
+            from: value || null,
+            to: null,
+          };
+        }),
+      ).filter((change) => change !== null);
+      const changeMap = new Map(paramChanges.map(({ key, ...rest }) => [
+        key,
+        rest,
+      ]));
+      changeMap.forEach(({ to }, key) => {
+        if (!to) {
+          document.documentElement.style.removeProperty(`--param-${key}`);
+        } else {document.documentElement.style.setProperty(
+            `--param-${key}`,
+            to,
+          );}
+      });
+    },
   };
 });
+
+export const applyNavigationHandlers = new Handlers(
+  import.meta.url,
+  async () => {
+    const { fn } = await imports(navigationUrlTools);
+    return {
+      applyNavigationListener: function (
+        this: PartialAbortableHTMLElement,
+        _e: Event,
+      ) {
+        console.log("Applying navigation listener for element: ", this);
+        globalThis.navigation.addEventListener("navigate", (event) => {
+          const navigationInfo = event.info && typeof event.info === "object"
+            ? event.info as NavigationClientInfo
+            : null;
+          if (
+            !this.isConnected || event.defaultPrevented ||
+            !event.canIntercept || navigationInfo?.onlyUpdateUrl
+          ) return;
+          const { shouldIntercept } = fn.getNavigationUrls(event);
+          if (!shouldIntercept) return;
+          tiny.runHandler(this, event);
+        }, { signal: this.abortController?.signal });
+      },
+      applyCurrentEntryChangeListener: function (
+        this: PartialAbortableHTMLElement,
+      ) {
+        console.log(
+          "Applying current entry change listener for element: ",
+          this,
+        );
+        globalThis.navigation.addEventListener(
+          "currententrychange",
+          (event) => {
+            tiny.runHandler(this, event);
+          },
+          { signal: this.abortController?.signal },
+        );
+      },
+    };
+  },
+);

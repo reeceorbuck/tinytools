@@ -2,7 +2,7 @@ import { assertEquals, assertExists } from "@std/assert";
 import { handlers } from "../clientFunctions.ts";
 import { clientRouteTools } from "../handlers/clientRouteTools.ts";
 
-void clientRouteTools;
+await clientRouteTools.ensureDefined();
 
 async function buildHandler(name: string) {
   const entry = [...handlers.values()].find((handler) =>

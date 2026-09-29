@@ -21,12 +21,17 @@ import {
   SCOPE_BOUNDARY_CLASS,
   ScopedStyleImpl,
   type ScopedStyleInput,
-  scopedStylesRegistry,
   styleBundleRegistry,
 } from "./scopedStyles.ts";
 import { tryGetContext } from "hono/context-storage";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Context } from "hono";
+import {
+  createSignalTools,
+  type SignalAccessors,
+  type SignalDefinitions,
+  type SignalTools,
+} from "./signals.ts";
 import {
   createEvents,
   createHandlerReferences,
@@ -88,6 +93,8 @@ type ClientToolsCacheV1 = {
 
 const CACHE_DIR = "./.cache";
 const CACHE_PATH = `${CACHE_DIR}/clientToolsCache.json`;
+export const memoryBuild = process.argv.slice(2).includes("--none");
+export const memoryAssets = new Map<string, string>();
 
 export type NoContextToolUsageTracker = {
   readonly accessedHandlerFiles: Set<string>;
@@ -393,7 +400,14 @@ class ClientToolsCacheManager {
 
   constructor() {
     const lazyMode = process.argv.slice(2).includes("--lazy");
-    this.trustCache = !lazyMode;
+    this.trustCache = !lazyMode && !memoryBuild;
+
+    if (memoryBuild) {
+      console.log(
+        "[tiny-tools] none mode active - generated assets stay in memory",
+      );
+      return;
+    }
 
     // Load the cache from disk
     try {
@@ -575,7 +589,7 @@ class ClientToolsCacheManager {
 
   /** Mark the cache as dirty and schedule a flush to disk */
   markDirty(): void {
-    if (this.trustCache) return;
+    if (this.trustCache || memoryBuild) return;
     this.dirty = true;
     this.scheduleFlush();
   }
@@ -596,6 +610,7 @@ class ClientToolsCacheManager {
   }
 
   private _writeSync(): void {
+    if (memoryBuild) return;
     try {
       mkdirSync(CACHE_DIR, { recursive: true });
       const data: ClientToolsCacheV1 = {
@@ -616,6 +631,7 @@ class ClientToolsCacheManager {
 
   /** Get the mtime of a source file (memoized) */
   getSourceFileMtimeMs(sourceFileUrl: string): number | null {
+    if (memoryBuild) return null;
     if (this.trustCache) {
       return this.files[sourceFileUrl]?.mtimeMs ?? null;
     }
@@ -799,81 +815,21 @@ type AnyFunction = (...args: any[]) => any;
 // Type Definitions
 // ============================================================================
 
-/** Helper type for extendWithImports return - accumulates raw function and style types */
-type ExtendResult<
-  TAccumulatedFunctions,
-  TAccumulatedStyles,
-  // deno-lint-ignore no-explicit-any
-  TLocalTools extends ClientTools<any, any, any>,
-> = {
-  events: Events<TAccumulatedFunctions & ExtractFunctions<TLocalTools>>;
-  handlers: HandlerReferences<
-    TAccumulatedFunctions & ExtractFunctions<TLocalTools>
-  >;
-  fn: ActivateClientFunctions<
-    TAccumulatedFunctions & ExtractFunctions<TLocalTools>
-  >;
-  styled: ActivateScopedStyles<
-    TAccumulatedStyles & ExtractStyles<TLocalTools>
-  >;
-  // deno-lint-ignore no-explicit-any
-  extendWithImports<TNextTools extends ClientTools<any, any, any>>(
-    tools: TNextTools,
-  ): ExtendResult<
-    TAccumulatedFunctions & ExtractFunctions<TLocalTools>,
-    TAccumulatedStyles & ExtractStyles<TLocalTools>,
-    TNextTools
-  >;
-};
-
-/**
- * Helper type for the activated client tools proxy.
- * Provides access to functions and styles, plus extendWithImports() method.
- */
-export interface ActivatedClientTools<TFunctions, TStyles> {
-  events: Events<TFunctions>;
-  handlers: HandlerReferences<TFunctions>;
-  /**
-   * Access to activated client functions.
-   */
-  fn: ActivateClientFunctions<TFunctions>;
-  /**
-   * Access to activated scoped styles.
-   */
-  styled: ActivateScopedStyles<TStyles>;
-  /**
-   * Extend with component-local tools inside a route handler.
-   * Uses `this` type to properly infer the current tools, preserving all types
-   * from ancestor middleware.
-   *
-   * @example
-   * ```tsx
-   * const { fn, styled } = await c.var.tools.extendWithImports(singleRouteTools);
-   * ```
-   */
-  // deno-lint-ignore no-explicit-any
-  extendWithImports<TLocalTools extends ClientToolsClass<any, any, any>>(
-    localTools: TLocalTools,
-  ): ExtendResult<
-    TFunctions,
-    TStyles,
-    TLocalTools
-  >;
-}
-
 /** Extract functions type from a ClientTools instance */
 // deno-lint-ignore no-explicit-any
-type ExtractFunctions<T> = T extends ClientToolsClass<infer F, any, any> ? F
+type ExtractFunctions<T> = T extends { readonly _isSignals: true } ? {}
+  : T extends ClientToolsClass<infer F, any, any> ? F
   // deno-lint-ignore ban-types
   : {};
 
 /** Extract styles type from a ClientTools instance (excludes global styles) */
 // deno-lint-ignore no-explicit-any
-type ExtractStyles<T> = T extends ClientToolsClass<any, infer S, any> ? S
+type ExtractStyles<T> = T extends { readonly _isSignals: true } ? {}
+  : T extends ClientToolsClass<any, infer S, any> ? S
   // deno-lint-ignore ban-types
   : {};
 
-type ReservedStyledKey = "mergeClasses";
+type ReservedStyledKey = "mergeClasses" | "run";
 
 type ForbidReservedStyledKeys<T extends Record<string, ScopedStyleInput>> =
   & T
@@ -881,17 +837,22 @@ type ForbidReservedStyledKeys<T extends Record<string, ScopedStyleInput>> =
     [K in Extract<keyof T, ReservedStyledKey>]?: never;
   };
 
-/** Result type for the engage() method on ClientTools */
-type EngageResult<TFunctions, TStyles> = {
+/** Resolved handlers, styles, and the current request context. */
+export type ImportedTools<TFunctions, TStyles, TSignals = {}> = {
   readonly events: Events<TFunctions>;
-  readonly handlers: HandlerReferences<TFunctions>;
-  readonly fn: ActivateClientFunctions<TFunctions>;
+  readonly fn: HandlerReferences<TFunctions>;
+  readonly signal: HandlerReferences<TSignals>;
+  readonly handlers: ActivateClientFunctions<TFunctions>;
   readonly styled: ActivateScopedStyles<TStyles>;
   readonly c: Context;
 };
 
 // deno-lint-ignore no-explicit-any
 type AnyClientToolsInstance = ClientToolsClass<any, any, any>;
+
+type ExtractSignals<T> = T extends { readonly _isSignals: true }
+  ? T extends ClientToolsClass<infer Functions, any, any> ? Functions : {}
+  : {};
 
 type HandlerFactory<T extends Record<string, AnyFunction>> = () =>
   | T
@@ -904,13 +865,6 @@ type HandlerDefinitionScope = {
 };
 
 const handlerDefinitionScope = new AsyncLocalStorage<HandlerDefinitionScope>();
-
-interface HandlerFactoryConstructor {
-  new <TFunctions extends Record<string, AnyFunction>>(
-    sourceFileUrl: string | URL,
-    factory: HandlerFactory<TFunctions>,
-  ): ClientToolsClass<TFunctions, Record<never, never>, Record<never, never>>;
-}
 
 // deno-lint-ignore no-explicit-any
 type UnionToIntersection<U> = (U extends any ? (arg: U) => void : never) extends
@@ -1009,7 +963,11 @@ interface ClientToolsConstructor {
   >;
 }
 
-interface HandlersConstructor extends HandlerFactoryConstructor {
+interface HandlersConstructor {
+  new <TFunctions extends Record<string, AnyFunction>>(
+    sourceFileUrl: string | URL,
+    factory: HandlerFactory<TFunctions>,
+  ): ClientToolsClass<TFunctions, Record<never, never>, Record<never, never>>;
   // Overloads without sourceFileUrl (functions as first arg)
   // deno-lint-ignore ban-types
   new <TFunctions extends Record<string, AnyFunction> = {}>(
@@ -1051,6 +1009,22 @@ interface HandlersConstructor extends HandlerFactoryConstructor {
     UnionOfStyles<TImports>,
     {}
   >;
+}
+
+interface StoreConstructor extends HandlersConstructor {
+  new <TStored extends object, TFunctions extends Record<string, AnyFunction>>(
+    sourceFileUrl: string | URL,
+    factory: (stored: TStored) => TFunctions | Promise<TFunctions>,
+  ): ClientToolsClass<TFunctions, Record<never, never>, Record<never, never>>;
+}
+
+interface SignalsConstructor {
+  new <Definitions extends SignalDefinitions>(
+    sourceFileUrl: string | URL,
+    factory: (tools: SignalTools) => Definitions,
+  ): ClientToolsClass<SignalAccessors<Definitions>, {}, {}> & {
+    readonly _isSignals: true;
+  };
 }
 
 interface StylesConstructor {
@@ -1097,12 +1071,11 @@ interface StylesConstructor {
  *
  * // Create app with middleware
  * const app = new Hono()
- *   .use(...tiny.middleware.core())
- *   .use(tiny.middleware.sharedImports(routeHandlers, routeStyles));
+ *   .use(...tiny.middleware.core());
  *
  * // In route handlers
- * app.get("/", (c) => {
- *   const { fn, styled } = c.var.tools;
+ * app.get("/", async (c) => {
+ *   const { fn, styled } = await tiny.imports(routeHandlers, routeStyles);
  *   return c.render(
  *     <button class={styled.buttonStyle} onClick={fn.handleClick}>
  *       Click me
@@ -1122,9 +1095,11 @@ class ClientToolsClass<
   private static readonly RESERVED_FUNCTION_KEYS = new Set<string>([
     "multiHandler",
     "multiHandlerSync",
+    "run",
   ]);
   private static readonly RESERVED_STYLED_KEYS = new Set<string>([
     "mergeClasses",
+    "run",
   ]);
 
   private sourceFileUrl: string;
@@ -1159,6 +1134,10 @@ class ClientToolsClass<
     scope: HandlerDefinitionScope,
   ) => Promise<void>;
   private _definitionWaits = new Set<AnyClientToolsInstance>();
+
+  protected get stateful(): boolean {
+    return false;
+  }
 
   private _waitsFor(
     target: AnyClientToolsInstance,
@@ -1205,8 +1184,28 @@ class ClientToolsClass<
   }
 
   protected defineFactory(
-    factory: HandlerFactory<Record<string, AnyFunction>>,
+    factory: (
+      stored: Record<string, unknown>,
+    ) => ReturnType<HandlerFactory<Record<string, AnyFunction>>>,
   ): void {
+    let storedBinding = "stored";
+    if (this.stateful) {
+      const source = factory.toString().trim();
+      const parameter = source.match(
+        /^(?:async\s+)?(?:function(?:\s+[$\w]+)?\s*|[$\w]+\s*)?\(\s*([$A-Z_a-z][$\w]*)?\s*\)/,
+      ) ?? source.match(/^(?:async\s+)?([$A-Z_a-z][$\w]*)\s*=>/);
+      if (!parameter) {
+        throw new TypeError(
+          "Store factory must have no parameters or one simple state parameter.",
+        );
+      }
+      storedBinding = parameter[1] ?? storedBinding;
+      if (storedBinding === "fn" || storedBinding === "_handler") {
+        throw new TypeError(
+          "Store state parameter cannot be named fn or _handler.",
+        );
+      }
+    }
     const namespaceId = cache.getNextOccurrenceIndex(
       this.sourceFileUrl,
       "",
@@ -1214,7 +1213,7 @@ class ClientToolsClass<
     );
     this._definitionReady = false;
     this._definitionInitializer = async (scope) => {
-      const functions = await factory();
+      const functions = await factory(Object.create(null));
       if (
         !functions || typeof functions !== "object" ||
         Object.values(functions).some((value) => typeof value !== "function")
@@ -1223,7 +1222,12 @@ class ClientToolsClass<
           "Handlers factory must return an object of handler functions.",
         );
       }
-      this._processFunctions(functions, scope.dependencies, namespaceId);
+      this._processFunctions(
+        functions,
+        scope.dependencies,
+        namespaceId,
+        storedBinding,
+      );
       for (const instance of this._clientFunctions.values()) {
         await instance.initializeNamespace();
       }
@@ -1298,6 +1302,7 @@ class ClientToolsClass<
     fns: T,
     namespaceDependencies?: ReadonlyMap<string, ClientFunctionImpl>,
     namespaceId?: number,
+    storedBinding = "stored",
   ): void {
     // Compute a stable fingerprint of imported function names so that
     // adding/removing imports produces a different handler hash (and filename),
@@ -1328,6 +1333,8 @@ class ClientToolsClass<
         importsFingerprint,
         namespaceDependencies,
         namespaceId,
+        this.stateful,
+        storedBinding,
       );
       // deno-lint-ignore no-explicit-any
       (this as any)[fnName] = (instance as any)[fnName];
@@ -1420,7 +1427,7 @@ class ClientToolsClass<
 
   /**
    * Deferred validation and build for all handlers and styles in this instance.
-   * Called at request time by tiny.middleware.sharedImports(). Skips entirely in prod mode.
+   * Called by tiny.imports(). Skips entirely in prod mode.
    * Subsequent calls return the same promise (idempotent).
    */
   async ensureBuilt(): Promise<void> {
@@ -1506,9 +1513,11 @@ class ClientToolsClass<
         oldBundleFilename !== newBundleFilename
       ) {
         styleBundleRegistry.delete(oldBundleFilename);
-        await rm(`${stylesDir}/${oldBundleFilename}.css`).catch(
-          () => {},
-        );
+        if (!memoryBuild) {
+          await rm(`${stylesDir}/${oldBundleFilename}.css`).catch(
+            () => {},
+          );
+        }
       }
     }
 
@@ -1537,8 +1546,10 @@ class ClientToolsClass<
           this._staleOwnBundleFilename &&
           this._staleOwnBundleFilename !== bundleFilename
         ) {
-          await rm(`${stylesDir}/${this._staleOwnBundleFilename}.css`)
-            .catch(() => {});
+          if (!memoryBuild) {
+            await rm(`${stylesDir}/${this._staleOwnBundleFilename}.css`)
+              .catch(() => {});
+          }
           this._staleOwnBundleFilename = undefined;
         }
 
@@ -1565,6 +1576,14 @@ class ClientToolsClass<
     bundleFilename: string,
     styles: ScopedStyleImpl[],
   ): Promise<void> {
+    if (memoryBuild) {
+      const assetPath = `/styles/${bundleFilename}.css`;
+      if (!memoryAssets.has(assetPath)) {
+        const { buildLayeredCssContent } = await import("./build.ts");
+        memoryAssets.set(assetPath, buildLayeredCssContent(styles));
+      }
+      return;
+    }
     const filePath = `${stylesDir}/${bundleFilename}.css`;
     const fileExists = await fsStat(filePath).then(() => true).catch(
       () => false,
@@ -1599,6 +1618,7 @@ class ClientToolsClass<
     stylesDir: string,
     currentBundleFilename: string,
   ): Promise<void> {
+    if (memoryBuild) return;
     if (this._ownStyleNames.size === 0) return;
     const urlPath = this.sourceFileUrl.replace(/\\/g, "/");
     const baseName = urlPath.split("/").pop()?.replace(/\.[^.]+$/, "") ||
@@ -1776,6 +1796,17 @@ class ClientToolsClass<
     return result;
   }
 
+  get run(): AccumulatedFunctions {
+    if (!this._definitionReady) {
+      throw new Error(
+        "Handler definitions are not ready. Await tools.ensureDefined() before accessing tools.run.",
+      );
+    }
+    return Object.fromEntries(
+      [...this._clientFunctions].map(([name, instance]) => [name, instance.fn]),
+    ) as AccumulatedFunctions;
+  }
+
   /**
    * Get generated scoped style class names without requiring request context.
    * Useful for attributes like data-scope-boundary where only class strings are needed.
@@ -1793,159 +1824,6 @@ class ClientToolsClass<
       );
     }
     return result;
-  }
-
-  // deno-lint-ignore no-explicit-any
-  private _engageWithoutContext(toolsChain: ClientToolsClass<any, any, any>[]) {
-    const fn = new Proxy({}, {
-      get: (_target, prop) =>
-        resolveToolAccessFromChain(
-          toolsChain,
-          "function",
-          prop,
-          recordNoContextUsage,
-        ),
-    });
-
-    const styled = new Proxy({}, {
-      get: (_target, prop) =>
-        resolveToolAccessFromChain(
-          toolsChain,
-          "style",
-          prop,
-          recordNoContextUsage,
-        ),
-    });
-
-    return {
-      events: createEvents((name) => (fn as Record<string, unknown>)[name]),
-      handlers: createHandlerReferences<AccumulatedFunctions>((name) =>
-        (fn as Record<string, unknown>)[name]
-      ),
-      // deno-lint-ignore no-explicit-any
-      fn: fn as any,
-      // deno-lint-ignore no-explicit-any
-      styled: styled as any,
-      get c(): Context {
-        throw new Error(
-          "ClientTools.engage() was used without an active Hono request context. Use only fn/styled in this path.",
-        );
-      },
-    };
-  }
-
-  /**
-   * Extend this ClientTools instance with additional tools, returning a chainable
-   * object with an `engage()` method. The most-local tools should call extend.
-   *
-   * @example
-   * ```ts
-   * const { fn, styled } = componentTools.extend(globalTools, autoSubmitTools).engage();
-   * ```
-   *
-   * @returns An object with an `engage()` method that merges all tools
-   */
-  // deno-lint-ignore no-explicit-any
-  extend<T1 extends ClientToolsClass<any, any, any>>(
-    t1: T1,
-  ): {
-    engage: () => Promise<
-      EngageResult<
-        AccumulatedFunctions & ExtractFunctions<T1>,
-        AccumulatedStyles & ExtractStyles<T1>
-      >
-    >;
-  };
-  extend<
-    // deno-lint-ignore no-explicit-any
-    T1 extends ClientToolsClass<any, any, any>,
-    // deno-lint-ignore no-explicit-any
-    T2 extends ClientToolsClass<any, any, any>,
-  >(
-    t1: T1,
-    t2: T2,
-  ): {
-    engage: () => Promise<
-      EngageResult<
-        AccumulatedFunctions & ExtractFunctions<T1> & ExtractFunctions<T2>,
-        AccumulatedStyles & ExtractStyles<T1> & ExtractStyles<T2>
-      >
-    >;
-  };
-  extend<
-    // deno-lint-ignore no-explicit-any
-    T1 extends ClientToolsClass<any, any, any>,
-    // deno-lint-ignore no-explicit-any
-    T2 extends ClientToolsClass<any, any, any>,
-    // deno-lint-ignore no-explicit-any
-    T3 extends ClientToolsClass<any, any, any>,
-  >(
-    t1: T1,
-    t2: T2,
-    t3: T3,
-  ): {
-    engage: () => Promise<
-      EngageResult<
-        & AccumulatedFunctions
-        & ExtractFunctions<T1>
-        & ExtractFunctions<T2>
-        & ExtractFunctions<T3>,
-        & AccumulatedStyles
-        & ExtractStyles<T1>
-        & ExtractStyles<T2>
-        & ExtractStyles<T3>
-      >
-    >;
-  };
-  // deno-lint-ignore no-explicit-any
-  extend(...others: ClientToolsClass<any, any, any>[]): {
-    engage: () => Promise<EngageResult<unknown, unknown>>;
-  };
-  // deno-lint-ignore no-explicit-any
-  extend(...others: ClientToolsClass<any, any, any>[]): {
-    engage: () => Promise<EngageResult<unknown, unknown>>;
-  } {
-    return {
-      engage: async () => {
-        await Promise.all([this, ...others].map((t) => t.ensureBuilt()));
-        const c = tryGetContext();
-        if (!c) {
-          return this._engageWithoutContext([...others, this]);
-        }
-        // deno-lint-ignore no-explicit-any
-        let tools = (c as any).var.tools as any;
-        // Extend with the additional tools first (ancestors/shared)
-        for (const other of others) {
-          tools = await tools.extendWithImports(other);
-        }
-        // Extend with self (the most-local tools) last
-        tools = await tools.extendWithImports(this);
-        return { ...tools, c };
-      },
-    };
-  }
-
-  /**
-   * Shorthand for getting the current request context and extending tools with this instance.
-   *
-   * @example
-   * ```ts
-   * const { fn, styled, c } = componentTools.engage();
-   * ```
-   *
-   * @returns The extended tools (`fn`, `styled`, `extendWithImports`) plus `c` (the Hono context)
-   */
-  async engage(): Promise<
-    EngageResult<AccumulatedFunctions, AccumulatedStyles>
-  > {
-    await this.ensureBuilt();
-    const c = tryGetContext();
-    if (!c) {
-      return this._engageWithoutContext([this]);
-    }
-    // deno-lint-ignore no-explicit-any
-    const tools = await (c as any).var.tools.extendWithImports(this);
-    return { ...tools, c };
   }
 }
 
@@ -2054,6 +1932,85 @@ class HandlersClass extends ClientToolsClass<{}, {}, {}> {
   }
 }
 
+class StoreClass extends HandlersClass {
+  protected override get stateful(): boolean {
+    return true;
+  }
+}
+
+type SignalFactory = (tools: SignalTools) => SignalDefinitions;
+
+/**
+ * Builds a handler from source text. Handlers ship to the browser as source,
+ * so per-instance values (a signal name, the user's factory) must be spliced
+ * in rather than captured by a closure. `fn` and `stored` are free variables
+ * bound by the emitted handler module.
+ */
+function handlerFromSource(source: string): AnyFunction {
+  return new Function(`return ${source}`)() as AnyFunction;
+}
+
+/** Runs the factory server-side (values inert) to validate it and list its signals. */
+function signalNames(factory: SignalFactory): string[] {
+  const tools = createSignalTools(false);
+  const definitions = factory(tools);
+  if (
+    !definitions || typeof definitions !== "object" ||
+    definitions instanceof Promise ||
+    Object.values(definitions).some((value) => !(value instanceof tools.Signal))
+  ) {
+    throw new TypeError(
+      "Signals factory must synchronously return an object of Signal or Computed instances.",
+    );
+  }
+  return Object.keys(definitions);
+}
+
+/**
+ * Browser module that runs the factory once against the shared signal runtime
+ * and memoises the resulting graph for every accessor that imports it.
+ */
+function signalGraph(sourceFileUrl: string | URL, factory: SignalFactory) {
+  const runtime = new Handlers(
+    new URL("./signals.ts", import.meta.url),
+    () => ({ __tinySignalTools: createSignalTools }),
+  );
+  return new Store(sourceFileUrl, async () => {
+    await imports(runtime);
+    return {
+      __tinySignalGraph: handlerFromSource(`function () {
+        return stored.graph ??= (${factory})(fn.__tinySignalTools());
+      }`),
+    };
+  });
+}
+
+/**
+ * Emits three layers of browser modules:
+ * - `__tinySignalTools`: the signal runtime from signals.ts
+ * - `__tinySignalGraph`: one per Signals instance, owns the signal objects
+ * - one stateless accessor per signal, so each can be referenced by filename
+ *   (e.g. `signal.count` in JSX attributes or other handlers)
+ */
+class SignalsClass extends HandlersClass {
+  constructor(sourceFileUrl: string | URL, factory: SignalFactory) {
+    const graph = signalGraph(sourceFileUrl, factory);
+    super(sourceFileUrl, async () => {
+      const names = signalNames(factory);
+      await imports(graph);
+      return Object.fromEntries(names.map((name) => {
+        const key = JSON.stringify(name);
+        return [
+          name,
+          handlerFromSource(`function (event) {
+            return fn.__tinySignalGraph()[${key}].handleEvent(this, event);
+          }`),
+        ];
+      }));
+    });
+  }
+}
+
 class StylesClass extends ClientToolsClass<{}, {}, {}> {
   constructor(
     sourceFileUrlOrStyles:
@@ -2104,25 +2061,30 @@ class StylesClass extends ClientToolsClass<{}, {}, {}> {
 export const Handlers: HandlersConstructor =
   HandlersClass as unknown as HandlersConstructor;
 
-export const NewHandlers: HandlerFactoryConstructor = Handlers;
+export const Store: StoreConstructor =
+  StoreClass as unknown as StoreConstructor;
+
+export const Signals: SignalsConstructor =
+  SignalsClass as unknown as SignalsConstructor;
 
 export const Styles: StylesConstructor =
   StylesClass as unknown as StylesConstructor;
 
-export async function imports(): Promise<EngageResult<{}, {}>>;
+export async function imports(): Promise<ImportedTools<{}, {}>>;
 export async function imports<
   const TTools extends [AnyClientToolsInstance, ...AnyClientToolsInstance[]],
 >(
   ...tools: TTools
 ): Promise<
-  EngageResult<
+  ImportedTools<
     UnionToIntersection<ExtractFunctions<TTools[number]>>,
-    UnionToIntersection<ExtractStyles<TTools[number]>>
+    UnionToIntersection<ExtractStyles<TTools[number]>>,
+    UnionToIntersection<ExtractSignals<TTools[number]>>
   >
 >;
 export async function imports(
   ...tools: AnyClientToolsInstance[]
-): Promise<EngageResult<unknown, unknown>> {
+): Promise<ImportedTools<unknown, unknown, unknown>> {
   const definition = handlerDefinitionScope.getStore();
   if (definition?.active) {
     if (tools.length === 0) {
@@ -2132,18 +2094,27 @@ export async function imports(
     }
     await Promise.all(tools.map((tool) => tool.ensureDefined()));
     const references: Record<string, AnyFunction> = Object.create(null);
+    const signalReferences: Record<string, AnyFunction> = Object.create(null);
     for (const tool of tools) {
       for (const [name, instance] of tool._handlerDefinitions) {
-        if (definition.dependencies.has(name)) {
+        const isSignal = tool instanceof SignalsClass;
+        const dependencyName = isSignal ? `signal:${name}` : name;
+        if (definition.dependencies.has(dependencyName)) {
           throw new Error(
             `Duplicate imported handler '${name}' in handler definition.`,
           );
         }
-        definition.dependencies.set(name, instance);
-        references[name] = function () {
-          throw new Error(
-            `Handler '${name}' cannot be called during server-side definition. Call it inside a returned handler.`,
-          );
+        definition.dependencies.set(dependencyName, instance);
+        (isSignal ? signalReferences : references)[name] = function (
+          this: unknown,
+          ...args: unknown[]
+        ) {
+          if (definition.active) {
+            throw new Error(
+              `Handler '${name}' cannot be called during server-side definition. Call it inside a returned handler.`,
+            );
+          }
+          return Reflect.apply(instance.fn, this, args);
         };
       }
     }
@@ -2153,6 +2124,7 @@ export async function imports(
       );
     };
     return {
+      signal: signalReferences as HandlerReferences<unknown>,
       fn: new Proxy(references, {
         get(target, property) {
           if (
@@ -2166,7 +2138,7 @@ export async function imports(
           }
           return target[property];
         },
-      }) as unknown as ActivateClientFunctions<unknown>,
+      }) as unknown as HandlerReferences<unknown>,
       get events() {
         return unsupported();
       },
@@ -2181,22 +2153,60 @@ export async function imports(
       },
     };
   }
-  if (tools.length === 0) {
-    const c = tryGetContext();
-    if (!c) {
-      throw new Error(
-        "tiny.imports() requires at least one TinyTools instance when no Hono request context is active.",
-      );
+  const context = tryGetContext<{
+    Variables: {
+      accessedHandlerFiles: Set<string>;
+      accessedStyleFiles: Set<string>;
+    };
+  }>();
+  if (!context && tools.length === 0) {
+    throw new Error(
+      "tiny.imports() requires at least one TinyTools instance when no Hono request context is active.",
+    );
+  }
+  await Promise.all(tools.map((tool) => tool.ensureBuilt()));
+  const recordUsage = (type: ToolUsageType, filename: string) => {
+    if (!context) {
+      recordNoContextUsage(type, filename);
+      return;
     }
-    return { ...(c as any).var.tools, c };
-  }
-
-  const [localTools, ...ancestorTools] = tools.slice().reverse();
-  if (ancestorTools.length === 0) {
-    return await localTools.engage();
-  }
-
-  return await localTools.extend(...ancestorTools).engage();
+    const key = type === "handler"
+      ? "accessedHandlerFiles"
+      : "accessedStyleFiles";
+    const files = context.get(key) as Set<string> | undefined;
+    files?.add(filename + (type === "handler" ? ".js" : ".css"));
+  };
+  const handlers = new Proxy({}, {
+    get: (_target, property) =>
+      resolveToolAccessFromChain(
+        tools.filter((tool) => !(tool instanceof SignalsClass)),
+        "function",
+        property,
+        recordUsage,
+      ),
+  });
+  const signals = tools.filter((tool) => tool instanceof SignalsClass);
+  const styled = new Proxy({}, {
+    get: (_target, property) =>
+      resolveToolAccessFromChain(tools, "style", property, recordUsage),
+  });
+  return {
+    signal: createHandlerReferences((name) =>
+      resolveToolAccessFromChain(signals, "function", name, recordUsage)
+    ),
+    fn: createHandlerReferences((name) =>
+      (handlers as Record<string, unknown>)[name]
+    ),
+    events: createEvents((name) => (handlers as Record<string, unknown>)[name]),
+    handlers: handlers as ActivateClientFunctions<unknown>,
+    styled: styled as ActivateScopedStyles<unknown>,
+    get c(): Context {
+      if (!context) {
+        throw new Error("tiny.imports() has no active Hono request context.");
+      }
+      return context;
+    },
+  };
 }
 
 /** Type alias for external use - represents a ClientTools instance */

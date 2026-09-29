@@ -10,10 +10,9 @@ import { partialInsertHandlers } from "../handlers/partialInsertHandlers.ts";
 
 Deno.test("NewPartial emits cache registration only when opted in", async () => {
   const app = new Hono()
-    .use(...tiny.middleware.core())
-    .use(tiny.middleware.sharedImports(partialInsertHandlers));
-  app.get("/:page", (context) => {
-    const { fn } = context.var.tools;
+    .use(...tiny.middleware.core());
+  app.get("/:page", async (context) => {
+    const { fn } = await tiny.imports(partialInsertHandlers);
     return context.render(
       <NewPartial
         id="panel"
@@ -30,12 +29,12 @@ Deno.test("NewPartial emits cache registration only when opted in", async () => 
   assertStringIncludes(cached, 'path="/cached"');
   assertMatch(
     cached,
-    /onload="handlers\.observeRouteCache_[a-z0-9]+\.call\(this, event\)"/i,
+    /tt-handler-load="observeRouteCache_[a-z0-9]+"/i,
   );
   assertEquals((cached.match(/<template\b/g) ?? []).length, 4);
   assertStringIncludes(cached, "<client-router");
   assertStringIncludes(cached, '<client-route path="/cached"');
-  assertMatch(cached, /onsuspend="handlers\.suspendRouteCache_/i);
+  assertStringIncludes(cached, "<cache-collector");
   assertStringIncludes(cached, 'once="true"');
   assertEquals(cached.includes("from-partial-id"), false);
   assertEquals(cached.includes("data-client-route-active-path"), false);
@@ -45,6 +44,7 @@ Deno.test("NewPartial emits cache registration only when opted in", async () => 
   assertStringIncludes(scoped, '<client-route path="/scoped{/:page}?"');
   assertStringIncludes(scoped, 'for-partial-id="panel"');
   assertStringIncludes(scoped, 'cache-partial-id="panel"');
+  assertStringIncludes(scoped, 'cache-owner-id="panel"');
   const uncached = await (await app.request("/uncached")).text();
   assertEquals((uncached.match(/<template\b/g) ?? []).length, 1);
   assertEquals(uncached.includes("onLoadCacheTemplate"), false);
@@ -58,10 +58,9 @@ Deno.test("NewPartial emits cache registration only when opted in", async () => 
 
 Deno.test("NewPartial full page loads render directly and retain cache restoration metadata", async () => {
   const app = new Hono()
-    .use(...tiny.middleware.core())
-    .use(tiny.middleware.sharedImports(partialInsertHandlers));
-  app.get("/:page", (context) => {
-    const { fn } = context.var.tools;
+    .use(...tiny.middleware.core());
+  app.get("/:page", async (context) => {
+    const { fn } = await tiny.imports(partialInsertHandlers);
     return context.render(
       <section id="panel">
         <NewPartial
@@ -82,20 +81,21 @@ Deno.test("NewPartial full page loads render directly and retain cache restorati
   const panel = document.getElementById("panel")!;
   assertEquals(panel.firstElementChild?.tagName, "INPUT");
   assertEquals(panel.children.length, 3);
-  assertEquals(panel.children[1]?.tagName, "ABORTABLE-LIFECYCLE-ELEMENT");
+  assertEquals(panel.children[1]?.tagName, "CACHE-COLLECTOR");
   assertEquals(panel.lastElementChild?.getAttribute("rel"), "modulepreload");
   assertEquals((cached.match(/<template\b/g) ?? []).length, 3);
   assertEquals(
-    (cached.match(/onload="handlers\.passLoadEvent_/gi) ?? []).length,
+    (cached.match(/tt-handler-load="passLoadEvent_/gi) ?? []).length,
     1,
   );
   assertStringIncludes(cached, '<client-route path="/cached"');
   assertStringIncludes(cached, 'cache-partial-id="panel"');
   assertStringIncludes(cached, 'group-name="items"');
   assertStringIncludes(cached, 'data-restore="retained"');
-  assertMatch(cached, /onload="handlers\.partialReplace_/i);
-  assertMatch(cached, /onload="handlers\.observeRouteCache_/i);
-  assertMatch(cached, /onsuspend="handlers\.suspendRouteCache_/i);
+  assertMatch(cached, /tt-handler-load="partialReplace_/i);
+  assertMatch(cached, /tt-handler-load="observeRouteCache_/i);
+  assertStringIncludes(cached, "<cache-collector");
+  assertEquals(cached.includes("[object Object]"), false);
   assertEquals(/fullpageload/i.test(cached), false);
 
   const uncached = await (await app.request("/uncached")).text();

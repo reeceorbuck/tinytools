@@ -1,6 +1,6 @@
-import { tiny } from "../honoFactory.tsx";
+import { Handlers } from "../clientTools.ts";
 
-export const processIncomingDataTools = new tiny.Handlers(import.meta.url, {
+export const processIncomingDataTools = new Handlers(import.meta.url, {
   processIncomingData: async function (
     response: Response,
   ) {

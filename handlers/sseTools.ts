@@ -5,7 +5,7 @@ export const sseTools = new tiny.Handlers(import.meta.url, async () => {
   const { fn } = await tiny.imports(processIncomingDataTools);
   return {
     activateSSE: function (
-      this: HTMLElement & { sse: EventSource & { wasConnected?: boolean } },
+      this: HTMLElement,
       _e: Event,
     ) {
       const currentUrl = new URL(globalThis.location.href);
@@ -14,25 +14,29 @@ export const sseTools = new tiny.Handlers(import.meta.url, async () => {
         .find((cookie) => cookie.startsWith("sseId="))?.split("=")[1];
       console.log("Open browser SSE ID cookie: ", sseIdCookie);
 
-      this.sse = new EventSource(
+      const sseTarget = this as HTMLElement & {
+        sse: EventSource & { wasConnected?: boolean };
+      };
+
+      sseTarget.sse = new EventSource(
         `/sse?path=${encodeURIComponent(currentUrl.pathname)}`,
         {
           withCredentials: false,
         },
       ) as EventSource & { wasConnected?: boolean };
 
-      this.sse.onopen = () => {
+      sseTarget.sse.onopen = () => {
         console.log(
           "Connected to server, wasConnected: ",
-          this.sse.wasConnected,
+          sseTarget.sse.wasConnected,
         );
-        if (this.sse.wasConnected) {
+        if (sseTarget.sse.wasConnected) {
           globalThis.location.reload();
         }
-        this.sse.wasConnected = true;
+        sseTarget.sse.wasConnected = true;
       };
 
-      this.sse.onerror = (err) => {
+      sseTarget.sse.onerror = (err) => {
         console.log("Connection Lost:", err);
       };
 
@@ -43,7 +47,7 @@ export const sseTools = new tiny.Handlers(import.meta.url, async () => {
       let sseBuffer = "";
       const encoder = new TextEncoder();
 
-      this.sse.onmessage = (event) => {
+      sseTarget.sse.onmessage = (event) => {
         console.log(
           `Received SSE at ${Temporal.Now.zonedDateTimeISO().toLocaleString()}: `,
           event.data,
@@ -89,7 +93,7 @@ export const sseTools = new tiny.Handlers(import.meta.url, async () => {
         }
       };
 
-      this.sse.addEventListener("connection", async (event) => {
+      sseTarget.sse.addEventListener("connection", async (event) => {
         console.log("New SSE connection established, id:", event.data);
         console.log("Setting SSE ID cookie via cookieStore API");
         await cookieStore.set({
@@ -106,12 +110,12 @@ export const sseTools = new tiny.Handlers(import.meta.url, async () => {
           globalThis.document.visibilityState,
         );
         if (globalThis.document.visibilityState === "visible") {
-          console.log("SSE ReadyState: ", this.sse.readyState);
+          console.log("SSE ReadyState: ", sseTarget.sse.readyState);
         }
       });
 
       globalThis.addEventListener("beforeunload", () => {
-        this.sse.close();
+        sseTarget.sse.close();
       });
     },
   };

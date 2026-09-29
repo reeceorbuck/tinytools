@@ -10,8 +10,7 @@
     "./jsx-dev-runtime": "./jsx-dev-runtime.ts",
     "./build": "./build.ts",
     "./components": "./components/mod.ts",
-    "./handlers": "./handlers/mod.ts",
-    "./client": "./client/mod.ts"
+    "./handlers": "./handlers/mod.ts"
   },
   "dependencies": {
     "hono": "^4.12.32",
@@ -37,6 +36,7 @@
     "build.ts",
     "esbuildInit.ts",
     "handlerNamespace.ts",
+    "signals.ts",
     "clientFunctions.ts",
     "clientTools.ts",
     "eventAttributes.ts",
@@ -48,8 +48,6 @@
     "components/**/*.ts",
     "components/**/*.tsx",
     "handlers/**/*.ts",
-    "client/**/*.ts",
-    "client/dist/**/*.js",
     "README.md",
     "LICENSE"
   ]

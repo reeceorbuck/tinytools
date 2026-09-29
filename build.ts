@@ -9,9 +9,11 @@ performance.mark("import:@tinytools/hono-tools/build:start");
  */
 
 import { getEsbuild } from "./esbuildInit.ts";
+import { handlerDefaultExport } from "./handlerNamespace.ts";
 performance.mark("import:esbuild:done");
 import {
   cache,
+  memoryBuild,
   registeredClientTools,
   setGeneratedFilenameHashLength,
   setGeneratedHandlerHashLength,
@@ -111,6 +113,7 @@ export async function buildHandlerCode(
   }
 
   const importLines: string[] = [];
+  const importedNames = new Set<string>(["stored"]);
 
   for (const [name, importFilename] of importRegistry.entries()) {
     // Avoid self-imports; they are unnecessary and can create circular deps.
@@ -119,37 +122,22 @@ export async function buildHandlerCode(
     // (matches inside strings or comments) are acceptable and merely
     // over-emit.
     if (!referenced.has(name)) continue;
+    importedNames.add(name);
     importLines.push(
       `import { default as ${name} } from "./${importFilename}.js";`,
     );
   }
 
-  // Normalize the function expression to bind it to a known symbol.
-  // Supports named and anonymous functions.
-  const handlerExportName = "_handler";
-
-  const trimmedFnString = fnString.trim();
-  const looksLikeFunctionKeyword = /^(async\s+)?function\b/.test(
-    trimmedFnString,
-  );
-  const functionExpression = looksLikeFunctionKeyword
-    ? `(${trimmedFnString})`
-    : trimmedFnString;
-
-  const functionCode = `${
-    importLines.join("\n")
-  }\nconst ${handlerExportName} = ${functionExpression};\nexport { ${handlerExportName} as default };\nglobalThis.handlers ??= {};\nglobalThis.handlers["${filename}"] = ${handlerExportName};`;
+  const functionCode = `${importLines.join("\n")}\n${
+    handlerDefaultExport(fnString, fnName, importedNames)
+  }`;
   console.log("Function code: ", functionCode);
 
   const esbuild = await getEsbuild();
   const result = await esbuild.transform(functionCode, {
     loader: "ts",
-    format: "esm",
     target: ["esnext"],
     sourcemap: false,
-  }).catch((err: Error) => {
-    console.error("Esbuild transform error: ", err);
-    return { code: functionCode };
   });
 
   return result.code;
@@ -410,6 +398,11 @@ export async function cleanupStaleFiles(
  * ```
  */
 export async function buildScriptFiles(options: BuildOptions = {}) {
+  if (memoryBuild) {
+    throw new Error(
+      "[tiny-tools] Full builds are disabled with --none. Use tiny.imports() to generate assets in memory.",
+    );
+  }
   const {
     clientDir = "./client",
     publicDir = "./public",

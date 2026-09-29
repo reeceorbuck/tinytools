@@ -11,7 +11,6 @@ import { assertEquals } from "@std/assert";
 import { Hono } from "hono";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { getClientFileName } from "../client/dist/manifest.ts";
 import { tiny } from "../honoFactory.tsx";
 
 const packageDir = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -125,19 +124,4 @@ Deno.test("Caching - other files do NOT get aggressive Cache-Control headers", a
       "Non-handler/style files should not have aggressive cache headers",
     );
   });
-});
-
-Deno.test("Caching - package client files get aggressive Cache-Control headers", async () => {
-  const app = new Hono().use(...tiny.middleware.core());
-
-  const req = new Request(
-    `http://localhost/_tinytools/${getClientFileName("navigation.js")}`,
-  );
-  const res = await app.fetch(req);
-
-  assertEquals(res.status, 200);
-  assertEquals(
-    res.headers.get("Cache-Control"),
-    "public, max-age=31536000, immutable",
-  );
 });

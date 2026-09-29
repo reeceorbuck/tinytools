@@ -28,16 +28,32 @@ export const jsx: typeof honoJsx = (tag, props, key) => {
     if (expanded === props) expanded = { ...props };
     delete expanded[name];
     Object.assign(expanded, attributes);
+    if (tag === "link" && "onload" in attributes) {
+      expanded.onLoad = attributes.onload;
+      delete expanded.onload;
+    }
   }
   return honoJsx(tag, expanded, key);
 };
 
 export const jsxs: typeof honoJsx = jsx;
 
-export const jsxAttr: typeof honoJsxAttr = (name, value) => {
+export const jsxAttr = (
+  name: string,
+  value:
+    | Parameters<typeof honoJsxAttr>[1]
+    | HandlerReference<string, unknown>
+    | readonly HandlerReference<string, unknown>[],
+): ReturnType<typeof honoJsxAttr> => {
   const attributes = handlerReferenceAttributes(name, value);
-  if (!attributes) return honoJsxAttr(name, value);
+  if (!attributes) {
+    return honoJsxAttr(name, value as Parameters<typeof honoJsxAttr>[1]);
+  }
   const [eventAttribute, handlerAttribute] = Object.entries(attributes);
+  if (!eventAttribute) return honoJsxTemplate``;
+  if (!handlerAttribute) {
+    return honoJsxAttr(...eventAttribute as [string, string]);
+  }
   return honoJsxTemplate`${
     honoJsxAttr(...eventAttribute as [string, string])
   } ${honoJsxAttr(...handlerAttribute as [string, string])}`;
@@ -53,8 +69,7 @@ import type { ClientTools } from "./clientTools.ts";
 declare const ClientFunctionBrand: unique symbol;
 
 /**
- * Brand symbol for "activated" client functions that have been registered via shared tools middleware.
- * Functions must be passed through tiny.middleware.sharedImports() to become usable in JSX event handlers.
+ * Brand symbol for inline client expressions returned by tiny.imports().
  */
 declare const ActivatedClientFunctionBrand: unique symbol;
 
@@ -62,16 +77,8 @@ declare const ActivatedClientFunctionBrand: unique symbol;
  * Error interface that appears in type errors for raw functions.
  * The interface name is intentionally descriptive to help users understand the error.
  */
-interface ERROR_Raw_functions_cannot_be_used_as_event_handlers___Use_ClientTools_defineFunction_then_access_via_c_var_tools_clientFunctions {
+interface ERROR_Raw_functions_cannot_be_used_as_event_handlers___Use_tiny_imports {
   readonly [ClientFunctionBrand]: true;
-  readonly [ActivatedClientFunctionBrand]: true;
-}
-
-/**
- * Error interface for non-activated ClientFunction.
- * The interface name explains how to fix the issue.
- */
-interface ERROR_ClientFunction_not_activated___Access_from_c_var_tools_clientFunctions_not_from_factory {
   readonly [ActivatedClientFunctionBrand]: true;
 }
 
@@ -82,13 +89,12 @@ interface ERROR_ClientFunction_not_activated___Access_from_c_var_tools_clientFun
  * functions with a brand. This prevents accidentally passing regular functions
  * as event handlers in JSX, which would fail silently at runtime.
  *
- * **IMPORTANT**: Client functions are "inactive" until registered via tiny.middleware.sharedImports() middleware.
- * In JSX, you must use the activated version from `c.var.tools.fn`,
+ * In JSX, use references returned by `await tiny.imports(tools)`,
  * NOT directly from the factory.
  *
  * **Common Error Fix:**
  * - ❌ `new tiny.Handlers(url, {...}).myHandler` → won't work
- * - ✅ `c.var.tools.fn.myHandler` → correct
+ * - ✅ `(await tiny.imports(tools)).fn.myHandler` → correct
  *
  * @example
  * ```ts
@@ -99,12 +105,8 @@ interface ERROR_ClientFunction_not_activated___Access_from_c_var_tools_clientFun
  *   },
  * });
  *
- * // Use with middleware
- * app.use(tiny.middleware.sharedImports(handlers));
- *
- * app.get("/", (c) => {
- *   const { fn } = c.var.tools;
- *   // ✅ Use fn from c.var.tools, not the factory
+ * app.get("/", async (c) => {
+ *   const { fn } = await tiny.imports(handlers);
  *   return <div onClick={fn.handleClick}>Click me</div>;
  * });
  * ```
@@ -117,26 +119,25 @@ export type ClientFunction<
 };
 
 /**
- * An "activated" ClientFunction that has been registered via tiny.middleware.sharedImports() middleware.
- * Only activated functions can be used as JSX event handlers.
+ * An inline client expression returned by tiny.imports().handlers.
  *
  * If you see an error about this type, check:
  * - Raw functions → wrap with ClientTools constructor's functions option
- * - Non-activated → access from c.var.tools.fn
+ * - Non-activated → access through tiny.imports()
  */
 export type ActivatedClientFunction<
   // deno-lint-ignore no-explicit-any
   T extends (...args: any[]) => any = (...args: any[]) => any,
 > =
   & T
-  & ERROR_Raw_functions_cannot_be_used_as_event_handlers___Use_ClientTools_defineFunction_then_access_via_c_var_tools_clientFunctions;
+  & ERROR_Raw_functions_cannot_be_used_as_event_handlers___Use_tiny_imports;
 
 /**
  * Helper type to brand a function type as a ClientFunction.
  * Used internally by ClientTools.
  *
  * Note: This type indicates a non-activated ClientFunction.
- * To use in JSX, access from c.var.tools.fn.
+ * To use in JSX, import the collection with tiny.imports().
  */
 // deno-lint-ignore no-explicit-any
 export type BrandAsClientFunction<T extends (...args: any[]) => any> =
@@ -144,7 +145,7 @@ export type BrandAsClientFunction<T extends (...args: any[]) => any> =
 
 /**
  * Helper type to "activate" a ClientFunction, making it usable in JSX handlers.
- * Used internally by shared tools middleware when exposing fn via c.var.
+ * Used internally by tiny.imports() for inline handler expressions.
  * Also handles raw function types by treating them as activatable.
  */
 // deno-lint-ignore no-explicit-any
@@ -220,11 +221,12 @@ export type IsClientFunction<T> = T extends ClientFunction<infer _F> ? true
  *
  * If you see a type error, you likely need to:
  * 1. Use ClientTools constructor with functions option instead of raw functions
- * 2. Access handlers from c.var.tools.fn (not factory)
+ * 2. Access handlers through tiny.imports() (not the factory)
  */
 type ClientEventHandler<E extends Event> =
   | ActivatedClientFunction<(this: any, event: E) => void>
   | HandlerReference<string, (event: E) => unknown>
+  | readonly HandlerReference<string, (event: E) => unknown>[]
   | undefined;
 
 // Define your global overrides here - now requiring branded ClientFunction types
@@ -355,46 +357,8 @@ interface GlobalOverrides {
   onToggle?: ClientEventHandler<Event>;
 }
 
-// Apply branded handler types to regular elements, but do NOT add window/navigation-only events.
-type ElementEventOverrides = Omit<
-  GlobalOverrides,
-  | "onNavigate"
-  | "onNavigateSuccess"
-  | "onNavigateError"
-  | "onCurrentEntryChange"
-  | "onHashChange"
-  | "onPopState"
-  | "onResize"
-  | "onOnline"
-  | "onOffline"
-  | "onMessage"
-  | "onStorage"
-  | "onVisibilityChange"
-  | "onBeforeUnload"
-  | "onUnload"
->;
-
-type WindowEventTypes = Pick<
-  GlobalOverrides,
-  | "onNavigate"
-  | "onNavigateSuccess"
-  | "onNavigateError"
-  | "onCurrentEntryChange"
-  | "onHashChange"
-  | "onPopState"
-  | "onResize"
-  | "onOnline"
-  | "onOffline"
-  | "onMessage"
-  | "onStorage"
-  | "onVisibilityChange"
-  | "onBeforeUnload"
-  | "onUnload"
->;
-
 type ElementEventOverridesStrict =
-  & ElementEventOverrides
-  & { [Name in keyof WindowEventTypes]?: never }
+  & GlobalOverrides
   & {
     onMount?: never;
     onUnmount?: never;

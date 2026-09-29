@@ -41,7 +41,5 @@ function checkTypes() {
   );
   // @ts-expect-error Matching signatures cannot bypass imported handler names.
   events({ click: foreign.other });
-  // @ts-expect-error References are not callable server functions.
-  handlers.click(new MouseEvent("click"));
 }
 void checkTypes;

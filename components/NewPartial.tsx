@@ -5,8 +5,9 @@ import { Handlers } from "../clientTools.ts";
 import { tiny } from "../honoFactory.tsx";
 import { routeCacheTools } from "../handlers/routeCacheTools.ts";
 import type { ActivatedClientFunction } from "../jsx-runtime.ts";
-import { ClientRoutes } from "./ClientRoutes.tsx";
-import { ActivateLifecycleHandlers } from "./ActivateOnLoadHandler.tsx";
+import type { HandlerReference } from "../eventAttributes.ts";
+import { PartialCacheRoutes } from "./ClientRoutes.tsx";
+import { UpgradeCustomElement } from "./ActivateOnLoadHandler.tsx";
 import { partialInsertHandlers } from "../handlers/partialInsertHandlers.ts";
 
 const partialLogic = new Handlers(import.meta.url, {
@@ -23,19 +24,26 @@ const partialLogic = new Handlers(import.meta.url, {
   },
 });
 
-type PartialInsertHandler = ActivatedClientFunction<
-  (this: HTMLTemplateElement, event: Event) => void
->;
+type PartialInsertHandler =
+  | HandlerReference<
+    string,
+    (this: HTMLTemplateElement, event: Event) => void
+  >
+  | ActivatedClientFunction<
+    (this: HTMLTemplateElement, event: Event) => void
+  >;
+
+export type PartialProps = PropsWithChildren<{
+  onLoad: PartialInsertHandler;
+  id?: string;
+  groupName?: string;
+  cache?: boolean | string;
+  fullPageLoad?: boolean;
+  [attribute: string]: unknown;
+}>;
 
 export async function NewPartial(
-  props: PropsWithChildren<{
-    onLoad: PartialInsertHandler;
-    id?: string;
-    groupName?: string;
-    cache?: boolean | string;
-    fullPageLoad?: boolean;
-    [attribute: string]: unknown;
-  }>,
+  props: PartialProps,
 ): Promise<HtmlEscapedString> {
   const {
     onLoad,
@@ -56,36 +64,38 @@ export async function NewPartial(
     <>
       {children}
       {cache && (
-        <ActivateLifecycleHandlers>
-          <template
+        <UpgradeCustomElement>
+          <cache-collector
+            hidden
             onLoad={fn.observeRouteCache}
-            onSuspend={fn.suspendRouteCache}
             cache-partial-id={id}
           >
-            <client-route
-              path={cachePattern}
-              once
-              data-nav-block
-              interpolate="false"
-            >
-              <template
-                onLoad={onLoad}
-                for-partial-id={id}
-                group-name={groupName}
-                {...attributes}
+            <template>
+              <client-route
+                path={cachePattern}
+                once
+                data-nav-block
+                interpolate="false"
               >
-              </template>
-              <link
-                rel="modulepreload"
-                href={`/handlers/${
-                  partialLogic._handlerFilenames.get("passLoadEvent")
-                }.js`}
-                onLoad={fn.passLoadEvent}
-              />
-            </client-route>
-            <ClientRoutes for-partial-id={id} />
-          </template>
-        </ActivateLifecycleHandlers>
+                <template
+                  onLoad={onLoad}
+                  for-partial-id={id}
+                  group-name={groupName}
+                  {...attributes}
+                >
+                </template>
+                <link
+                  rel="modulepreload"
+                  href={`/handlers/${
+                    partialLogic._handlerFilenames.get("passLoadEvent")
+                  }.js`}
+                  onLoad={fn.passLoadEvent}
+                />
+              </client-route>
+              <PartialCacheRoutes ownerId={id} />
+            </template>
+          </cache-collector>
+        </UpgradeCustomElement>
       )}
     </>
   );

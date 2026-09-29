@@ -1,8 +1,8 @@
 import { assertEquals, assertExists } from "@std/assert";
 import { handlers } from "../clientFunctions.ts";
-import { navigationUrlTools } from "../handlers/navigationUrlTools.ts";
+import { parseNavigationUrlsTools } from "../handlers/navigationUrlTools.ts";
 
-void navigationUrlTools;
+void parseNavigationUrlsTools;
 const entry = [...handlers.values()].find((handler) =>
   handler.fnName === "parseNavigationUrls"
 );
@@ -10,7 +10,8 @@ assertExists(entry);
 const { default: parseNavigationUrls } = await import(
   `data:text/javascript,${encodeURIComponent(await entry.buildCode())}`
 ) as {
-  default: typeof navigationUrlTools.getFunctionReferences.parseNavigationUrls;
+  default:
+    typeof parseNavigationUrlsTools.getFunctionReferences.parseNavigationUrls;
 };
 
 class SourceElement {

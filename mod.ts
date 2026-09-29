@@ -24,11 +24,10 @@ performance.mark("import:@tinytools/hono-tools:start");
  * const routeStyles = new tiny.Styles(import.meta.url, { buttonStyle });
  *
  * const app = new Hono()
- *   .use(...tiny.middleware.all())
- *   .use(tiny.middleware.sharedImports(routeHandlers, routeStyles));
+ *   .use(...tiny.middleware.core());
  *
- * app.get("/", (c) => {
- *   const { fn, styled } = c.var.tools;
+ * app.get("/", async (c) => {
+ *   const { fn, styled } = await tiny.imports(routeHandlers, routeStyles);
  *   return c.render(
  *     <button class={styled.buttonStyle} onClick={fn.handleClick}>
  *       Click me
@@ -40,38 +39,31 @@ performance.mark("import:@tinytools/hono-tools:start");
 
 // Core setup and middleware exports
 export {
-  addRouteLayout,
-  type BaseTools,
   type ClientToolsOptions,
-  getTools,
-  type InferTools,
-  type LocalRoutesOptions,
-  type NavApiToolsOptions,
-  type PartialAbortableHTMLElement,
   type RouteLayoutProps,
-  type SseToolsOptions,
   tiny,
   type TinyHonoOptions,
-  type TinyToolsVariables,
-  type WebComponentsOptions,
-  type withAncestors,
-  withLayoutTools,
 } from "./honoFactory.tsx";
+export type { PartialAbortableHTMLElement } from "./components/ActivateOnLoadHandler.tsx";
 
 // Handlers & Styles exports
 export {
-  type ActivatedClientTools,
   Handlers,
-  NewHandlers,
   type HandlersOptions,
+  type ImportedTools,
   imports,
+  Signals,
+  Store,
   Styles,
 } from "./clientTools.ts";
 export type {
-  PartialContentContext,
-  PartialContentProcessingOptions,
-} from "./clientArchive/partialContentContext.ts";
-
+  ReadonlySignal,
+  Signal,
+  SignalAccessors,
+  SignalDefinitions,
+  SignalTools,
+  SignalValue,
+} from "./signals.ts";
 // Registry exports (used by build process)
 export {
   eventHandlerBody,

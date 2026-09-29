@@ -7,7 +7,8 @@
 import { assertEquals, assertMatch, assertStringIncludes } from "@std/assert";
 import { Hono } from "hono";
 import { buildHandlers } from "../build.ts";
-import { NewPartial, tiny } from "../honoFactory.tsx";
+import { tiny } from "../honoFactory.tsx";
+import { NewPartial } from "../components/NewPartial.tsx";
 import { partialInsertHandlers } from "../handlers/mod.ts";
 
 const handlerNames = [
@@ -42,15 +43,14 @@ Deno.test("partial insert handlers build as standalone modules", async () => {
 
 Deno.test("partial handlers activate and serialize on Partial", async () => {
   const app = new Hono()
-    .use(...tiny.middleware.core())
-    .use(tiny.middleware.sharedImports(partialInsertHandlers));
+    .use(...tiny.middleware.core());
 
-  app.get("/", (context) => {
-    const { fn } = context.var.tools;
+  app.get("/", async (context) => {
+    const { fn, handlers } = await tiny.imports(partialInsertHandlers);
 
     for (const name of handlerNames) {
       assertMatch(
-        fn[name] as unknown as string,
+        handlers[name] as unknown as string,
         new RegExp(
           `^handlers\\.${name}_[a-z0-9]+\\.call\\(this, event\\)$`,
         ),
@@ -78,13 +78,13 @@ Deno.test("partial handlers activate and serialize on Partial", async () => {
   const html = await response.text();
 
   assertEquals(response.status, 200, html);
-  assertStringIncludes(html, "<partial-content");
-  assertStringIncludes(html, 'id="test-partial"');
+  assertStringIncludes(html, "<template");
+  assertStringIncludes(html, 'for-partial-id="test-partial"');
   assertEquals(html.includes(' mode="'), false);
   assertStringIncludes(html, 'group-name="test-group"');
   assertMatch(
     html,
-    /onload="handlers\.partialReplace_[a-z0-9]+\.call\(this, event\)"/i,
+    /tt-handler-load="partialReplace_[a-z0-9]+"/i,
   );
   assertEquals(html.includes("handlers.merge"), false);
 });
