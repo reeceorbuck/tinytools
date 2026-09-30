@@ -12,6 +12,7 @@ import {
   generateStyleHash,
   normalizeSourceFileUrl,
 } from "./clientTools.ts";
+import { COMPONENT_ROOT_ATTRIBUTE } from "./componentScope.ts";
 
 export const SCOPE_BOUNDARY_CLASS = "sb";
 const GLOBAL_SCOPE_BOUNDARY_TOKEN = "global";
@@ -29,6 +30,7 @@ export function mergeClassNames(...classNames: ClassNameValue[]): string {
 
 export type ScopedStyleBoundaryMode =
   | "boundary"
+  | "component"
   | "selectors"
   | "none";
 
@@ -128,6 +130,10 @@ export function unscoped(
 
 export const setCustomScope: {
   toSelectors: typeof scopedTo;
+  toComponent(
+    cssContent: string,
+    options?: ScopedStyleOptions,
+  ): ScopedStyleDefinition;
   toBoundary(
     cssContent: string,
     options?: ScopedStyleOptions,
@@ -139,6 +145,21 @@ export const setCustomScope: {
   unscoped: typeof unscoped;
 } = {
   toSelectors: scopedTo,
+  /**
+   * Scope to the rendering component: the style reaches through every
+   * element the component renders, including other styled elements, and
+   * stops at the root of any child component.
+   */
+  toComponent(
+    cssContent: string,
+    options: ScopedStyleOptions = {},
+  ): ScopedStyleDefinition {
+    return createScopedStyleDefinition(
+      cssContent,
+      { mode: "component" },
+      options,
+    );
+  },
   toBoundary(
     cssContent: string,
     options: ScopedStyleOptions = {},
@@ -401,6 +422,8 @@ export class ScopedStyleImpl {
   private buildScopeEndSelector(): string {
     const scopeSelectors = this.scope.mode === "boundary"
       ? [`.${SCOPE_BOUNDARY_CLASS}`]
+      : this.scope.mode === "component"
+      ? [`[${COMPONENT_ROOT_ATTRIBUTE}]`]
       : this.scope.mode === "selectors"
       ? [...(this.scope.selectors ?? [])]
       : [];

@@ -179,9 +179,12 @@ Deno.test("Suspense - resolves promise-valued markup alongside async siblings", 
   assertEquals(body.includes("[object Promise]"), false);
   assertStringIncludes(
     body,
-    '<section id="search-results"><div class="resolved">Search result</div></section>',
+    '<section id="search-results"><div class="resolved" data-tc="SlowContent">Search result</div></section>',
   );
-  assertStringIncludes(body, '<div class="resolved">Patient list</div>');
+  assertStringIncludes(
+    body,
+    '<div class="resolved" data-tc="SlowContent">Patient list</div>',
+  );
 });
 
 Deno.test("CustomSuspense - streams with the supplied mount handler", async () => {
@@ -454,7 +457,10 @@ Deno.test("Async component - renders without Suspense wrapper", async () => {
 
   const body = await fullBody(res);
   assertStringIncludes(body, "Direct async");
-  assertStringIncludes(body, '<div class="resolved">Direct async</div>');
+  assertStringIncludes(
+    body,
+    '<div class="resolved" data-tc="SlowContent">Direct async</div>',
+  );
 });
 
 Deno.test("Async component - full page has html structure", async () => {

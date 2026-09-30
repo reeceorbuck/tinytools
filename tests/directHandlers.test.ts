@@ -90,7 +90,10 @@ Deno.test("handler arrays expand in every JSX path and preserve component props"
     assertEquals(forwarded.onClick, references);
     return jsx("button", forwarded);
   };
-  assertEquals(String(jsx(Component, props)), expected);
+  assertEquals(
+    String(jsx(Component, props)),
+    expected.replace(">Count", ' data-tc="Component">Count'),
+  );
   assertThrows(
     () => jsx("button", { onClick: [handlers.click, () => {}] }),
     TypeError,

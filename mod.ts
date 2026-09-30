@@ -79,6 +79,12 @@ export {
   setCustomScope,
 } from "./scopedStyles.ts";
 
+export {
+  component,
+  COMPONENT_ROOT_ATTRIBUTE,
+  transparent,
+} from "./componentScope.ts";
+
 // Type exports for activated styles
 export type { ActivateScopedStyles } from "./scopedStyles.ts";
 

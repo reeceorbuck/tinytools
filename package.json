@@ -41,6 +41,7 @@
     "clientTools.ts",
     "eventAttributes.ts",
     "scopedStyles.ts",
+    "componentScope.ts",
     "honoFactory.tsx",
     "sendUpdates.tsx",
     "sse.ts",

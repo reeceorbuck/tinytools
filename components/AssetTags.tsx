@@ -1,5 +1,6 @@
 import type { FC } from "hono/jsx";
 import { tryGetContext } from "hono/context-storage";
+import { transparent } from "../componentScope.ts";
 
 type AssetTagsProps = {
   /** Optional explicit handler assets (e.g. for non-request update rendering) */
@@ -60,3 +61,6 @@ export const AssetTags: FC<AssetTagsProps> = ({
     </>
   );
 };
+
+// Framework wrappers render into the caller's component scope.
+transparent(AssetTags);

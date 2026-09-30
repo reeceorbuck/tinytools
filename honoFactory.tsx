@@ -1,4 +1,5 @@
 /** Hono middleware and request rendering for TinyTools. */
+import { component, transparent } from "./componentScope.ts";
 import { Hono as HonoBase } from "hono";
 import type { Context, MiddlewareHandler } from "hono";
 import type { BlankEnv, Env } from "hono/types";
@@ -376,6 +377,8 @@ export type TinyApi = {
   readonly Styles: typeof Styles;
   readonly css: typeof css;
   readonly imports: typeof imports;
+  readonly component: typeof component;
+  readonly transparent: typeof transparent;
   readonly middleware: {
     readonly core: (options?: ClientToolsOptions) => MiddlewareHandler[];
     readonly csp: () => MiddlewareHandler;
@@ -397,6 +400,8 @@ export const tiny: TinyApi = {
   Styles,
   css,
   imports,
+  component,
+  transparent,
   runHandler,
   middleware: {
     core: createCoreMiddleware,

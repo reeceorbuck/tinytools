@@ -9,6 +9,7 @@ import type { HandlerReference } from "../eventAttributes.ts";
 import { PartialCacheRoutes } from "./ClientRoutes.tsx";
 import { UpgradeCustomElement } from "./ActivateOnLoadHandler.tsx";
 import { partialInsertHandlers } from "../handlers/partialInsertHandlers.ts";
+import { transparent } from "../componentScope.ts";
 
 const partialLogic = new Handlers(import.meta.url, {
   passLoadEvent: function (this: HTMLElement) {
@@ -178,3 +179,9 @@ export const PartialDelete = async function (
     </NewPartial>
   );
 };
+
+// Framework wrappers render into the caller's component scope.
+transparent(NewPartial);
+transparent(PartialReplace);
+transparent(PartialReplaceWithCache);
+transparent(PartialDelete);

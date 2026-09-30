@@ -6,6 +6,7 @@ import type { PropsWithChildren } from "hono/jsx";
 import type { HtmlEscapedString } from "hono/utils/html";
 import { tiny } from "../mod.ts";
 import { Handlers } from "../clientTools.ts";
+import { transparent } from "../componentScope.ts";
 
 const lifecycleHandlers = new Handlers(import.meta.url, {
   referOnLoadOnce: function (this: HTMLElement, e: Event) {
@@ -362,3 +363,9 @@ const usageExampleComponent = async () => {
     </UpgradeCustomElement>
   );
 };
+
+// Framework wrappers render into the caller's component scope.
+transparent(ActivateOnLoadHandler);
+transparent(ActivateLifecycleHandlers);
+transparent(BuildFromTemplateElement);
+transparent(UpgradeCustomElement);

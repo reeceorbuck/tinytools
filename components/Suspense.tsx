@@ -18,6 +18,7 @@ import { headHandler } from "../honoFactory.tsx";
 import { NewPartial } from "./NewPartial.tsx";
 import { renderToReadableStream } from "hono/jsx/dom/server";
 import { AssetTags } from "./AssetTags.tsx";
+import { transparent } from "../componentScope.ts";
 
 export type PartialInsertHandler = Parameters<typeof NewPartial>[0]["onLoad"];
 
@@ -228,3 +229,7 @@ export const Suspense: FC<SuspenseProps> = async (props) => {
   return await CustomSuspense({ ...props, onLoad: fn.partialBlast }) ??
     raw("");
 };
+
+// Framework wrappers render into the caller's component scope.
+transparent(CustomSuspense);
+transparent(Suspense);

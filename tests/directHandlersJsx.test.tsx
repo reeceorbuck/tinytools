@@ -41,7 +41,10 @@ Deno.test("compiled TSX supports direct references, spreads and component forwar
   const Button = (
     props: { onClick: HandlerReference<"click", (event: MouseEvent) => void> },
   ) => <button type="button" onClick={props.onClick}>Count</button>;
-  assertEquals(String(<Button onClick={fn.click} />), direct);
+  assertEquals(
+    String(<Button onClick={fn.click} />),
+    direct.replace(">Count", ' data-tc="Button">Count'),
+  );
   assertStringIncludes(
     String(<button type="button" onclick={fn.click}>Count</button>),
     "tt-handler-click=",

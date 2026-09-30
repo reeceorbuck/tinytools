@@ -9,6 +9,7 @@ import {
 } from "../handlers/navigationTools.ts";
 import { navigationUrlTools } from "../handlers/navigationUrlTools.ts";
 import { clientRouteTools } from "../handlers/clientRouteTools.ts";
+import { transparent } from "../componentScope.ts";
 
 const ClientRouterHandlers = new Handlers(import.meta.url, async () => {
   const { fn } = await imports(navigationUrlTools, clientRouteTools);
@@ -139,3 +140,7 @@ export function PartialCacheRoutes(
 ): Promise<HtmlEscapedString> {
   return renderClientRoutes({ cacheOwnerId: props.ownerId });
 }
+
+// Framework wrappers render into the caller's component scope.
+transparent(ClientRoutes);
+transparent(PartialCacheRoutes);

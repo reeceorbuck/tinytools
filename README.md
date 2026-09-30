@@ -617,6 +617,53 @@ export default app;
 > `[data-scope-boundary~="global"]`. The `~=` operator ensures exact token
 > matching, so `global` does not match partial values like `my-global-theme`.
 
+### Component scope
+
+By default a style reaches down until the next styled element (every
+`styled.*` class carries the `sb` boundary class). Use
+`setCustomScope.toComponent(...)` to scope a style to the **component** instead:
+it reaches through everything the component renders, including its other styled
+elements, and stops at the root of any child component.
+
+```tsx
+const cardStyles = new tiny.Styles(import.meta.url, {
+  card: setCustomScope.toComponent(css`
+    padding: 16px;
+    p { margin: 0; }            /* every <p> Card renders... */
+    a { color: var(--accent); } /* ...but none inside child components */
+  `),
+  title: css`font-weight: 700;`,
+});
+
+export async function Card({ children }: PropsWithChildren) {
+  const { styled } = await tiny.imports(cardStyles);
+  return (
+    <article class={styled.card}>
+      <h3 class={styled.title}><a href="#">Link</a></h3>
+      <Avatar /> {/* its own scope: Card's `a` and `p` rules stop here */}
+      {children}
+    </article>
+  );
+}
+```
+
+No wrapper is needed. The TinyTools JSX runtime marks the root element(s) of
+every `<Component />` with `data-tc="<ComponentName>"`, which also shows the
+component tree in devtools. Component-scoped styles end at `[data-tc]`.
+
+- **Fragments** mark each top-level element.
+- **Children passed in** (`props.children`) belong to the caller and are never
+  marked, so a component that just returns `children` adds no boundary. Slot
+  content rendered inside another component's element is outside the caller's
+  donut, however. Style it with a class on the element itself.
+- **Direct calls** such as `await SiteChrome({ children })` bypass JSX. Wrap the
+  result: `return tiny.component(<div>...</div>, "SiteChrome")`.
+- **Transparent components** render into the caller's scope. Opt out with
+  `tiny.transparent(MyWrapper)`. Built-in components (`Partial*`, `Suspense`,
+  `ClientRoutes`, ...) are transparent already.
+- Components returning raw strings (`html\`\``) or using `precompile` JSX
+  templates are not marked.
+
 > **⚠️ Important:** Always declare `Handlers` and `Styles` instances at **module
 > level** (outside of route handlers). This ensures handlers and styles are
 > registered once at startup and included in the build. Creating them inside a

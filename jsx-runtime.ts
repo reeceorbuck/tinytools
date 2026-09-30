@@ -18,9 +18,13 @@ import {
   type HandlerReference,
   handlerReferenceAttributes,
 } from "./eventAttributes.ts";
+import { markElementNode, wrapComponent } from "./componentScope.ts";
 
 export const jsx: typeof honoJsx = (tag, props, key) => {
-  if (typeof tag !== "string" || !props) return honoJsx(tag, props, key);
+  if (typeof tag === "function") {
+    return honoJsx(wrapComponent(tag as (props: never) => unknown), props, key);
+  }
+  if (!props) return markElementNode(honoJsx(tag, props, key));
   let expanded = props;
   for (const [name, value] of Object.entries(props)) {
     const attributes = handlerReferenceAttributes(name, value);
@@ -33,7 +37,7 @@ export const jsx: typeof honoJsx = (tag, props, key) => {
       delete expanded.onload;
     }
   }
-  return honoJsx(tag, expanded, key);
+  return markElementNode(honoJsx(tag, expanded, key));
 };
 
 export const jsxs: typeof honoJsx = jsx;
