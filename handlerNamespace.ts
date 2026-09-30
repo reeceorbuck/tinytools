@@ -125,6 +125,11 @@ export type BundleSource = {
   stored: string | false;
   /** Additionally export this handler as the module default. */
   defaultExport?: string;
+  /**
+   * Register the handlers on `globalThis.handlers[register]` when the module
+   * evaluates, so `runHandler` can call them synchronously during dispatch.
+   */
+  register?: string;
 };
 
 /**
@@ -316,6 +321,15 @@ export async function compileHandlerBundle(
         ? binding
         : `[${JSON.stringify(name)}]: ${binding}`;
     }).join(", ");
+  const registerLine = bundle.register
+    ? `(globalThis.handlers ??= {})[${JSON.stringify(bundle.register)}] = { ${
+      [...handlerBindings].map(([name, binding]) =>
+        name === binding && name !== "__proto__"
+          ? binding
+          : `[${JSON.stringify(name)}]: ${binding}`
+      ).join(", ")
+    } };`
+    : "";
   const fnMembers = namespace(false);
   const signalMembers = namespace(true);
   const transformed = await Promise.all(
@@ -335,6 +349,7 @@ export async function compileHandlerBundle(
     stored && sourceIdentifiers.has(stored) ? storedLine : "",
     ...transformed,
     ...exportLines,
+    registerLine,
   ].filter(Boolean).join("\n") + "\n";
   return {
     code,

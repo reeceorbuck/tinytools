@@ -81,7 +81,10 @@ Deno.test({
         result.code,
         'import { count } from "./handlers_b.js"',
       );
-      assertStringIncludes(result.code, 'const signal = { get count() { return count2(); } }');
+      assertStringIncludes(
+        result.code,
+        "const signal = { get count() { return count2(); } }",
+      );
       assertStringIncludes(result.code, "export function consumer()");
       const grouped = await compileOne(
         // Names inside strings, templates and comments do not force aliases.
@@ -1274,11 +1277,16 @@ Deno.test({
       );
       assertEquals(module.consumer.call({ offset: 10 }, 4), 14);
       const browserGlobals = globalThis as unknown as {
-        handlers?: Record<string, unknown>;
+        handlers?: Record<string, Record<string, unknown>>;
       };
-      assertEquals(browserGlobals.handlers, undefined);
+      // Evaluating a bundle registers its handlers for synchronous dispatch.
+      assertEquals(
+        browserGlobals.handlers?.[filename]?.consumer,
+        module.consumer,
+      );
       assertEquals([...root._handlerFilenames.keys()], ["consumer"]);
     } finally {
+      Reflect.deleteProperty(globalThis, "handlers");
       await Deno.remove(directory, { recursive: true });
       reset();
       (await getEsbuild()).stop();
