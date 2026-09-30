@@ -152,7 +152,12 @@ Deno.test("ClientRoutes cooperate with core navigation", async (test) => {
   }
   function setup(coreFirst = true) {
     const navigation = new EventTarget();
-    const location = { href: "https://example.com/current?keep=1" };
+    const location = {
+      href: "https://example.com/current?keep=1",
+      get pathname() {
+        return new URL(this.href).pathname;
+      },
+    };
     const { document, Node, HTMLTemplateElement, MutationObserver } = parseHTML(
       "<!doctype html><html><body></body></html>",
     );
@@ -518,6 +523,34 @@ Deno.test("ClientRoutes cooperate with core navigation", async (test) => {
             ? "https://example.com/current?keep=1"
             : "https://example.com/saved",
         );
+      }
+    });
+
+    await test.step("blocked routes keep blocking when repeated from the same path", async () => {
+      const state = setup();
+      state.addRoutes(createRoute("/next", "local", true));
+      await state.navigate(new NavigationEvent("/next?a=1"));
+      assertEquals(state.location.href, "https://example.com/next?a=1");
+      await state.navigate(new NavigationEvent("/next?a=2"));
+      assertEquals(state.requests, []);
+      assertEquals(state.inserted, ["local", "local"]);
+    });
+
+    await test.step("route data-nav-redirect keeps the URL across repeats", async () => {
+      for (const redirect of ["", "true", "/saved"]) {
+        const state = setup();
+        const route = createRoute("/next", "local", true);
+        route.setAttribute("data-nav-redirect", redirect);
+        state.addRoutes(route);
+        const expected = redirect === "/saved"
+          ? "https://example.com/saved"
+          : "https://example.com/current?keep=1";
+        await state.navigate(new NavigationEvent("/next"));
+        assertEquals(state.location.href, expected);
+        await state.navigate(new NavigationEvent("/next"));
+        assertEquals(state.location.href, expected);
+        assertEquals(state.requests, []);
+        assertEquals(state.inserted, ["local", "local"]);
       }
     });
 

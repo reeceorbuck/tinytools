@@ -18,8 +18,6 @@ const ClientRouterHandlers = new Handlers(import.meta.url, async () => {
       this: PartialAbortableHTMLElement,
       event: NavigateEvent,
     ) {
-      console.log("Matching client routes for element: ", this);
-
       const navigationApi = globalThis.navigation as AppNavigation;
       navigationApi.clientRouteBlockedEvents ??= new WeakSet<NavigateEvent>();
       const template = this.querySelector(
@@ -27,7 +25,7 @@ const ClientRouterHandlers = new Handlers(import.meta.url, async () => {
       ) as unknown as HTMLTemplateElement;
 
       const method = fn.getNavigationMethod(event);
-      const { fetchUrl } = fn.getNavigationUrls(event);
+      const { fetchUrl, fromUrl } = fn.getNavigationUrls(event);
 
       console.log("Template check: ", template);
 
@@ -82,8 +80,35 @@ const ClientRouterHandlers = new Handlers(import.meta.url, async () => {
         }
       }
 
+      // A matched route's data-nav-redirect keeps (or sets) the displayed URL,
+      // like the attribute on a link or form. Without it the destination URL
+      // is committed, and the next navigation starts from that URL.
+      const redirect = matchingRoutes
+        .map(({ route }) => route.getAttribute("data-nav-redirect"))
+        .find((value) => value !== null);
+      let redirectUrl: string | undefined;
+      if (redirect !== undefined && event.navigationType === "push") {
+        try {
+          redirectUrl = redirect === "" || redirect === "true"
+            ? fromUrl.href
+            : new URL(redirect, fromUrl.href).href;
+        } catch (error) {
+          console.error(
+            "Error parsing client route data-nav-redirect: ",
+            error,
+          );
+        }
+      }
+
       event.intercept({
         focusReset: "manual",
+        ...(redirectUrl
+          ? {
+            precommitHandler(controller: NavigationPrecommitController) {
+              controller.redirect(redirectUrl);
+            },
+          }
+          : {}),
         handler: () => {
           if (event?.defaultPrevented || event?.signal?.aborted) {
             return Promise.resolve();

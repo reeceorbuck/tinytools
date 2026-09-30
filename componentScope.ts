@@ -11,6 +11,8 @@
  */
 
 import { Fragment, isValidElement } from "hono/jsx";
+import { raw } from "hono/html";
+import type { HtmlEscapedString } from "hono/utils/html";
 
 type JSXNode = {
   tag: string | ((...args: never[]) => unknown);
@@ -24,6 +26,7 @@ export const COMPONENT_ROOT_ATTRIBUTE = "data-tc";
 const TRANSPARENT = Symbol.for("tinytools.transparentComponent");
 const WRAPPED = Symbol.for("tinytools.wrappedComponent");
 const ELEMENT = Symbol.for("tinytools.elementNode");
+const TEMPLATE_ROOTS = Symbol.for("tinytools.templateRoots");
 
 // deno-lint-ignore no-explicit-any
 type AnyFunction = (...args: any[]) => any;
@@ -71,6 +74,9 @@ function markRoots(
   if (Array.isArray(result)) {
     return result.map((item) => markRoots(item, name, passedChildren));
   }
+  if (result && typeof result === "object" && TEMPLATE_ROOTS in result) {
+    return markTemplateRoots(result as TemplateResult, name);
+  }
   if (!isValidElement(result)) return result;
   const node = result as unknown as JSXNode;
 
@@ -94,6 +100,188 @@ function markRoots(
     ...node.props,
     [COMPONENT_ROOT_ATTRIBUTE]: name,
   });
+}
+
+// ---------------------------------------------------------------------------
+// Precompiled JSX (`"jsx": "precompile"`)
+//
+// Plain elements compile to `jsxTemplate(strings, ...values)`, which Hono
+// renders to a string immediately. The static strings of a call site never
+// change, so they are scanned once for top-level tags. A sentinel value is
+// rendered right after each top-level tag name, then stripped, leaving the
+// offsets on the result. A component wrapper that receives the template as
+// its return value inserts `data-tc` at those offsets; any other template
+// simply carries unused offsets.
+// ---------------------------------------------------------------------------
+
+type TemplateResult = HtmlEscapedString & { [TEMPLATE_ROOTS]: number[] };
+
+type TemplatePlan = {
+  strings: string[];
+  /** For each value slot: an original value index, or -1 for a sentinel. */
+  slots: number[];
+};
+
+const VOID_ELEMENTS = new Set([
+  "area",
+  "base",
+  "br",
+  "col",
+  "embed",
+  "hr",
+  "img",
+  "input",
+  "link",
+  "meta",
+  "param",
+  "source",
+  "track",
+  "wbr",
+]);
+
+// Private-use characters plus a per-process nonce: cannot collide with markup.
+const SENTINEL = `tc${crypto.randomUUID().slice(0, 8)}`;
+const SENTINEL_VALUE = raw(SENTINEL);
+const templatePlans = new WeakMap<readonly string[], TemplatePlan | null>();
+
+/** Offsets just after each top-level tag name, as [segment, offset] pairs. */
+function findTopLevelTags(strings: readonly string[]): [number, number][] {
+  const cuts: [number, number][] = [];
+  let depth = 0;
+  let inTag = false;
+  let tagIsVoid = false;
+  let quote = "";
+  for (let segment = 0; segment < strings.length; segment++) {
+    const text = strings[segment];
+    let i = 0;
+    while (i < text.length) {
+      const ch = text[i];
+      if (inTag) {
+        if (quote) {
+          if (ch === quote) quote = "";
+        } else if (ch === '"' || ch === "'") {
+          quote = ch;
+        } else if (ch === ">") {
+          inTag = false;
+          if (!tagIsVoid && text[i - 1] !== "/") depth++;
+        }
+        i++;
+        continue;
+      }
+      if (ch !== "<") {
+        i++;
+        continue;
+      }
+      if (text.startsWith("<!--", i)) {
+        const end = text.indexOf("-->", i + 4);
+        i = end < 0 ? text.length : end + 3;
+        continue;
+      }
+      if (text[i + 1] === "/") {
+        depth = Math.max(0, depth - 1);
+        const end = text.indexOf(">", i);
+        i = end < 0 ? text.length : end + 1;
+        continue;
+      }
+      const tagName = /^[a-zA-Z][\w:-]*/.exec(text.slice(i + 1))?.[0];
+      if (!tagName) {
+        i++;
+        continue;
+      }
+      if (depth === 0) cuts.push([segment, i + 1 + tagName.length]);
+      inTag = true;
+      tagIsVoid = VOID_ELEMENTS.has(tagName.toLowerCase());
+      i += 1 + tagName.length;
+    }
+  }
+  return cuts;
+}
+
+function planTemplate(strings: readonly string[]): TemplatePlan | null {
+  if (templatePlans.has(strings)) return templatePlans.get(strings)!;
+  const cuts = findTopLevelTags(strings);
+  let plan: TemplatePlan | null = null;
+  if (cuts.length > 0) {
+    plan = { strings: [], slots: [] };
+    let current = "";
+    for (let segment = 0; segment < strings.length; segment++) {
+      let start = 0;
+      for (const [cutSegment, offset] of cuts) {
+        if (cutSegment !== segment) continue;
+        plan.strings.push(current + strings[segment].slice(start, offset));
+        plan.slots.push(-1);
+        current = "";
+        start = offset;
+      }
+      current += strings[segment].slice(start);
+      if (segment < strings.length - 1) {
+        plan.strings.push(current);
+        plan.slots.push(segment);
+        current = "";
+      }
+    }
+    plan.strings.push(current);
+  }
+  templatePlans.set(strings, plan);
+  return plan;
+}
+
+function stripSentinels(rendered: HtmlEscapedString): TemplateResult {
+  const text = String(rendered);
+  const roots: number[] = [];
+  let output = "";
+  let from = 0;
+  for (
+    let at = text.indexOf(SENTINEL);
+    at >= 0;
+    at = text.indexOf(SENTINEL, from)
+  ) {
+    output += text.slice(from, at);
+    roots.push(output.length);
+    from = at + SENTINEL.length;
+  }
+  output += text.slice(from);
+  const result = raw(output, rendered.callbacks) as TemplateResult;
+  result[TEMPLATE_ROOTS] = roots;
+  return result;
+}
+
+/**
+ * @internal Wraps Hono's `jsxTemplate` so precompiled templates remember
+ * where their top-level elements start.
+ */
+export function withTemplateRoots<
+  T extends (strings: TemplateStringsArray, ...values: unknown[]) => unknown,
+>(render: T): T {
+  return ((strings: TemplateStringsArray, ...values: unknown[]) => {
+    const plan = planTemplate(strings);
+    if (!plan) return render(strings, ...values);
+    const rendered = render(
+      plan.strings as unknown as TemplateStringsArray,
+      ...plan.slots.map((slot) => slot < 0 ? SENTINEL_VALUE : values[slot]),
+    ) as HtmlEscapedString | Promise<HtmlEscapedString>;
+    return rendered instanceof Promise
+      ? rendered.then(stripSentinels)
+      : stripSentinels(rendered);
+  }) as T;
+}
+
+function markTemplateRoots(
+  template: TemplateResult,
+  name: string,
+): HtmlEscapedString {
+  const text = String(template);
+  const attribute = ` ${COMPONENT_ROOT_ATTRIBUTE}="${
+    name.replace(/[&"<>]/g, (ch) => `&#${ch.charCodeAt(0)};`)
+  }"`;
+  let output = "";
+  let from = 0;
+  for (const at of template[TEMPLATE_ROOTS]) {
+    output += text.slice(from, at) + attribute;
+    from = at;
+  }
+  // The new string carries no offsets, so outer components leave it alone.
+  return raw(output + text.slice(from), template.callbacks);
 }
 
 function cloneNode(node: JSXNode, props: JSXNode["props"]): JSXNode {

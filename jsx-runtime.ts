@@ -8,7 +8,7 @@
  * @module
  */
 
-export { Fragment, jsxEscape, jsxTemplate } from "hono/jsx/jsx-runtime";
+export { Fragment, jsxEscape } from "hono/jsx/jsx-runtime";
 import {
   jsx as honoJsx,
   jsxAttr as honoJsxAttr,
@@ -18,7 +18,15 @@ import {
   type HandlerReference,
   handlerReferenceAttributes,
 } from "./eventAttributes.ts";
-import { markElementNode, wrapComponent } from "./componentScope.ts";
+import {
+  markElementNode,
+  withTemplateRoots,
+  wrapComponent,
+} from "./componentScope.ts";
+
+export const jsxTemplate: typeof honoJsxTemplate = withTemplateRoots(
+  honoJsxTemplate,
+);
 
 export const jsx: typeof honoJsx = (tag, props, key) => {
   if (typeof tag === "function") {

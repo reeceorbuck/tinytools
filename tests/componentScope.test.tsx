@@ -1,6 +1,6 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import type { Child } from "hono/jsx";
-import type { JSX } from "../jsx-runtime.ts";
+import { type JSX, jsx, jsxAttr, jsxTemplate } from "../jsx-runtime.ts";
 import { Styles } from "../clientTools.ts";
 import { component, transparent } from "../componentScope.ts";
 import { css, setCustomScope } from "../scopedStyles.ts";
@@ -123,4 +123,53 @@ Deno.test("component scope - toComponent styles end at component roots, not .sb"
   assertStringIncludes(content, "@layer normal");
   assertStringIncludes(content, "to ([data-tc], [data-scope-boundary~=");
   assertEquals(content.includes(".sb"), false);
+});
+
+// `"jsx": "precompile"` emits jsxTemplate calls for plain elements.
+const tpl = (strings: string[], ...values: unknown[]) =>
+  jsxTemplate(strings as unknown as TemplateStringsArray, ...values);
+
+Deno.test("component scope - precompiled templates mark top-level tags only", async () => {
+  const items = [tpl(["<li>a</li>"]), tpl(["<li>b</li>"])];
+  const PrecompiledPair = () =>
+    tpl(
+      ['<h2 title="', '">one</h2><ul>', "</ul><p>two</p>"],
+      "a>b",
+      items,
+    );
+  assertEquals(
+    await render(jsx(PrecompiledPair, {})),
+    '<h2 data-tc="PrecompiledPair" title="a&gt;b">one</h2><ul data-tc="PrecompiledPair"><li>a</li><li>b</li></ul><p data-tc="PrecompiledPair">two</p>',
+  );
+});
+
+Deno.test("component scope - precompiled templates handle attributes, slots and async", async () => {
+  const PrecompiledCard = ({ children }: { children?: Child }) =>
+    tpl(
+      ["<section ", '><br><input value="1">', "</section>"],
+      jsxAttr("class", "card"),
+      children,
+    );
+  const SlowCard = async () => {
+    await Promise.resolve();
+    return tpl(["<aside>", "</aside>"], jsx(PrecompiledCard, {}));
+  };
+  assertEquals(
+    await render(
+      tpl(
+        ["<main>", "", "</main>"],
+        jsx(PrecompiledCard, { children: tpl(["<p>slot</p>"]) }),
+        jsx(SlowCard, {}),
+      ),
+    ),
+    '<main><section data-tc="PrecompiledCard" class="card"><br><input value="1"><p>slot</p></section>' +
+      '<aside data-tc="SlowCard"><section data-tc="PrecompiledCard" class="card"><br><input value="1"></section></aside></main>',
+  );
+});
+
+Deno.test("component scope - unmarked precompiled templates contain no sentinels", () => {
+  const html = String(
+    tpl(["<div ", ">x</div><span></span>"], jsxAttr("id", "a")),
+  );
+  assertEquals(html, '<div id="a">x</div><span></span>');
 });

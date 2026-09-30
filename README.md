@@ -661,8 +661,8 @@ component tree in devtools. Component-scoped styles end at `[data-tc]`.
 - **Transparent components** render into the caller's scope. Opt out with
   `tiny.transparent(MyWrapper)`. Built-in components (`Partial*`, `Suspense`,
   `ClientRoutes`, ...) are transparent already.
-- Components returning raw strings (`html\`\``) or using `precompile` JSX
-  templates are not marked.
+- Both `"jsx": "react-jsx"` and `"jsx": "precompile"` are supported. Components
+  returning raw strings from Hono's ``html`...` `` helper are not marked.
 
 > **⚠️ Important:** Always declare `Handlers` and `Styles` instances at **module
 > level** (outside of route handlers). This ensures handlers and styles are
