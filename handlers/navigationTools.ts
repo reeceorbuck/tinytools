@@ -261,7 +261,7 @@ export const navigationTools = new Handlers(import.meta.url, async () => {
       navigationApi.controller?.abort();
       console.log("Aborted navigation");
     },
-    setPathVariables: function () {
+    setPathVariables: function (this: PartialAbortableHTMLElement) {
       console.log("setPathVariables activated, this: ", this);
       const html = globalThis.document
         .documentElement as PartialAbortableHTMLElement;
@@ -277,7 +277,8 @@ export const navigationTools = new Handlers(import.meta.url, async () => {
           html.style.setProperty(`--param-${key}`, value);
         });
 
-      fn.applyCurrentEntryChangeListener.apply(html);
+      // Dispatch to this element's own onCurrentEntryChange handlers.
+      fn.applyCurrentEntryChangeListener.apply(this);
     },
     setVariablesFromUrl: function (event: NavigationCurrentEntryChangeEvent) {
       const fromUrl = new URL(event.from.url!);

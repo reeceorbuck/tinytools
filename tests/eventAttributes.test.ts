@@ -134,3 +134,32 @@ Deno.test("browser dispatcher starts every handler without awaiting and preserve
     }
   }
 });
+
+Deno.test("browser dispatcher runs registered bundles synchronously and imports the rest", async () => {
+  const imported: string[] = [];
+  const calls: string[] = [];
+  const dispatch: typeof runHandler = new Function(
+    "loadHandler",
+    `return ${runHandler.toString().replace("import(", "loadHandler(")}`,
+  )((path: string) => {
+    imported.push(path);
+    return Promise.resolve({ late: () => calls.push("late") });
+  });
+  const element = {
+    getAttribute: () => "registered_1.early loading_2.late",
+  } as unknown as HTMLElement;
+  (globalThis as unknown as { handlers: unknown }).handlers = {
+    registered_1: { early: () => calls.push("early") },
+  };
+  try {
+    dispatch(element, new Event("navigate"));
+    // The registered handler ran during the call, before any microtask.
+    assertEquals(calls, ["early"]);
+    assertEquals(imported, ["/handlers/loading_2.js"]);
+    await Promise.resolve();
+    await Promise.resolve();
+    assertEquals(calls, ["early", "late"]);
+  } finally {
+    Reflect.deleteProperty(globalThis, "handlers");
+  }
+});

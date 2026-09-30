@@ -296,6 +296,7 @@ export class HandlerBundle {
         dependencies,
         stored: this.stateful && this.storedBinding,
         defaultExport,
+        register: this.filename,
       })
     );
   }

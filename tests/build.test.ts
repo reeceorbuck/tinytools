@@ -55,15 +55,23 @@ Deno.test({
       arrow: (amount: number) => amount + 2,
     };
     const tools = new Handlers(import.meta.url, definitions);
-    const code = await tools._handlerDefinitions.get("method")!.bundle
-      .buildCode();
-    assertEquals(code.includes("globalThis.handlers"), false);
+    const bundle = tools._handlerDefinitions.get("method")!.bundle;
+    const code = await bundle.buildCode();
     assertEquals(code.includes("=>"), true);
-    const module = await import(
-      `data:text/javascript,${encodeURIComponent(code)}`
-    );
-    for (const name of Object.keys(definitions)) {
-      assertEquals(await module[name].call({ value: 2 }, 3), 5);
+    try {
+      const module = await import(
+        `data:text/javascript,${encodeURIComponent(code)}`
+      );
+      const registered = (globalThis as unknown as {
+        handlers: Record<string, Record<string, unknown>>;
+      }).handlers[bundle.filename];
+      for (const name of Object.keys(definitions)) {
+        assertEquals(await module[name].call({ value: 2 }, 3), 5);
+        // Registered on evaluation, for synchronous dispatch by runHandler.
+        assertEquals(registered[name], module[name]);
+      }
+    } finally {
+      Reflect.deleteProperty(globalThis, "handlers");
     }
   },
 });

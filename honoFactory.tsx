@@ -349,11 +349,24 @@ class TinyHono<E extends Env = BlankEnv> extends HonoBase<E> {
   }
 }
 
+/**
+ * Runs the handlers named by the element's `tt-handler-<event.type>` attribute.
+ * Loaded bundles register themselves on `globalThis.handlers`, so their
+ * handlers run synchronously during dispatch (needed for `preventDefault()`,
+ * `NavigateEvent.intercept()` and the like). A bundle that has not loaded yet
+ * is imported, and its handler runs once it has.
+ */
 export function runHandler(
   el: HTMLElement | typeof globalThis,
   e: Event,
 ) {
   const element = el === globalThis ? document.body : el as HTMLElement;
+  const registry = (globalThis as {
+    handlers?: Record<
+      string,
+      Record<string, (this: unknown, event: Event) => unknown>
+    >;
+  }).handlers;
 
   // Each reference is `<bundle>.<handler>`.
   for (
@@ -362,9 +375,14 @@ export function runHandler(
   ) {
     const dot = reference.indexOf(".");
     if (dot < 1) continue;
-    import(`/handlers/${reference.slice(0, dot)}.js`).then((bundle) =>
-      bundle[reference.slice(dot + 1)].call(el, e)
-    );
+    const name = reference.slice(0, dot);
+    const handler = reference.slice(dot + 1);
+    if (registry?.[name]) registry[name][handler].call(el, e);
+    else {
+      import(`/handlers/${name}.js`).then((bundle) =>
+        bundle[handler].call(el, e)
+      );
+    }
   }
 }
 
