@@ -20,9 +20,6 @@ export const SSE_ID_COOKIE = "sseId";
 /** How long a path record is kept for a client whose stream has closed. */
 const INACTIVE_STREAM_TTL_MS = 10_000;
 
-/** Maximum number of recently displayed paths remembered per client. */
-const MAX_TRACKED_PATHS = 10;
-
 export interface StreamData {
   id: string;
   userName: string;
@@ -257,11 +254,6 @@ export function updateStreamPath(
   // Re-inserting moves the path to the end, keeping the map ordered by recency.
   streamData.paths.delete(path);
   streamData.paths.set(path, { lastUpdated: Date.now() });
-
-  while (streamData.paths.size > MAX_TRACKED_PATHS) {
-    const oldest = streamData.paths.keys().next().value!;
-    streamData.paths.delete(oldest);
-  }
 
   streamEvents.dispatchEvent(new UpdatedStreamEvent(streamOrPath, id));
   return streamData.paths;

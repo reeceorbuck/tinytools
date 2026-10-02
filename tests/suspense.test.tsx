@@ -21,7 +21,11 @@ import {
 import { Hono } from "hono";
 import { tiny } from "../honoFactory.tsx";
 import { CustomSuspense, Suspense } from "../components/Suspense.tsx";
-import type { Child, FC } from "hono/jsx";
+import type { Child } from "hono/jsx";
+import type { JSX } from "../jsx-runtime.ts";
+
+// hono's `FC` also allows results that are not JSX elements.
+type FC<Props> = (props: Props) => JSX.Element;
 import { jsxTemplate } from "hono/jsx/jsx-runtime";
 
 declare module "hono" {

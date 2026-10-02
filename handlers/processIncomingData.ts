@@ -137,6 +137,8 @@ export const processIncomingDataTools = new Handlers(import.meta.url, {
    * them matches the current page path, or the `update-path` of a cacheable
    * region currently on the page (which may show content for a more
    * specific path than the URL, e.g. a default conversation on /messages).
+   * Applied partials are marked `optional-target`, as an update can target an
+   * element that isn't on this page.
    */
   appendIncomingHtml: function (this: HTMLElement, event: IncomingDataEvent) {
     if (event.detail.type !== "html") return;
@@ -153,7 +155,16 @@ export const processIncomingDataTools = new Handlers(import.meta.url, {
         const pattern = new URLPattern({ pathname });
         return livePaths.some((path) => pattern.test({ pathname: path }));
       });
-    if (!onMatchingPage) {
+    if (onMatchingPage) {
+      // Pushed updates may target content this page doesn't show.
+      for (
+        const partial of copy.querySelectorAll(
+          ":scope > template[for-partial-id]",
+        )
+      ) {
+        partial.setAttribute("optional-target", "");
+      }
+    } else {
       // Keep head imports, drop partials (and their load-trigger links).
       for (const child of Array.from(copy.children)) {
         if (

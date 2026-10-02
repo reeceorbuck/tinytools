@@ -32,7 +32,9 @@ import {
   type SignalAccessors,
   signalClasses,
   type SignalDefinitions,
+  type SignalInputs,
   type SignalTools,
+  type SignalValues,
 } from "./signals.ts";
 import {
   createEvents,
@@ -989,6 +991,15 @@ interface SignalsConstructor {
     factory: (tools: SignalTools) => Definitions,
   ): ClientToolsClass<SignalAccessors<Definitions>, Empty, Empty> & {
     readonly _isSignals: true;
+    /**
+     * Runs the factory on the server with `inputs` written to its writable
+     * signals and returns every signal's value, so initial markup can be
+     * rendered by the same computations the browser runs. Each call builds a
+     * fresh graph; nothing is shared between calls.
+     */
+    evaluateUsingInitialValues(
+      inputs?: SignalInputs<Definitions>,
+    ): SignalValues<Definitions>;
   };
 }
 
@@ -1948,6 +1959,7 @@ function signalNames(factory: SignalFactory): string[] {
  */
 class SignalsClass extends StoreClass {
   #prelude: { code: string };
+  #factory: SignalFactory;
 
   /** The one browser module holding the signal classes, shared by every collection. */
   static #runtime: InstanceType<typeof HandlersClass> | undefined;
@@ -2011,6 +2023,25 @@ class SignalsClass extends StoreClass {
       }));
     });
     this.#prelude = prelude;
+    this.#factory = factory;
+  }
+
+  evaluateUsingInitialValues(
+    inputs: Record<string, unknown> = {},
+  ): Record<string, unknown> {
+    const graph = this.#factory(signalClasses(true));
+    for (const [name, value] of Object.entries(inputs)) {
+      if (!Object.hasOwn(graph, name)) {
+        throw new TypeError(
+          `Signal '${name}' is not defined in this collection.`,
+        );
+      }
+      // Assigning to a computed signal throws: only writable signals are inputs.
+      (graph[name] as { value: unknown }).value = value;
+    }
+    return Object.fromEntries(
+      Object.entries(graph).map(([name, signal]) => [name, signal.value]),
+    );
   }
 
   protected override get bundlePrelude(): string {

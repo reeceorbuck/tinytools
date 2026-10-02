@@ -1,5 +1,7 @@
 import { assertEquals } from "@std/assert";
+import { assertThrows } from "@std/assert";
 import { signalClasses } from "../signals.ts";
+import { Signals } from "../clientTools.ts";
 import { signalTools } from "../handlers/signals.ts";
 import { loadHandler } from "./helpers/loadHandler.ts";
 
@@ -65,4 +67,56 @@ Deno.test("signals take their name from the input that writes them", () => {
   } as unknown as Event);
   assertEquals(signal.value, "typed");
   assertEquals(signal.name, "field");
+});
+
+Deno.test("evaluateUsingInitialValues computes a collection's values on the server", () => {
+  const signals = new Signals(import.meta.url, ({ Signal, Computed }) => {
+    const price = new Signal<number>(10);
+    const quantity = new Signal<number>(1);
+    const total = new Computed(() => price.value * quantity.value, [
+      price,
+      quantity,
+    ]);
+    return {
+      price,
+      quantity,
+      total,
+      label: new Computed(() => `Total: ${total.value}`, [total]),
+    };
+  });
+
+  // Signals left out keep their initial values.
+  assertEquals(signals.evaluateUsingInitialValues(), {
+    price: 10,
+    quantity: 1,
+    total: 10,
+    label: "Total: 10",
+  });
+  const { total, label }: { total: number; label: string } = signals
+    .evaluateUsingInitialValues({ quantity: 3 });
+  assertEquals([total, label], [30, "Total: 30"]);
+  // Each call starts from a fresh graph.
+  assertEquals(signals.evaluateUsingInitialValues({ price: 2 }).total, 2);
+
+  // Only writable signals are inputs.
+  assertThrows(
+    // @ts-expect-error computed signals are not accepted
+    () => signals.evaluateUsingInitialValues({ total: 5 }),
+    TypeError,
+  );
+  assertThrows(
+    // @ts-expect-error unknown names are not accepted
+    () => signals.evaluateUsingInitialValues({ missing: 5 }),
+    TypeError,
+  );
+});
+
+Deno.test("a signal without an initial value must allow null", () => {
+  const { Signal } = signalClasses();
+  assertEquals(new Signal().value, null);
+  assertEquals(new Signal<string | null>().value, null);
+  const text: string = new Signal<string>("a").value;
+  assertEquals(text, "a");
+  // @ts-expect-error a string signal needs an initial value
+  new Signal<string>();
 });

@@ -2,3 +2,4 @@
 .test-build-output/
 .test-client-src/
 public/
+node_modules/

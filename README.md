@@ -469,6 +469,23 @@ const { fn, signal } = await tiny.imports(viewerSignals, signalTools);
 - While rendering, a reference exposes no `.value`; reading it throws.
 - `value={signal.x}` is not a binding. Render the initial value yourself.
 
+To render initial markup with the same computations, evaluate the collection on
+the server. `evaluateUsingInitialValues` runs the factory with the given values
+written to its writable signals and returns every signal's value:
+
+```tsx
+const { contrast } = viewerSignals.evaluateUsingInitialValues({
+  setContrast: 0.5,
+});
+<output onLoad={signal.contrast} onSignal={fn.setTextContent}>
+  {contrast}
+</output>;
+```
+
+Each call builds a fresh graph, so nothing is shared between requests. Signals
+left out keep their initial values, computed signals cannot be passed as inputs,
+and a computed callback that needs browser globals throws when evaluated.
+
 The `signalTools` collection from `tinytools/handlers` provides `effect`,
 `setTextContent`, `setValue` and `setCssProperty` (which writes
 `--<signal name>`).

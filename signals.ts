@@ -11,14 +11,25 @@ export interface ReadonlySignal<Value = SignalValue> {
   subscribe(target: EventTarget): void;
 }
 
+/** Type-only marker telling writable signals apart from computed ones. */
+declare const writableSignal: unique symbol;
+
 export interface Signal<Value = SignalValue> extends ReadonlySignal<Value> {
   value: Value;
+  readonly [writableSignal]?: true;
 }
 
 export interface SignalTools {
-  Signal: new <Value extends SignalValue = SignalValue>(
-    initialValue?: Value,
-  ) => Signal<Value>;
+  Signal: {
+    new <Value extends SignalValue>(initialValue: Value): Signal<Value>;
+    /**
+     * Without an initial value a signal starts as `null`, so that is only
+     * allowed when the value type includes `null`.
+     */
+    new <Value extends SignalValue = SignalValue>(
+      ...args: null extends Value ? [] : [initialValue: Value]
+    ): Signal<Value>;
+  };
   Computed: new <Value>(
     compute: () => Value,
     dependencies: readonly ReadonlySignal<unknown>[],
@@ -32,6 +43,20 @@ export type SignalAccessors<Definitions extends SignalDefinitions> = {
     this: unknown,
     event?: Event | null,
   ) => Definitions[Name];
+};
+
+/** The values `evaluateUsingInitialValues` accepts: any of the collection's writable signals. */
+export type SignalInputs<Definitions extends SignalDefinitions> = {
+  [
+    Name in keyof Definitions as typeof writableSignal extends
+      keyof Definitions[Name] ? Name : never
+  ]?: Definitions[Name] extends ReadonlySignal<infer Value> ? Value : never;
+};
+
+/** The value of every signal in a collection, as `evaluateUsingInitialValues` returns them. */
+export type SignalValues<Definitions extends SignalDefinitions> = {
+  [Name in keyof Definitions]: Definitions[Name] extends
+    ReadonlySignal<infer Value> ? Value : never;
 };
 
 export function signalClasses(runtime = true): SignalTools {

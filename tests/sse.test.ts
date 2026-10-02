@@ -94,7 +94,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "updateStreamPath keeps the ten most recent paths in order",
+  name: "updateStreamPath keeps every displayed path in recency order",
   sanitizeOps: false,
   sanitizeResources: false,
   fn() {
@@ -104,9 +104,9 @@ Deno.test({
       for (let i = 0; i < 12; i++) updateStreamPath("cap", `/page/${i}`);
       updateStreamPath("cap", "/page/5");
       const paths = getTrackedStreamPaths(activeStreams.get(stream)!);
-      assertEquals(paths.length, 10);
+      assertEquals(paths.length, 12);
+      assertEquals(paths.at(0), "/page/0");
       assertEquals(paths.at(-1), "/page/5");
-      assertEquals(paths.includes("/page/0"), false);
       updateStreamPath("cap", "/page/new", "/page/11");
       assertEquals(
         getTrackedStreamPaths(activeStreams.get(stream)!).includes("/page/11"),
