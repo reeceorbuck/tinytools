@@ -141,6 +141,14 @@ Deno.test("ClientRoutes cooperate with core navigation", async (test) => {
     assertExists(handler);
     handler.call(receiver, new Event("load"));
   }
+  function activateCore() {
+    const body = document.body as HTMLElement & {
+      abortController?: AbortController;
+    };
+    body.abortController = new AbortController();
+    body.setAttribute("tt-handler-navigate", "handleNavigate");
+    invoke("applyNavigationListener", body);
+  }
   function activateRoutes(template: HTMLTemplateElement) {
     const router = template.parentElement as HTMLElement & {
       abortController?: AbortController;
@@ -197,7 +205,7 @@ Deno.test("ClientRoutes cooperate with core navigation", async (test) => {
       });
       return Promise.resolve(new Response(null, { status: 204 }));
     });
-    if (coreFirst) invoke("handleNavigate", {});
+    if (coreFirst) activateCore();
     function addRoutes(...routes: HTMLElement[]) {
       const router = document.createElement("client-router");
       const template = document.createElement("template");
@@ -365,10 +373,12 @@ Deno.test("ClientRoutes cooperate with core navigation", async (test) => {
         invoke("observeRouteCache", watcher);
         const container = target.nextElementSibling!.querySelector("template")!;
         activateRoutes(container);
+        // Placeholder routes are skipped on a cache hit, with or without
+        // the fallback attribute.
         const fallback = createRoute("/current", "loading");
         fallback.setAttribute("fallback", "");
-        state.addRoutes(fallback);
-        if (!coreFirst) invoke("handleNavigate", {});
+        state.addRoutes(fallback, createRoute("/current", "placeholder"));
+        if (!coreFirst) activateCore();
         await state.navigate(new NavigationEvent("/next"));
         assertStrictEquals(target.querySelector("input"), input);
         assertEquals(container.content.children.length, 0);
@@ -416,7 +426,7 @@ Deno.test("ClientRoutes cooperate with core navigation", async (test) => {
         const state = setup(coreFirst);
         state.addRoutes(createRoute("/fragment", "first", true));
         state.addRoutes(createRoute("/fragment", "second"));
-        if (!coreFirst) invoke("handleNavigate", {});
+        if (!coreFirst) activateCore();
         const source = new ButtonElement(
           {},
           new FormElement({

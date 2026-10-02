@@ -1,7 +1,7 @@
 import {
   Handlers,
   imports,
-  PartialAbortableHTMLElement,
+  type PartialAbortableHTMLElement,
   tiny,
 } from "../mod.ts";
 import {
@@ -13,13 +13,24 @@ import { processIncomingDataTools } from "./processIncomingData.ts";
 export type AppNavigation = Navigation & {
   inflightGetRequests?: Map<string, AbortController>;
   clientRouteBlockedEvents?: WeakSet<NavigateEvent>;
+  /** Navigations restored from a cached route; other client routes skip them. */
+  cacheHandledEvents?: WeakSet<NavigateEvent>;
   navigationUrlResults?: WeakMap<NavigateEvent, NavigationUrlResult>;
-  controller?: AbortController;
 };
 
 export interface NavigationClientInfo {
   blockIntercept?: boolean;
   onlyUpdateUrl?: boolean;
+}
+
+/** What `performFetchAndUpdate` did, for the navigation log. */
+export interface FetchReport {
+  outcome: "streaming" | "aborted" | "redirected";
+  abortedPreviousGet?: boolean;
+  status?: number;
+  contentType?: string | null;
+  spaRedirect?: string;
+  redirectedTo?: string;
 }
 
 export const performFetchAndUpdateTools = new Handlers(
@@ -33,21 +44,20 @@ export const performFetchAndUpdateTools = new Handlers(
         toUrl: URL,
         formData?: FormData | null,
         requestMethod: "get" | "post" = formData ? "post" : "get",
-      ) {
+      ): Promise<FetchReport> {
         const method = requestMethod.toLowerCase() === "post" ? "post" : "get";
-        console.log(
-          `${method.toUpperCase()} Navigation to: ${destinationUrl.href}`,
-        );
+        const report: Partial<FetchReport> = {};
 
+        /** Tracks in-flight GET requests per pathname so rapid-fire calls abort stale ones. */
         const inflightGetRequests = (globalThis.navigation as AppNavigation)
-          .inflightGetRequests!;
+          .inflightGetRequests ??= new Map<string, AbortController>();
 
         let signal: AbortSignal | undefined;
         if (method === "get") {
           const key = destinationUrl.pathname;
           const existing = inflightGetRequests.get(key);
           if (existing) {
-            console.log(`Aborting previous GET to ${key}`);
+            report.abortedPreviousGet = true;
             existing.abort();
           }
           const controller = new AbortController();
@@ -69,8 +79,7 @@ export const performFetchAndUpdateTools = new Handlers(
           });
         } catch (err) {
           if (err instanceof DOMException && err.name === "AbortError") {
-            console.log(`GET to ${destinationUrl.href} was aborted`);
-            return;
+            return { ...report, outcome: "aborted" };
           }
           throw err;
         }
@@ -79,13 +88,12 @@ export const performFetchAndUpdateTools = new Handlers(
           throw new Error(`HTTP error! status: ${response.status}`);
         }
 
+        report.status = response.status;
+        report.contentType = response.headers.get("Content-Type");
         const spaRedirect = response.headers.get("X-spa-redirect");
 
         if (spaRedirect) {
-          console.log(
-            "Found X-spa-redirect header, navigating to: ",
-            spaRedirect,
-          );
+          report.spaRedirect = spaRedirect;
           navigation.navigate(
             spaRedirect,
             {
@@ -100,7 +108,7 @@ export const performFetchAndUpdateTools = new Handlers(
         // if response is a redirect, we need to follow it
         if (response.redirected) {
           const redirectedUrl = new URL(response.url);
-          console.log("Redirected to: ", redirectedUrl);
+          report.redirectedTo = redirectedUrl.href;
           navigation.navigate(
             redirectedUrl.href,
             {
@@ -110,7 +118,7 @@ export const performFetchAndUpdateTools = new Handlers(
               },
             },
           );
-          return;
+          return { ...report, outcome: "redirected" };
         }
 
         fn.processIncomingData(response);
@@ -118,114 +126,7 @@ export const performFetchAndUpdateTools = new Handlers(
         if (method === "get") {
           inflightGetRequests.delete(destinationUrl.pathname);
         }
-      },
-    };
-  },
-);
-
-export const navigationHandlerTools = new Handlers(
-  import.meta.url,
-  async () => {
-    const { fn } = await imports(
-      processIncomingDataTools,
-      navigationUrlTools,
-      performFetchAndUpdateTools,
-    );
-    return {
-      navigationHandler: function (e: NavigateEvent) {
-        function getNavigationClientInfo(
-          e: NavigateEvent,
-        ): NavigationClientInfo | null {
-          if (!e.info || typeof e.info !== "object") {
-            return null;
-          }
-
-          return e.info as NavigationClientInfo;
-        }
-
-        console.log("Core Navigation event: ", e);
-        if (e.defaultPrevented || !e.canIntercept) return;
-        try {
-          const navigationInfo = getNavigationClientInfo(e);
-          const {
-            fromUrl,
-            toUrl,
-            fetchUrl,
-            displayUrl,
-            shouldRedirect,
-            shouldIntercept,
-          } = fn.getNavigationUrls(e);
-
-          if (!shouldIntercept) {
-            console.log(
-              "Navigation no intercept",
-            );
-            return;
-          }
-
-          e.intercept({
-            focusReset: "manual",
-            // deno-lint-ignore require-await
-            async precommitHandler(controller) {
-              try {
-                if (shouldRedirect) {
-                  controller.redirect(displayUrl.href);
-                }
-              } catch (err) {
-                console.error("Error in pre-commit handler: ", err);
-              }
-            },
-
-            async handler() {
-              try {
-                console.log(
-                  "In navigation handler for fetchUrl: ",
-                  fetchUrl.href,
-                );
-                const navigationMethod = fn.getNavigationMethod(e);
-                const navigationApi = globalThis.navigation as AppNavigation;
-
-                if (
-                  navigationInfo?.onlyUpdateUrl ||
-                  navigationApi.clientRouteBlockedEvents?.has(e)
-                ) {
-                  console.log(
-                    "Navigation handled locally, no fetch performed.",
-                  );
-                  return;
-                }
-
-                if (e.sourceElement?.hasAttribute("data-local-only")) {
-                  console.log(
-                    "Navigation event is local only, no fetch performed.",
-                  );
-                  // We still may have activated client routes, or changed url
-                  return;
-                }
-
-                console.log(
-                  `NAV: Fetching from ${fetchUrl.href}, updating url to ${toUrl.href}`,
-                );
-
-                return await fn.performFetchAndUpdate(
-                  fetchUrl,
-                  fromUrl,
-                  displayUrl,
-                  e.formData,
-                  navigationMethod,
-                );
-              } catch (err) {
-                console.error("Error in navigation handler: ", err);
-              }
-            },
-          });
-        } catch (err) {
-          console.error("Error handling navigation event: ", err);
-          // Going to allow the navigation to proceed as if Navigation API is not supported if there is an error in the handler
-          // Right now Safari doesnt support precommitHandler, so this is a workaround for that,
-          // But it will also suppress obvious other errors so need to be careful about that
-          // e.preventDefault();
-        }
+        return { ...report, outcome: "streaming" };
       },
     };
   },
@@ -233,54 +134,136 @@ export const navigationHandlerTools = new Handlers(
 
 export const navigationTools = new Handlers(import.meta.url, async () => {
   const { fn } = await imports(
-    navigationHandlerTools,
-    applyNavigationHandlers,
+    navigationUrlTools,
+    performFetchAndUpdateTools,
   );
   return {
-    handleNavigate: function (this: HTMLElement) {
-      const navigationApi = globalThis.navigation as AppNavigation;
-      if (!navigationApi.controller) {
-        navigationApi.controller = new AbortController();
+    /**
+     * Core `onNavigate` handler: intercepts same-origin navigations and
+     * fetches the destination as a partial. Register it on an element with
+     * `applyNavigationListener`, e.g. `<body onLoad={fn.applyNavigationListener}
+     * onNavigate={fn.handleNavigate}>`.
+     */
+    handleNavigate: function (this: HTMLElement, e: NavigateEvent) {
+      function getNavigationClientInfo(
+        e: NavigateEvent,
+      ): NavigationClientInfo | null {
+        if (!e.info || typeof e.info !== "object") {
+          return null;
+        }
+
+        return e.info as NavigationClientInfo;
       }
 
-      /** Tracks in-flight GET requests per pathname so rapid-fire calls abort stale ones. */
-      navigationApi.inflightGetRequests = new Map<string, AbortController>();
-      navigationApi.controller = new AbortController();
+      if (e.defaultPrevented || !e.canIntercept) return;
+      try {
+        const navigationInfo = getNavigationClientInfo(e);
+        const {
+          fromUrl,
+          toUrl,
+          fetchUrl,
+          displayUrl,
+          shouldRedirect,
+          shouldIntercept,
+        } = fn.getNavigationUrls(e);
 
-      globalThis.navigation.addEventListener(
-        "navigate",
-        fn.navigationHandler,
-        {
-          signal: navigationApi.controller.signal,
-        },
-      );
-      console.log("Core navigation handler added: ", fn.navigationHandler);
-    },
-    abortNavigation: function (this: HTMLElement, _e: Event) {
-      const navigationApi = globalThis.navigation as AppNavigation;
-      navigationApi.controller?.abort();
-      console.log("Aborted navigation");
-    },
-    setPathVariables: function (this: PartialAbortableHTMLElement) {
-      console.log("setPathVariables activated, this: ", this);
-      const html = globalThis.document
-        .documentElement as PartialAbortableHTMLElement;
-      const url = new URL(globalThis.location.href);
-      url.pathname
-        .split("/")
-        .filter(Boolean)
-        .forEach((part, i) => {
-          html.style.setProperty(`--path-${i}`, part);
-        });
-      Array.from(url.searchParams.entries())
-        .forEach(([key, value]) => {
-          html.style.setProperty(`--param-${key}`, value);
-        });
+        if (!shouldIntercept) return;
 
-      // Dispatch to this element's own onCurrentEntryChange handlers.
-      fn.applyCurrentEntryChangeListener.apply(this);
+        const startedAt = performance.now();
+        const source = e.sourceElement;
+        // Everything that happened in this navigation, logged once at the end.
+        const details: Record<string, unknown> = {
+          type: e.navigationType,
+          method: fn.getNavigationMethod(e),
+          from: fromUrl.href,
+          to: toUrl.href,
+          ...(fetchUrl.href !== toUrl.href ? { fetchUrl: fetchUrl.href } : {}),
+          ...(shouldRedirect ? { displayUrl: displayUrl.href } : {}),
+          source,
+          ...(e.formData ? { formData: Object.fromEntries(e.formData) } : {}),
+          ...(navigationInfo ? { info: navigationInfo } : {}),
+          ...(e.userInitiated ? {} : { userInitiated: false }),
+        };
+        const logNavigation = (outcome: string, error?: unknown) => {
+          details.outcome = outcome;
+          details.ms = Math.round(performance.now() - startedAt);
+          if (error !== undefined) details.error = error;
+          const summary = `NAV ${details.type} ${
+            String(details.method).toUpperCase()
+          } ${fromUrl.pathname}${fromUrl.search} -> ${toUrl.pathname}${toUrl.search}: ${outcome}`;
+          if (error !== undefined) console.error(summary, details);
+          else console.log(summary, details);
+        };
+
+        e.intercept({
+          focusReset: "manual",
+          // deno-lint-ignore require-await
+          async precommitHandler(controller) {
+            try {
+              if (shouldRedirect) {
+                controller.redirect(displayUrl.href);
+              }
+            } catch (err) {
+              details.precommitError = err;
+            }
+          },
+
+          async handler() {
+            try {
+              const navigationApi = globalThis.navigation as AppNavigation;
+              if (navigationApi.clientRouteBlockedEvents?.has(e)) {
+                details.clientRouteBlocked = true;
+              }
+              if (navigationApi.cacheHandledEvents?.has(e)) {
+                details.restoredFromCache = true;
+              }
+
+              if (navigationInfo?.onlyUpdateUrl) {
+                return logNavigation("url only");
+              }
+              if (details.clientRouteBlocked) {
+                return logNavigation("handled by client route");
+              }
+              if (source?.hasAttribute("data-local-only")) {
+                // We still may have activated client routes, or changed url
+                return logNavigation("local only");
+              }
+
+              const { outcome, ...fetchDetails } = await fn
+                .performFetchAndUpdate(
+                  fetchUrl,
+                  fromUrl,
+                  displayUrl,
+                  e.formData,
+                  details.method as "get" | "post",
+                );
+              details.fetch = fetchDetails;
+              logNavigation(
+                outcome === "streaming"
+                  ? `fetched ${fetchDetails.status}`
+                  : outcome,
+              );
+            } catch (err) {
+              logNavigation("error", err);
+            }
+          },
+        });
+      } catch (err) {
+        console.error("Error handling navigation event: ", err);
+        // Going to allow the navigation to proceed as if Navigation API is not supported if there is an error in the handler
+        // Right now Safari doesnt support precommitHandler, so this is a workaround for that,
+        // But it will also suppress obvious other errors so need to be careful about that
+        // e.preventDefault();
+      }
     },
-    setVariablesFromUrl: function (event: NavigationCurrentEntryChangeEvent) {
+    /**
+     * Keeps this element's `--path-<index>` and `--param-<key>` properties in
+     * sync with the URL. Render the initial values with `urlStyleVariables`.
+     */
+    setVariablesFromUrl: function (
+      this: HTMLElement,
+      event: NavigationCurrentEntryChangeEvent,
+    ) {
       const fromUrl = new URL(event.from.url!);
       const toUrl = new URL(globalThis.location.href);
 
@@ -289,7 +272,7 @@ export const navigationTools = new Handlers(import.meta.url, async () => {
       toSplitPath.forEach((partPath, i) => {
         // Only update path variables if they have changed
         if (partPath !== fromSplitPath[i]) {
-          document.documentElement.style.setProperty(
+          this.style.setProperty(
             `--path-${i}`,
             partPath,
           );
@@ -298,7 +281,7 @@ export const navigationTools = new Handlers(import.meta.url, async () => {
       if (fromSplitPath.length > toSplitPath.length) {
         // Remove extra path parts
         for (let i = toSplitPath.length; i < fromSplitPath.length; i++) {
-          document.documentElement.style.removeProperty(`--path-${i}`);
+          this.style.removeProperty(`--path-${i}`);
         }
       }
       const fromParams = fromUrl.searchParams;
@@ -327,8 +310,8 @@ export const navigationTools = new Handlers(import.meta.url, async () => {
       ]));
       changeMap.forEach(({ to }, key) => {
         if (!to) {
-          document.documentElement.style.removeProperty(`--param-${key}`);
-        } else {document.documentElement.style.setProperty(
+          this.style.removeProperty(`--param-${key}`);
+        } else {this.style.setProperty(
             `--param-${key}`,
             to,
           );}
@@ -342,37 +325,41 @@ export const applyNavigationHandlers = new Handlers(
   async () => {
     const { fn } = await imports(navigationUrlTools);
     return {
+      /**
+       * Forwards interceptable `navigate` events to this element's own
+       * `onNavigate` handlers.
+       */
       applyNavigationListener: function (
-        this: PartialAbortableHTMLElement,
+        this: PartialAbortableHTMLElement | typeof globalThis,
         _e: Event,
       ) {
-        console.log("Applying navigation listener for element: ", this);
+        // <body onLoad> runs with `this === window`, so resolve to the body.
+        const element = this === globalThis
+          ? document.body as PartialAbortableHTMLElement
+          : this as PartialAbortableHTMLElement;
         globalThis.navigation.addEventListener("navigate", (event) => {
-          const navigationInfo = event.info && typeof event.info === "object"
-            ? event.info as NavigationClientInfo
-            : null;
           if (
-            !this.isConnected || event.defaultPrevented ||
-            !event.canIntercept || navigationInfo?.onlyUpdateUrl
+            !element.isConnected || event.defaultPrevented ||
+            !event.canIntercept
           ) return;
           const { shouldIntercept } = fn.getNavigationUrls(event);
           if (!shouldIntercept) return;
-          tiny.runHandler(this, event);
-        }, { signal: this.abortController?.signal });
+          tiny.runHandler(element, event);
+        }, { signal: element.abortController?.signal });
       },
       applyCurrentEntryChangeListener: function (
-        this: PartialAbortableHTMLElement,
+        this: PartialAbortableHTMLElement | typeof globalThis,
       ) {
-        console.log(
-          "Applying current entry change listener for element: ",
-          this,
-        );
+        // <body onLoad> runs with `this === window`, so resolve to the body.
+        const element = this === globalThis
+          ? document.body as PartialAbortableHTMLElement
+          : this as PartialAbortableHTMLElement;
         globalThis.navigation.addEventListener(
           "currententrychange",
           (event) => {
-            tiny.runHandler(this, event);
+            tiny.runHandler(element, event);
           },
-          { signal: this.abortController?.signal },
+          { signal: element.abortController?.signal },
         );
       },
     };

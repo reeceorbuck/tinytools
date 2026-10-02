@@ -10,6 +10,7 @@ import { PartialCacheRoutes } from "./ClientRoutes.tsx";
 import { UpgradeCustomElement } from "./ActivateOnLoadHandler.tsx";
 import { partialInsertHandlers } from "../handlers/partialInsertHandlers.ts";
 import { transparent } from "../componentScope.ts";
+import { getDisplayedPath } from "../sse.ts";
 
 const partialLogic = new Handlers(import.meta.url, {
   passLoadEvent: function (this: HTMLElement) {
@@ -39,6 +40,11 @@ export type PartialProps = PropsWithChildren<{
   id?: string;
   groupName?: string;
   cache?: boolean | string;
+  /**
+   * Path that server update patterns are tested against while this content
+   * is cached. Defaults to the page path the content is displayed under.
+   */
+  updatePath?: string;
   fullPageLoad?: boolean;
   [attribute: string]: unknown;
 }>;
@@ -52,10 +58,15 @@ export async function NewPartial(
     children,
     id,
     cache = false,
+    updatePath,
     fullPageLoad = false,
     ...attributes
   } = props;
-  const cachePath = cache ? getContext().req.path : undefined;
+  const context = cache ? getContext() : undefined;
+  const cachePath = context?.req.path;
+  const cacheUpdatePath = context
+    ? updatePath ?? getDisplayedPath(context)
+    : undefined;
   const cachePattern = typeof cache === "string"
     ? cache
     : cachePath?.replace(/[.*+?^${}()|[\]\\:]/g, "\\$&");
@@ -74,6 +85,7 @@ export async function NewPartial(
             <template>
               <client-route
                 path={cachePattern}
+                update-path={cacheUpdatePath}
                 once
                 data-nav-block
                 interpolate="false"
@@ -130,6 +142,7 @@ export const PartialReplace = async function (
     fullPageLoad?: boolean;
     includeWrapper?: boolean;
     cache?: boolean | string;
+    updatePath?: string;
   }>,
 ): Promise<HtmlEscapedString> {
   const { fn } = await tiny.imports(partialInsertHandlers);
@@ -139,6 +152,7 @@ export const PartialReplace = async function (
       fullPageLoad={props.fullPageLoad}
       onLoad={props.includeWrapper ? fn.partialBlast : fn.partialReplace}
       {...props.cache ? { cache: props.cache } : {}}
+      {...props.updatePath ? { updatePath: props.updatePath } : {}}
     >
       {props.children}
     </NewPartial>
@@ -148,6 +162,8 @@ export const PartialReplace = async function (
 export const PartialReplaceWithCache = function (
   props: PropsWithChildren<{
     path?: string;
+    /** Path matched by server update patterns while cached. */
+    updatePath?: string;
     id: string;
     fullPageLoad?: boolean;
     includeWrapper?: boolean;
@@ -157,6 +173,7 @@ export const PartialReplaceWithCache = function (
     <PartialReplace
       id={props.id}
       cache={props.path ?? true}
+      updatePath={props.updatePath}
       fullPageLoad={props.fullPageLoad}
       includeWrapper={props.includeWrapper}
     >

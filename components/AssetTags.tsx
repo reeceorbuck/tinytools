@@ -1,6 +1,7 @@
 import type { FC } from "hono/jsx";
 import { tryGetContext } from "hono/context-storage";
 import { transparent } from "../componentScope.ts";
+import { handlerFileDependencies } from "../clientFunctions.ts";
 
 type AssetTagsProps = {
   /** Optional explicit handler assets (e.g. for non-request update rendering) */
@@ -49,6 +50,14 @@ export const AssetTags: FC<AssetTagsProps> = ({
       {/* User-defined handler scripts */}
       {accessedHandlerFilesArray.map((file) => (
         <script src={`/handlers/${file}`} type="module" />
+      ))}
+
+      {
+        /* Bundles those scripts import, fetched in parallel rather than
+          discovered one import level per round trip. */
+      }
+      {handlerFileDependencies(accessedHandlerFilesArray).map((file) => (
+        <link rel="modulepreload" href={`/handlers/${file}`} />
       ))}
 
       {/* User-defined stylesheets */}

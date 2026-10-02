@@ -191,7 +191,7 @@ export const CustomSuspense: FC<CustomSuspenseProps> = async ({
             ).then((stream) => stream.getReader().read()).then((result) => {
               const decoder = new TextDecoder();
               const string = decoder.decode(result.value);
-              console.log("Rendered string: ", string);
+              // console.log("Rendered string: ", string);
               if (sourceUrl === undefined) {
                 return string;
               }

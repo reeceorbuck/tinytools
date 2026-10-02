@@ -2,15 +2,25 @@ import { Hono } from "hono";
 import { tiny } from "../../honoFactory.tsx";
 import { NewPartial } from "../../components/NewPartial.tsx";
 import { ClientRoutes } from "../../components/ClientRoutes.tsx";
-import { navigationTools } from "../../handlers/navigationTools.ts";
+import {
+  applyNavigationHandlers,
+  navigationTools,
+} from "../../handlers/navigationTools.ts";
 import { partialInsertHandlers } from "../../handlers/partialInsertHandlers.ts";
 
 const app = new Hono()
   .use(...tiny.middleware.core())
   .use(tiny.middleware.layout(async ({ children }) => {
-    const { fn } = await tiny.imports(navigationTools, partialInsertHandlers);
+    const { fn } = await tiny.imports(
+      applyNavigationHandlers,
+      navigationTools,
+      partialInsertHandlers,
+    );
     return (
-      <body onLoad={fn.handleNavigate}>
+      <body
+        onLoad={fn.applyNavigationListener}
+        onNavigate={fn.handleNavigate}
+      >
         <nav>
           <a href="/nested">Nested trial</a>
           {" | "}

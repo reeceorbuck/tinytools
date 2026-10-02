@@ -18,7 +18,6 @@ export const routeCacheTools = new Handlers(import.meta.url, {
     const blueprint = template.content.querySelector(
       "client-route",
     );
-    console.log("Cache blueprint: ", blueprint);
 
     if (!target || this?.parentElement !== target || !blueprint) return;
     let router = Array.from(target.parentElement?.children ?? []).find(
@@ -26,16 +25,15 @@ export const routeCacheTools = new Handlers(import.meta.url, {
         element.tagName === "CLIENT-ROUTER" &&
         element.getAttribute("cache-owner-id") === partialId,
     );
+    const reusedRouter = !!router;
     if (!router) {
       router = template.content.querySelector("client-router") ?? undefined;
       if (!router) return;
       target.insertAdjacentElement("afterend", router);
     }
-    console.log("Router element: ", router);
 
     const routes = router.querySelector<HTMLTemplateElement>("template")
       ?.content;
-    console.log("Routes template element content: ", routes);
     if (!routes) return;
     let ownedNodes: Node[] = Array.from(target.childNodes);
     const capture = (records: MutationRecord[]) => {
@@ -73,7 +71,14 @@ export const routeCacheTools = new Handlers(import.meta.url, {
     };
     const observer = new MutationObserver(capture);
 
-    console.log("Starting cache observer for target: ", target);
+    console.log("Observing route cache", {
+      partialId,
+      path: blueprint.getAttribute("path"),
+      updatePath: blueprint.getAttribute("update-path"),
+      router: reusedRouter ? "existing" : "created",
+      cachedRoutes: routes.children.length,
+      target,
+    });
 
     this.abortController?.signal.addEventListener("abort", () => {
       const records = observer.takeRecords();

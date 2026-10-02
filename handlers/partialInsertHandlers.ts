@@ -1,13 +1,19 @@
 import { Handlers } from "../clientTools.ts";
 
+/**
+ * A partial's template. `updateRoot` is set when the partial is applied to
+ * cached content rather than the live document.
+ */
+type PartialTemplate = HTMLTemplateElement & { updateRoot?: DocumentFragment };
+
 export const partialInsertHandlers = new Handlers(import.meta.url, {
-  partialReplace: function (this: HTMLTemplateElement) {
+  partialReplace: function (this: PartialTemplate) {
     const partialId = this.getAttribute("for-partial-id");
     if (!partialId) {
       console.error(`No partial id found for partial "${this.id}".`);
       return;
     }
-    const existing = document.getElementById(partialId);
+    const existing = (this.updateRoot ?? document).getElementById(partialId);
     if (existing && existing !== this) {
       existing.replaceChildren(...Array.from(this.content.childNodes));
     } else {
@@ -16,13 +22,13 @@ export const partialInsertHandlers = new Handlers(import.meta.url, {
     this.remove();
   },
 
-  partialBlast: function (this: HTMLTemplateElement) {
+  partialBlast: function (this: PartialTemplate) {
     const partialId = this.getAttribute("for-partial-id");
     if (!partialId) {
       console.error(`No partial id found for partial "${this.id}".`);
       return;
     }
-    const existing = document.getElementById(partialId);
+    const existing = (this.updateRoot ?? document).getElementById(partialId);
     if (existing && existing !== this) {
       existing.replaceWith(...Array.from(this.content.childNodes));
     } else {
@@ -31,13 +37,13 @@ export const partialInsertHandlers = new Handlers(import.meta.url, {
     this.remove();
   },
 
-  partialMergeContent: function (this: HTMLTemplateElement) {
+  partialMergeContent: function (this: PartialTemplate) {
     const partialId = this.getAttribute("for-partial-id");
     if (!partialId) {
       console.error(`No partial id found for partial "${this.id}".`);
       return;
     }
-    const existing = document.getElementById(partialId);
+    const existing = (this.updateRoot ?? document).getElementById(partialId);
     if (!existing || existing === this) {
       console.error(`No existing element found for partial-id "${partialId}".`);
       // this.remove();
@@ -46,7 +52,7 @@ export const partialInsertHandlers = new Handlers(import.meta.url, {
 
     const groupName = this.getAttribute("group-name");
 
-    Array.from(this.children).forEach((insertNode) => {
+    Array.from(this.content.children).forEach((insertNode) => {
       const searchId = insertNode.getAttribute("match-id") || insertNode.id;
       insertNode.removeAttribute("match-id");
       groupName && insertNode.setAttribute("data-partial-group", groupName);
@@ -108,13 +114,13 @@ export const partialInsertHandlers = new Handlers(import.meta.url, {
     this.remove();
   },
 
-  partialDelete: function (this: HTMLTemplateElement) {
+  partialDelete: function (this: PartialTemplate) {
     const partialId = this.getAttribute("for-partial-id");
     if (!partialId) {
       console.error(`No partial id found for partial "${this.id}".`);
       return;
     }
-    const existing = document.getElementById(partialId);
+    const existing = (this.updateRoot ?? document).getElementById(partialId);
     if (!existing || existing === this) {
       console.error(`No existing element found for partial-id "${partialId}".`);
       this.remove();

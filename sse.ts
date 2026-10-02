@@ -1,5 +1,6 @@
 import { getCookie, setCookie } from "hono/cookie";
 import { createMiddleware } from "hono/factory";
+import type { Context } from "hono";
 import type { SSEStreamingApi } from "hono/streaming";
 
 export interface StreamData {
@@ -42,6 +43,49 @@ export function streamHasPathPrefix(
     streamData,
     (trackedPath) => trackedPath.startsWith(prefix),
   );
+}
+
+/**
+ * True if any tracked path matches one of the URLPattern pathname patterns,
+ * e.g. `["/patients/5", "/appointments/:date/5"]`.
+ */
+export function streamHasPathPattern(
+  streamData: Pick<StreamData, "paths">,
+  patterns: readonly string[],
+): boolean {
+  const compiled = patterns.map((pathname) => new URLPattern({ pathname }));
+  return streamHasMatchingPath(
+    streamData,
+    (trackedPath) =>
+      compiled.some((pattern) => pattern.test({ pathname: trackedPath })),
+  );
+}
+
+/** Streams that have visited a path matching one of the patterns. */
+export function getStreamsMatchingPaths(
+  patterns: readonly string[],
+): Set<SSEStreamingApi> {
+  return new Set(
+    activeStreams.entries().filter(([, streamData]) =>
+      streamHasPathPattern(streamData, patterns)
+    ).map(([stream]) => stream),
+  );
+}
+
+/**
+ * The page path a request's response is displayed under: the request path,
+ * or for `/api/` requests the `destination-url` pathname. Undefined when the
+ * request isn't displayed as a page (API call without a destination, or a
+ * dot-path asset).
+ */
+export function getDisplayedPath(c: Context): string | undefined {
+  let path = c.req.path;
+  if (path.split("/").includes("api")) {
+    const destinationHeader = c.req.header("destination-url");
+    if (!destinationHeader) return undefined;
+    path = new URL(destinationHeader, c.req.url).pathname;
+  }
+  return path.startsWith("/.") ? undefined : path;
 }
 
 export const activeStreams: Map<SSEStreamingApi, StreamData> = new Map();
@@ -255,26 +299,9 @@ export const trackConnectedClients = createMiddleware(async (c, next) => {
     return;
   }
 
-  let blockPathUpdate = false;
-
-  let path = c.req.path;
-  const pathArray = path.split("/");
-
-  if (pathArray.includes("api")) {
-    const destinationHeader = c.req.header("destination-url");
-
-    if (destinationHeader) {
-      const destinationUrl = new URL(destinationHeader, c.req.url);
-      path = destinationUrl.pathname;
-      console.log("Updated path to destinationUrl: ", path);
-    } else {
-      blockPathUpdate = true;
-    }
-  }
-
-  if (path.startsWith("/.")) {
-    blockPathUpdate = true;
-  }
+  const displayedPath = getDisplayedPath(c);
+  const blockPathUpdate = displayedPath === undefined;
+  const path = displayedPath ?? c.req.path;
 
   const existingSseId = getCookie(c, "sseId");
   const sseId = existingSseId || crypto.randomUUID();

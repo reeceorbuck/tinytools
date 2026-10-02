@@ -6,6 +6,7 @@ import {
   PartialReplaceWithCache,
 } from "../components/NewPartial.tsx";
 import { tiny } from "../honoFactory.tsx";
+import { ClientRoutes } from "../components/ClientRoutes.tsx";
 import { partialInsertHandlers } from "../handlers/partialInsertHandlers.ts";
 
 Deno.test("NewPartial emits cache registration only when opted in", async () => {
@@ -18,7 +19,7 @@ Deno.test("NewPartial emits cache registration only when opted in", async () => 
         id="panel"
         cache={context.req.param("page") === "scoped"
           ? "/scoped{/:page}?"
-          : context.req.param("page") === "cached"}
+          : ["cached", "api"].includes(context.req.param("page"))}
         onLoad={fn.partialReplace}
       >
         <input value="initial" />
@@ -26,7 +27,11 @@ Deno.test("NewPartial emits cache registration only when opted in", async () => 
     );
   });
   const cached = await (await app.request("/cached?ignored=1")).text();
-  assertStringIncludes(cached, 'path="/cached"');
+  assertStringIncludes(cached, 'path="/cached" update-path="/cached"');
+  const api = await (await app.request("/api", {
+    headers: { "destination-url": "/patients/5?tab=chart" },
+  })).text();
+  assertStringIncludes(api, 'update-path="/patients/5"');
   assertMatch(
     cached,
     /tt-handler-load="\w+\.observeRouteCache"/i,
@@ -45,6 +50,14 @@ Deno.test("NewPartial emits cache registration only when opted in", async () => 
   assertStringIncludes(scoped, 'for-partial-id="panel"');
   assertStringIncludes(scoped, 'cache-partial-id="panel"');
   assertStringIncludes(scoped, 'cache-owner-id="panel"');
+  assertMatch(
+    scoped,
+    /<client-router[^>]*tt-handler-load="\w+\.applyNavigationListener \w+\.applyIncomingDataListener"/,
+  );
+  assertMatch(
+    scoped,
+    /<client-router[^>]*tt-handler-incomingdata="\w+\.updateCachedRoutes"/,
+  );
   const uncached = await (await app.request("/uncached")).text();
   assertEquals((uncached.match(/<template\b/g) ?? []).length, 1);
   assertEquals(uncached.includes("onLoadCacheTemplate"), false);
@@ -115,6 +128,7 @@ Deno.test("PartialReplaceWithCache forwards fullPageLoad without changing partia
         <PartialReplaceWithCache
           id="panel"
           path="/page{/:child}?"
+          updatePath="/appointments/2026-10-02/:patientId"
           fullPageLoad={!context.req.header("source-url")}
         >
           <input value="initial" />
@@ -132,6 +146,19 @@ Deno.test("PartialReplaceWithCache forwards fullPageLoad without changing partia
       fullPageLoad ? "INPUT" : "TEMPLATE",
     );
     assertStringIncludes(html, '<client-route path="/page{/:child}?"');
-    assertEquals(/fullpageload/i.test(html), false);
+    assertStringIncludes(
+      html,
+      '<client-route path="/page{/:child}?" update-path="/appointments/2026-10-02/:patientId"',
+    );
+    assertEquals((html.match(/update-path=/g) ?? []).length, 1);
+    assertEquals(/fullpageload|updatepath/i.test(html), false);
   }
+});
+
+Deno.test("plain ClientRoutes don't listen for incoming data", async () => {
+  const app = new Hono().use(...tiny.middleware.core());
+  app.get("/", (context) => context.render(<ClientRoutes />));
+  const html = await (await app.request("/")).text();
+  assertStringIncludes(html, "<client-router");
+  assertEquals(/incomingdata|IncomingData/.test(html), false);
 });

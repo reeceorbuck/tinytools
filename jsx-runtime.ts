@@ -72,6 +72,7 @@ export const jsxAttr = (
 };
 import type { JSX as HonoJSX } from "hono/jsx/jsx-runtime";
 import type { ClientTools } from "./clientTools.ts";
+import type { IncomingDataEvent } from "./handlers/processIncomingData.ts";
 
 /**
  * Brand symbol for ClientFunction types.
@@ -257,6 +258,7 @@ interface GlobalOverrides {
   onOnline?: ClientEventHandler<Event>;
   onOffline?: ClientEventHandler<Event>;
   onMessage?: ClientEventHandler<MessageEvent>;
+  onIncomingData?: ClientEventHandler<IncomingDataEvent>;
   onStorage?: ClientEventHandler<StorageEvent>;
   onVisibilityChange?: ClientEventHandler<Event>;
   onBeforeUnload?: ClientEventHandler<BeforeUnloadEvent>;

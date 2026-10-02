@@ -211,7 +211,7 @@ const upgradePrecedingTools = new Handlers(import.meta.url, {
     const precedingCustomElement = this.previousElementSibling as
       | HTMLElement
       | null;
-    console.log("UPGRADING precedingCustomElement: ", precedingCustomElement);
+    // console.log("UPGRADING precedingCustomElement: ", precedingCustomElement);
 
     if (!precedingCustomElement) {
       console.error("No preceding custom element found");

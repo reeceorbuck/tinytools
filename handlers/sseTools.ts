@@ -12,7 +12,6 @@ export const sseTools = new tiny.Handlers(import.meta.url, async () => {
       const sseIdCookie = document.cookie
         .split("; ")
         .find((cookie) => cookie.startsWith("sseId="))?.split("=")[1];
-      console.log("Open browser SSE ID cookie: ", sseIdCookie);
 
       const sseTarget = this as HTMLElement & {
         sse: EventSource & { wasConnected?: boolean };
@@ -25,19 +24,27 @@ export const sseTools = new tiny.Handlers(import.meta.url, async () => {
         },
       ) as EventSource & { wasConnected?: boolean };
 
+      // Warn once per outage rather than on every retry.
+      let connectionLost = false;
+
       sseTarget.sse.onopen = () => {
-        console.log(
-          "Connected to server, wasConnected: ",
-          sseTarget.sse.wasConnected,
-        );
+        connectionLost = false;
         if (sseTarget.sse.wasConnected) {
+          console.log("SSE reconnected, reloading page");
           globalThis.location.reload();
         }
         sseTarget.sse.wasConnected = true;
       };
 
-      sseTarget.sse.onerror = (err) => {
-        console.log("Connection Lost:", err);
+      sseTarget.sse.onerror = () => {
+        const closed = sseTarget.sse.readyState === EventSource.CLOSED;
+        if (connectionLost && !closed) return;
+        connectionLost = true;
+        console.warn(
+          closed
+            ? "SSE connection closed, not retrying"
+            : "SSE connection lost, retrying",
+        );
       };
 
       // SSE message stream controller - we create a synthetic Response
@@ -45,15 +52,12 @@ export const sseTools = new tiny.Handlers(import.meta.url, async () => {
       let streamController: ReadableStreamDefaultController<Uint8Array> | null =
         null;
       let sseBuffer = "";
+      let messageCount = 0;
       const encoder = new TextEncoder();
 
       sseTarget.sse.onmessage = (event) => {
-        console.log(
-          `Received SSE at ${Temporal.Now.zonedDateTimeISO().toLocaleString()}: `,
-          event.data,
-        );
         const text = event.data as string;
-        console.log("sse chunk length: ", text.length);
+        messageCount++;
 
         sseBuffer += text;
 
@@ -70,9 +74,7 @@ export const sseTools = new tiny.Handlers(import.meta.url, async () => {
             new Response(stream, {
               headers: { "Content-Type": "text/html" },
             }),
-          ).then(() => {
-            console.log("SSE Response processing completed");
-          }).catch((err) => {
+          ).catch((err) => {
             console.error("Error processing SSE response:", err);
           });
         }
@@ -84,7 +86,11 @@ export const sseTools = new tiny.Handlers(import.meta.url, async () => {
 
         // Check if we've received the closing </update> tag - if so, close the stream
         if (sseBuffer.endsWith("</update>")) {
-          console.log("SSE message complete, closing stream");
+          console.log(
+            `SSE update received (${sseBuffer.length} chars` +
+              (messageCount > 1 ? ` over ${messageCount} messages)` : ")"),
+          );
+          messageCount = 0;
           if (streamController) {
             streamController.close();
             streamController = null;
@@ -94,8 +100,11 @@ export const sseTools = new tiny.Handlers(import.meta.url, async () => {
       };
 
       sseTarget.sse.addEventListener("connection", async (event) => {
-        console.log("New SSE connection established, id:", event.data);
-        console.log("Setting SSE ID cookie via cookieStore API");
+        console.log("SSE connected", {
+          id: event.data,
+          previousId: sseIdCookie ?? null,
+          path: currentUrl.pathname,
+        });
         await cookieStore.set({
           name: "sseId",
           value: event.data,
@@ -105,12 +114,11 @@ export const sseTools = new tiny.Handlers(import.meta.url, async () => {
       });
 
       globalThis.addEventListener("visibilitychange", () => {
-        console.log(
-          "Changed visibility: ",
-          globalThis.document.visibilityState,
-        );
-        if (globalThis.document.visibilityState === "visible") {
-          console.log("SSE ReadyState: ", sseTarget.sse.readyState);
+        if (
+          globalThis.document.visibilityState === "visible" &&
+          sseTarget.sse.readyState === EventSource.CLOSED
+        ) {
+          console.warn("Page visible again but SSE connection is closed");
         }
       });
 

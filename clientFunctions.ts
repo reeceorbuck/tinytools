@@ -27,6 +27,29 @@ export const handlers: Map<AnyFunction, ClientFunctionImpl> = new Map();
 /** Every handler bundle, for the build process. */
 export const handlerBundles: Set<HandlerBundle> = new Set();
 
+/** Bundles by the filenames handed out for them (see `HandlerBundle.filename`). */
+const bundlesByFilename = new Map<string, HandlerBundle>();
+
+/**
+ * Handler files (`<bundle>.js`) that the given files import, directly or
+ * transitively, and that are not in the given list themselves. Rendering them
+ * as `modulepreload` lets the browser fetch the whole graph in parallel
+ * instead of discovering one level of imports per round trip.
+ */
+export function handlerFileDependencies(files: Iterable<string>): string[] {
+  const requested = new Set(files);
+  const dependencies = new Set<string>();
+  for (const file of requested) {
+    const bundle = bundlesByFilename.get(file.replace(/\.js$/, ""));
+    if (!bundle) continue;
+    for (const filename of bundle.reachableFilenames) {
+      const dependency = `${filename}.js`;
+      if (!requested.has(dependency)) dependencies.add(dependency);
+    }
+  }
+  return [...dependencies];
+}
+
 /**
  * Handlers visible as bare identifiers to object-form handlers of a source
  * file: every handler defined in that file plus those pulled in through
@@ -231,7 +254,14 @@ export class HandlerBundle {
   }
 
   get filename(): string {
-    return this.#filename ??= this.#computeFilename();
+    const filename = this.#filename ??= this.#computeFilename();
+    bundlesByFilename.set(filename, this);
+    return filename;
+  }
+
+  /** Filenames of this bundle and every bundle it transitively imports. */
+  get reachableFilenames(): string[] {
+    return [...this.#reachable()].map((bundle) => bundle.filename);
   }
 
   /** Drop the memoised filename so the next access rehashes the import graph. */

@@ -104,13 +104,16 @@ export { logStartupPerformanceSummary } from "./startupPerformanceSummary.ts";
 // Stream update utilities
 export {
   lastUpdated,
+  type SendUpdateOptions,
   sendUpdateStream,
   type UpdateStreamApi,
 } from "./sendUpdates.tsx";
 export {
   activeStreams,
   addStream,
+  getDisplayedPath,
   getStreamDataById,
+  getStreamsMatchingPaths,
   getTrackedStreamPaths,
   removeStream,
   setInactiveStream,
@@ -118,6 +121,7 @@ export {
   streamEvents,
   streamHasExactPath,
   streamHasMatchingPath,
+  streamHasPathPattern,
   streamHasPathPrefix,
   trackConnectedClients,
   updateStreamPath,
@@ -125,6 +129,7 @@ export {
 
 // Route metadata helper
 export { titled } from "./titled.ts";
+export { urlStyleVariables } from "./urlStyleVariables.ts";
 
 // Re-export JSX namespace for consumers
 export type { JSX } from "./jsx-runtime.ts";
