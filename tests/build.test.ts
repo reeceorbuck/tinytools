@@ -132,7 +132,7 @@ function resetRegistries() {
 }
 
 /** Build script files with test setup (sets up performance marks) */
-async function buildForTest(
+function buildForTest(
   options: Parameters<typeof buildScriptFiles>[0] = {},
 ) {
   setupPerformanceMarks();
@@ -377,7 +377,6 @@ Deno.test({
     // at detection time, this entry would already match the source mtime.
     cache.files[sourceKey] ??= {
       mtimeMs: 0,
-      externalImports: [],
       handlers: {},
       styles: {},
     };
@@ -1796,7 +1795,6 @@ Deno.test({
     // Manually plant a stale cache entry (simulates a previous algorithm version)
     cache.files[fakeUrl] = {
       mtimeMs: 0,
-      externalImports: [],
       handlers: {},
       styles: {
         panel: ["panel_deadbe"],

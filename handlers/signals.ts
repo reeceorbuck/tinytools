@@ -1,49 +1,51 @@
 import { type Signal, type SignalValue, tiny } from "../mod.ts";
 
 type EffectFn = () => void;
+
+/** The event a `tiny.Signals` signal dispatches to its subscribers. */
 export interface SignalEvent extends Event {
   signal: Signal<SignalValue>;
 }
 
+/** An upgraded custom element (see `UpgradeCustomElement`) receiving signal events. */
 export interface SignalElement extends HTMLElement {
   abortController: AbortController;
 }
 
-// When I left TODO: signals should have a name assigned if the setting element has a name
-// plus an override if they have a data-bind-name attribute.
-// However, we should only use onSignal as an event name and not as a signal name
-// We casn identify signals in handlers rather than using a name
-// Also, are all the methods still used now?
-
+/**
+ * Helpers for consuming `tiny.Signals` values in the browser. Bind them to the
+ * `onSignal` event of an element subscribed with `onLoad={signal.name}`.
+ */
 export const signalTools = new tiny.Handlers(import.meta.url, {
+  /** Runs `callback` whenever any of `dependencies` changes, until the controller aborts. */
   effect: function (
     callback: EffectFn,
-    deps: Signal<SignalValue>[],
+    dependencies: Signal<SignalValue>[],
     abortController: AbortController,
-  ) {
+  ): void {
     const target = new EventTarget();
-    deps.forEach((signal) => {
+    for (const signal of dependencies) {
       signal.subscribe(target);
-      target.addEventListener(
-        `signal${signal.name ? signal.name.toLowerCase() : ""}`,
-        callback,
-        {
-          signal: abortController.signal,
-        },
-      );
+    }
+    target.addEventListener("signal", callback, {
+      signal: abortController.signal,
     });
   },
-  setTextContent: function (
-    this: SignalElement,
-    event: SignalEvent,
-  ) {
+  /** Writes the signal value as the element's text. */
+  setTextContent: function (this: SignalElement, event: SignalEvent): void {
     this.textContent = `${event.signal.value}`;
   },
-  setValue: function (this: HTMLInputElement, event: SignalEvent) {
+  /** Writes the signal value into an input. */
+  setValue: function (this: HTMLInputElement, event: SignalEvent): void {
     this.value = event.signal.value?.toString() ?? "";
   },
-  setCssProperty: function (this: HTMLElement, event: SignalEvent) {
+  /** Sets the custom property `--<signal name>` to the signal value. */
+  setCssProperty: function (this: HTMLElement, event: SignalEvent): void {
     const { name, value } = event.signal;
+    if (!name) {
+      console.error("setCssProperty requires the signal to have a name.");
+      return;
+    }
     this.style.setProperty(`--${name}`, value?.toString() ?? "");
   },
 });

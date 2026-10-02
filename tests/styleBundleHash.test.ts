@@ -24,12 +24,7 @@
 
 import { assert, assertEquals, assertNotEquals } from "@std/assert";
 import { pathToFileURL } from "node:url";
-import {
-  cache,
-  normalizeSourceFileUrl,
-  registeredClientTools,
-  Styles,
-} from "../clientTools.ts";
+import { cache, registeredClientTools, Styles } from "../clientTools.ts";
 import {
   changedStyleKeys,
   css,
@@ -45,7 +40,6 @@ import {
 
 const TEST_ROOT = "./.test-style-bundle-hash";
 const TEST_SRC_DIR = `${TEST_ROOT}/src`;
-const TEST_STYLES_DIR = `${TEST_ROOT}/public/styles`;
 
 async function cleanupTestDirs() {
   try {
@@ -90,24 +84,8 @@ function simulateProcessRestart() {
   registeredClientTools.clear();
   resetImportRegistries();
 
-  // Clear per-pass state that would be reset by a new process
-  // (nameOccurrences and per-pass sets)
-  // deno-lint-ignore no-explicit-any
-  (cache as any).nameOccurrences.clear();
-  // deno-lint-ignore no-explicit-any
-  (cache as any).sourceFileMtimeMemo.clear();
-  // deno-lint-ignore no-explicit-any
-  (cache as any).filesWithMtimeChange.clear();
-  // deno-lint-ignore no-explicit-any
-  (cache as any).handlersBySource.clear();
-  // deno-lint-ignore no-explicit-any
-  (cache as any).stylesBySource.clear();
-  // deno-lint-ignore no-explicit-any
-  (cache as any).processedHandlersThisPass = new WeakSet();
-  // deno-lint-ignore no-explicit-any
-  (cache as any).processedStylesThisPass = new WeakSet();
-  // deno-lint-ignore no-explicit-any
-  (cache as any).passDepth = 0;
+  // Clear per-process state (instantiation counters, memos and per-pass sets).
+  cache.resetTransientState();
 
   // Restore the persistent files map (this is what cache.json reload does)
   cache.files = filesSnapshot;

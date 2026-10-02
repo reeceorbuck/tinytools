@@ -22,7 +22,12 @@ Deno.test("imports infer all explicit collections and preserve JSX signatures", 
   );
   const className: string = styled.panel;
   const element = (
-    <button class={className} onClick={fn.click} onKeyDown={fn.keydown}>
+    <button
+      type="button"
+      class={className}
+      onClick={fn.click}
+      onKeyDown={fn.keydown}
+    >
       Test
     </button>
   );
@@ -41,12 +46,14 @@ async function checkTypes() {
   // @ts-expect-error Keyboard handlers do not handle mouse events.
   local.events({ click: keys.fn.keydown });
   // @ts-expect-error Native JSX retains handler event types.
-  const invalid = <button onClick={keys.fn.keydown} />;
+  const invalid = <button type="button" onClick={keys.fn.keydown} />;
   const contextOnly = await tiny.imports();
   // @ts-expect-error Context access does not implicitly import handlers.
   contextOnly.fn.click;
-  const typed: ImportedTools<{ click: (event: MouseEvent) => void }, {}> =
-    local;
+  const typed: ImportedTools<
+    { click: (event: MouseEvent) => void },
+    Record<never, never>
+  > = local;
   void [invalid, typed];
 }
 void checkTypes;

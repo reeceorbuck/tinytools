@@ -40,6 +40,7 @@ performance.mark("import:@tinytools/hono-tools:start");
 // Core setup and middleware exports
 export {
   type ClientToolsOptions,
+  type RouteLayoutComponent,
   type RouteLayoutProps,
   tiny,
   type TinyHonoOptions,
@@ -68,6 +69,7 @@ export type {
 export {
   eventHandlerBody,
   type Events,
+  type HandlerProp,
   type HandlerReference,
   type HandlerReferences,
 } from "./eventAttributes.ts";
@@ -101,9 +103,8 @@ export type {
 // Performance utilities
 export { logStartupPerformanceSummary } from "./startupPerformanceSummary.ts";
 
-// Stream update utilities
+// Server-sent event utilities
 export {
-  lastUpdated,
   type SendUpdateOptions,
   sendUpdateStream,
   type UpdateStreamApi,
@@ -117,7 +118,9 @@ export {
   getTrackedStreamPaths,
   removeStream,
   setInactiveStream,
+  SSE_ID_COOKIE,
   type StreamData,
+  type StreamEventMap,
   streamEvents,
   streamHasExactPath,
   streamHasMatchingPath,

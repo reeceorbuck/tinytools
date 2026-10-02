@@ -1,9 +1,11 @@
 /**
- * ClientTools module for @tinytools/hono-tools
+ * Client tools for @tinytools/hono-tools.
  *
- * Provides a unified factory for creating both client-side event handlers
- * and scoped CSS styles. Consolidates ClientFunctionFactory and ScopedStyleFactory
- * into a single ergonomic class.
+ * Defines the `tiny.Handlers`, `tiny.Store`, `tiny.Signals` and `tiny.Styles`
+ * collections, the `tiny.imports()` call that resolves them for a request, and
+ * the on-disk cache that keeps generated asset filenames stable across
+ * restarts. Handler bundling is in `clientFunctions.ts`, style scoping in
+ * `scopedStyles.ts`, and the full build in `build.ts`.
  *
  * @module
  */
@@ -44,7 +46,7 @@ import {
 // Import shared registries from registry modules
 import {
   changedHandlerKeys,
-  ClientFunctionImpl,
+  type ClientFunctionImpl,
   filesWithChangedHandlers,
   getImportRegistry,
   HandlerBundle,
@@ -74,27 +76,30 @@ import {
  */
 const HASH_ALGORITHM_VERSION = 2;
 
-/** Version 4: handler filenames are stored per bundle, not per handler. */
-type ClientToolsCacheV1 = {
+/** On-disk cache format. Version 4 stores handler filenames per bundle, not per handler. */
+type ClientToolsCache = {
   version: 4;
   hashConfig: {
     handlerHashLength: number;
     styleHashLength: number;
     hashAlgorithm?: number;
   };
-  files: Record<
-    string,
-    {
-      mtimeMs: number;
-      /** External imports from other files (via .import()) - stored as "sourceFileUrl::fnName" */
-      externalImports: string[];
-      /** Handler filenames in this file - ordered by instantiation */
-      handlers: Record<string, string[]>; // fnName -> [filename, ...] (ordered by instantiation)
-      /** Style definitions in this file - ordered by instantiation */
-      styles: Record<string, string[]>; // styleName -> [filename, ...] (ordered by instantiation)
-    }
-  >;
+  files: Record<string, SourceFileCacheEntry>;
 };
+
+/** Generated filenames recorded for one source file, each ordered by instantiation. */
+export type SourceFileCacheEntry = {
+  mtimeMs: number;
+  /** Bundle filenames under the `#bundle` key: `[filename, ...]` per bundle index. */
+  handlers: Record<string, string[]>;
+  /** Style filenames by style name: `[filename, ...]` per occurrence index. */
+  styles: Record<string, string[]>;
+};
+
+/** A cache entry for a source file that has not been built yet. */
+export function emptySourceFileCacheEntry(): SourceFileCacheEntry {
+  return { mtimeMs: 0, handlers: {}, styles: {} };
+}
 
 const CACHE_DIR = "./.cache";
 const CACHE_PATH = `${CACHE_DIR}/clientToolsCache.json`;
@@ -259,7 +264,7 @@ export function setGeneratedStyleHashLength(length: number): void {
   }
 }
 
-function getCurrentHashConfig(): ClientToolsCacheV1["hashConfig"] {
+function getCurrentHashConfig(): ClientToolsCache["hashConfig"] {
   return {
     handlerHashLength: generatedHandlerHashLength,
     styleHashLength: generatedStyleHashLength,
@@ -355,22 +360,11 @@ class ClientToolsCacheManager {
   private filesWithMtimeChange = new Set<string>();
 
   /**
-   * Per-source registry of every `ClientFunctionImpl` constructed against
-   * the source file URL. Populated at module-load time. Used by the lazy
-   * revalidate path to eagerly rebuild every sibling handler whenever any
-   * handler in the source is observed to have changed — which guarantees
-   * that the on-disk `.js` for every handler in the source matches the
-   * current `fn.toString()` before the source mtime is committed to the
-   * cache, even when those siblings live in different `ClientTools`
-   * instances (e.g. one `import.meta.url` shared by multiple
-   * `new tiny.Handlers(...)` declarations).
-   */
-  private handlersBySource = new Map<string, Set<unknown>>();
-
-  /**
-   * Per-source registry of every `ScopedStyleImpl` constructed against
-   * the source file URL. Mirrors {@link handlersBySource} for the style
-   * side of the same eager-revalidate-on-detection contract.
+   * Per-source registry of every `ScopedStyleImpl` constructed against the
+   * source file URL. When any style in a source file is observed to have
+   * changed, every sibling style is revalidated before the source mtime is
+   * committed to the cache, even when those siblings live in other `Styles`
+   * instances sharing the same `import.meta.url`.
    */
   private stylesBySource = new Map<string, Set<unknown>>();
 
@@ -399,13 +393,13 @@ class ClientToolsCacheManager {
   /** Tracks instantiation order per file per name per kind (handler/style) */
   private nameOccurrences = new Map<string, number>();
 
-  private hashConfig: ClientToolsCacheV1["hashConfig"] = getCurrentHashConfig();
+  private hashConfig: ClientToolsCache["hashConfig"] = getCurrentHashConfig();
 
   /** When true, skip all file stat checks and trust cached filenames.
    *  This is the default. Pass --lazy to disable. */
   readonly trustCache: boolean;
 
-  files: ClientToolsCacheV1["files"] = {};
+  files: ClientToolsCache["files"] = {};
 
   constructor() {
     const lazyMode = process.argv.slice(2).includes("--lazy");
@@ -427,7 +421,7 @@ class ClientToolsCacheManager {
         parsed && parsed.version === 4 && parsed.files &&
         typeof parsed.files === "object" && parsed.hashConfig
       ) {
-        const loaded = parsed as ClientToolsCacheV1;
+        const loaded = parsed as ClientToolsCache;
         const loadedHashConfig = {
           handlerHashLength: clampGeneratedFilenameHashLength(
             loaded.hashConfig.handlerHashLength,
@@ -449,7 +443,6 @@ class ClientToolsCacheManager {
         ) {
           this.hashConfig = loadedHashConfig;
           this.files = loaded.files;
-          this.normalizeLoadedFiles();
         }
       }
     } catch (e) {
@@ -480,39 +473,29 @@ class ClientToolsCacheManager {
     }
   }
 
-  /** Normalize v2 cache entries where handlers/styles were plain strings into string[] */
-  private normalizeLoadedFiles(): void {
-    for (const fileEntry of Object.values(this.files)) {
-      for (const [name, value] of Object.entries(fileEntry.handlers)) {
-        if (typeof value === "string") {
-          (fileEntry.handlers as Record<string, string | string[]>)[name] = [
-            value,
-          ];
-        }
-      }
-      for (const [name, value] of Object.entries(fileEntry.styles)) {
-        if (typeof value === "string") {
-          (fileEntry.styles as Record<string, string | string[]>)[name] = [
-            value,
-          ];
-        }
-      }
-    }
-  }
-
   /** Clear cached hash-dependent filenames after hash config changes. */
   resetHashDependentState(): void {
     this.files = {};
     this.hashConfig = getCurrentHashConfig();
+    this.resetTransientState();
+    this.markDirty();
+  }
+
+  /**
+   * Forget everything a process restart would forget: instantiation
+   * counters, mtime memos, per-pass trackers and sibling registries. The
+   * persisted `files` map and hash config are kept, as they are reloaded
+   * from disk. Used by tests to simulate `deno --watch` restarting the
+   * server.
+   */
+  resetTransientState(): void {
     this.sourceFileMtimeMemo.clear();
     this.filesWithMtimeChange.clear();
     this.nameOccurrences.clear();
-    this.handlersBySource.clear();
     this.stylesBySource.clear();
     this.processedHandlersThisPass = new WeakSet();
     this.processedStylesThisPass = new WeakSet();
     this.passDepth = 0;
-    this.markDirty();
   }
 
   /**
@@ -622,7 +605,7 @@ class ClientToolsCacheManager {
     if (memoryBuild) return;
     try {
       mkdirSync(CACHE_DIR, { recursive: true });
-      const data: ClientToolsCacheV1 = {
+      const data: ClientToolsCache = {
         version: 4,
         hashConfig: this.hashConfig,
         files: this.files,
@@ -686,12 +669,7 @@ class ClientToolsCacheManager {
     if (!existingEntry) {
       // New file - create entry (with mtimeMs left at 0 until a rebuild
       // commits the real value) and mark as changed.
-      this.files[sourceFileUrl] = {
-        mtimeMs: 0,
-        externalImports: [],
-        handlers: {},
-        styles: {},
-      };
+      this.files[sourceFileUrl] = emptySourceFileCacheEntry();
       this.markDirty();
       this.filesWithMtimeChange.add(sourceFileUrl);
       return true;
@@ -749,16 +727,6 @@ class ClientToolsCacheManager {
     this.filesWithMtimeChange.clear();
   }
 
-  /** Register a `ClientFunctionImpl` with the source-file sibling index. */
-  registerHandlerForSource(sourceFileUrl: string, impl: object): void {
-    let set = this.handlersBySource.get(sourceFileUrl);
-    if (!set) {
-      set = new Set();
-      this.handlersBySource.set(sourceFileUrl, set);
-    }
-    set.add(impl);
-  }
-
   /** Register a `ScopedStyleImpl` with the source-file sibling index. */
   registerStyleForSource(sourceFileUrl: string, impl: object): void {
     let set = this.stylesBySource.get(sourceFileUrl);
@@ -767,11 +735,6 @@ class ClientToolsCacheManager {
       this.stylesBySource.set(sourceFileUrl, set);
     }
     set.add(impl);
-  }
-
-  /** Every handler impl registered against the given source file URL. */
-  getHandlersForSource(sourceFileUrl: string): ReadonlySet<unknown> {
-    return this.handlersBySource.get(sourceFileUrl) ?? EMPTY_SET;
   }
 
   /** Every style impl registered against the given source file URL. */
@@ -812,31 +775,35 @@ const EMPTY_SET: ReadonlySet<unknown> = new Set();
  */
 export const DEFAULT_HANDLER_DIR = "./public/handlers";
 
+/** Directory (relative to the app's CWD) where style bundles are written by the lazy-mode path. */
+export const DEFAULT_STYLES_DIR = "./public/styles";
+
 /** Shared cache instance for all client tools */
 export const cache = new ClientToolsCacheManager();
 
-export const registeredClientTools = new Set<ClientToolsClass<any, any, any>>();
+export const registeredClientTools: Set<AnyClientToolsInstance> = new Set();
 
 // deno-lint-ignore no-explicit-any
 type AnyFunction = (...args: any[]) => any;
+
+/** The empty object type, used where a collection defines no handlers, styles or signals. */
+type Empty = Record<never, never>;
 
 // ============================================================================
 // Type Definitions
 // ============================================================================
 
 /** Extract functions type from a ClientTools instance */
-// deno-lint-ignore no-explicit-any
-type ExtractFunctions<T> = T extends { readonly _isSignals: true } ? {}
+type ExtractFunctions<T> = T extends { readonly _isSignals: true } ? Empty
+  // deno-lint-ignore no-explicit-any
   : T extends ClientToolsClass<infer F, any, any> ? F
-  // deno-lint-ignore ban-types
-  : {};
+  : Empty;
 
 /** Extract styles type from a ClientTools instance (excludes global styles) */
-// deno-lint-ignore no-explicit-any
-type ExtractStyles<T> = T extends { readonly _isSignals: true } ? {}
+type ExtractStyles<T> = T extends { readonly _isSignals: true } ? Empty
+  // deno-lint-ignore no-explicit-any
   : T extends ClientToolsClass<any, infer S, any> ? S
-  // deno-lint-ignore ban-types
-  : {};
+  : Empty;
 
 type ReservedStyledKey = "mergeClasses" | "run";
 
@@ -847,7 +814,7 @@ type ForbidReservedStyledKeys<T extends Record<string, ScopedStyleInput>> =
   };
 
 /** Resolved handlers, styles, and the current request context. */
-export type ImportedTools<TFunctions, TStyles, TSignals = {}> = {
+export type ImportedTools<TFunctions, TStyles, TSignals = Empty> = {
   readonly events: Events<TFunctions>;
   readonly fn: HandlerReferences<TFunctions>;
   readonly signal: SignalReferences<TSignals>;
@@ -860,8 +827,9 @@ export type ImportedTools<TFunctions, TStyles, TSignals = {}> = {
 type AnyClientToolsInstance = ClientToolsClass<any, any, any>;
 
 type ExtractSignals<T> = T extends { readonly _isSignals: true }
-  ? T extends ClientToolsClass<infer Functions, any, any> ? Functions : {}
-  : {};
+  // deno-lint-ignore no-explicit-any
+  ? T extends ClientToolsClass<infer Functions, any, any> ? Functions : Empty
+  : Empty;
 
 type HandlerFactory<T extends Record<string, AnyFunction>> = () =>
   | T
@@ -887,10 +855,8 @@ type UnionToIntersection<U> = (U extends any ? (arg: U) => void : never) extends
  * Options for creating a ClientTools instance.
  */
 export interface ClientToolsOptions<
-  // deno-lint-ignore ban-types
-  TFunctions extends Record<string, AnyFunction> = {},
-  // deno-lint-ignore ban-types
-  TStyles extends Record<string, ScopedStyleInput> = {},
+  TFunctions extends Record<string, AnyFunction> = Empty,
+  TStyles extends Record<string, ScopedStyleInput> = Empty,
   // deno-lint-ignore no-explicit-any
   TImports extends ClientToolsClass<any, any, any>[] = [],
 > {
@@ -903,7 +869,6 @@ export interface ClientToolsOptions<
 }
 
 export interface HandlersOptions<
-  // deno-lint-ignore no-explicit-any
   TImports extends AnyClientToolsInstance[] = [],
 > {
   /** Other TinyTools instances to import functions and styles from */
@@ -920,29 +885,29 @@ export type InferClientToolsOptions<T> = T extends ClientToolsOptions<
   ? TImports extends ClientToolsClass<any, any, any>[] ? ClientToolsClass<
       TFunctions & UnionOfFunctions<TImports>,
       TStyles & UnionOfStyles<TImports>,
-      {}
+      Empty
     >
-  : ClientToolsClass<TFunctions, TStyles, {}>
+  : ClientToolsClass<TFunctions, TStyles, Empty>
   : never;
 
 // deno-lint-ignore no-explicit-any
 type FunctionsFromTool<T> = T extends ClientToolsClass<infer F, any, any> ? F
-  : {};
+  : Empty;
 
 // deno-lint-ignore no-explicit-any
 type StylesFromTool<T> = T extends ClientToolsClass<any, infer S, any> ? S
-  : {};
+  : Empty;
 
 /** Helper to accumulate functions from an array of ClientTools (works with both tuples and arrays) */
 // deno-lint-ignore no-explicit-any
 type UnionOfFunctions<T extends ClientToolsClass<any, any, any>[]> =
-  [T[number]] extends [never] ? {}
+  [T[number]] extends [never] ? Empty
     : UnionToIntersection<FunctionsFromTool<T[number]>>;
 
 /** Helper to accumulate styles from an array of ClientTools (works with both tuples and arrays) */
 // deno-lint-ignore no-explicit-any
 type UnionOfStyles<T extends ClientToolsClass<any, any, any>[]> =
-  [T[number]] extends [never] ? {}
+  [T[number]] extends [never] ? Empty
     : UnionToIntersection<StylesFromTool<T[number]>>;
 
 /**
@@ -951,15 +916,12 @@ type UnionOfStyles<T extends ClientToolsClass<any, any, any>[]> =
  */
 interface ClientToolsConstructor {
   /** Create an empty ClientTools instance */
-  // deno-lint-ignore ban-types
-  new (sourceFileUrl: string | URL): ClientToolsClass<{}, {}, {}>;
+  new (sourceFileUrl: string | URL): ClientToolsClass<Empty, Empty, Empty>;
 
   /** Create a ClientTools instance with options - types are inferred from the options */
   new <
-    // deno-lint-ignore ban-types
-    TFunctions extends Record<string, AnyFunction> = {},
-    // deno-lint-ignore ban-types
-    TStyles extends Record<string, ScopedStyleInput> = {},
+    TFunctions extends Record<string, AnyFunction> = Empty,
+    TStyles extends Record<string, ScopedStyleInput> = Empty,
     // deno-lint-ignore no-explicit-any
     TImports extends ClientToolsClass<any, any, any>[] = [],
   >(
@@ -968,7 +930,7 @@ interface ClientToolsConstructor {
   ): ClientToolsClass<
     TFunctions & UnionOfFunctions<TImports>,
     TStyles & UnionOfStyles<TImports>,
-    {}
+    Empty
   >;
 }
 
@@ -978,15 +940,12 @@ interface HandlersConstructor {
     factory: HandlerFactory<TFunctions>,
   ): ClientToolsClass<TFunctions, Record<never, never>, Record<never, never>>;
   // Overloads without sourceFileUrl (functions as first arg)
-  // deno-lint-ignore ban-types
-  new <TFunctions extends Record<string, AnyFunction> = {}>(
+  new <TFunctions extends Record<string, AnyFunction> = Empty>(
     functions: TFunctions,
-  ): ClientToolsClass<TFunctions, {}, {}>;
+  ): ClientToolsClass<TFunctions, Empty, Empty>;
 
   new <
-    // deno-lint-ignore ban-types
-    TFunctions extends Record<string, AnyFunction> = {},
-    // deno-lint-ignore no-explicit-any
+    TFunctions extends Record<string, AnyFunction> = Empty,
     TImports extends AnyClientToolsInstance[] = [],
   >(
     options: HandlersOptions<TImports>,
@@ -994,20 +953,17 @@ interface HandlersConstructor {
   ): ClientToolsClass<
     TFunctions & UnionOfFunctions<TImports>,
     UnionOfStyles<TImports>,
-    {}
+    Empty
   >;
 
   // Overloads with sourceFileUrl
-  // deno-lint-ignore ban-types
-  new <TFunctions extends Record<string, AnyFunction> = {}>(
+  new <TFunctions extends Record<string, AnyFunction> = Empty>(
     sourceFileUrl: string | URL | undefined,
     functions: TFunctions,
-  ): ClientToolsClass<TFunctions, {}, {}>;
+  ): ClientToolsClass<TFunctions, Empty, Empty>;
 
   new <
-    // deno-lint-ignore ban-types
-    TFunctions extends Record<string, AnyFunction> = {},
-    // deno-lint-ignore no-explicit-any
+    TFunctions extends Record<string, AnyFunction> = Empty,
     TImports extends AnyClientToolsInstance[] = [],
   >(
     sourceFileUrl: string | URL | undefined,
@@ -1016,7 +972,7 @@ interface HandlersConstructor {
   ): ClientToolsClass<
     TFunctions & UnionOfFunctions<TImports>,
     UnionOfStyles<TImports>,
-    {}
+    Empty
   >;
 }
 
@@ -1031,7 +987,7 @@ interface SignalsConstructor {
   new <Definitions extends SignalDefinitions>(
     sourceFileUrl: string | URL,
     factory: (tools: SignalTools) => Definitions,
-  ): ClientToolsClass<SignalAccessors<Definitions>, {}, {}> & {
+  ): ClientToolsClass<SignalAccessors<Definitions>, Empty, Empty> & {
     readonly _isSignals: true;
   };
 }
@@ -1039,20 +995,18 @@ interface SignalsConstructor {
 interface StylesConstructor {
   // Overloads without sourceFileUrl (styles as first arg)
   new <
-    // deno-lint-ignore ban-types
-    TStyles extends Record<string, ScopedStyleInput> = {},
+    TStyles extends Record<string, ScopedStyleInput> = Empty,
   >(
     styles: ForbidReservedStyledKeys<TStyles>,
-  ): ClientToolsClass<{}, TStyles, {}>;
+  ): ClientToolsClass<Empty, TStyles, Empty>;
 
   // Overloads with sourceFileUrl
   new <
-    // deno-lint-ignore ban-types
-    TStyles extends Record<string, ScopedStyleInput> = {},
+    TStyles extends Record<string, ScopedStyleInput> = Empty,
   >(
     sourceFileUrl: string | URL | undefined,
     styles: ForbidReservedStyledKeys<TStyles>,
-  ): ClientToolsClass<{}, TStyles, {}>;
+  ): ClientToolsClass<Empty, TStyles, Empty>;
 }
 
 /**
@@ -1094,12 +1048,9 @@ interface StylesConstructor {
  * ```
  */
 class ClientToolsClass<
-  // deno-lint-ignore ban-types
-  AccumulatedFunctions = {},
-  // deno-lint-ignore ban-types
-  AccumulatedStyles = {},
-  // deno-lint-ignore ban-types
-  AccumulatedGlobalStyles = {},
+  AccumulatedFunctions = Empty,
+  AccumulatedStyles = Empty,
+  AccumulatedGlobalStyles = Empty,
 > {
   private static readonly RESERVED_FUNCTION_KEYS = new Set<string>([
     "multiHandler",
@@ -1127,11 +1078,7 @@ class ClientToolsClass<
   /** Whether the on-disk reconciliation prune has run yet for this instance. */
   private _stalePruneDone = false;
   /** Tracks which imported ClientTools instance owns each imported style name */
-  // deno-lint-ignore no-explicit-any
-  private _importedStyleOwners = new Map<
-    string,
-    ClientToolsClass<any, any, any>
-  >();
+  private _importedStyleOwners = new Map<string, AnyClientToolsInstance>();
   /** Tracks imported ClientTools instances for cascading ensureBuilt() */
   // deno-lint-ignore no-explicit-any
   private _importedTools: ClientToolsClass<any, any, any>[] = [];
@@ -1449,7 +1396,7 @@ class ClientToolsClass<
 
   private async _doEnsureBuilt(): Promise<void> {
     const handlerDir = DEFAULT_HANDLER_DIR;
-    const stylesDir = "./public/styles";
+    const stylesDir = DEFAULT_STYLES_DIR;
 
     cache.beginChangeDetectionPass();
 
@@ -1684,14 +1631,10 @@ class ClientToolsClass<
     externalTools: T,
   ): void {
     this._importedTools.push(externalTools);
-    // deno-lint-ignore no-explicit-any
-    const externalClientFunctions = (externalTools as any)
-      ._clientFunctions as Map<string, ClientFunctionImpl>;
-    // deno-lint-ignore no-explicit-any
-    const externalSourceUrl = (externalTools as any).sourceFileUrl as string;
+    const externalSourceUrl = externalTools.sourceFileUrl;
 
     // Import functions
-    for (const [fnName, instance] of externalClientFunctions) {
+    for (const [fnName, instance] of externalTools._handlerDefinitions) {
       if (ClientToolsClass.RESERVED_FUNCTION_KEYS.has(fnName)) {
         throw new Error(
           `Cannot import ClientFunction '${fnName}' from '${externalSourceUrl}': this key is reserved by fn API.`,
@@ -1713,13 +1656,8 @@ class ClientToolsClass<
 
     // Import styles — use the external tools' bundle filenames so accessing
     // an imported style references the original bundle, not this instance's.
-    // deno-lint-ignore no-explicit-any
-    const externalScopedStyles = (externalTools as any)
-      ._scopedStyles as Map<string, ScopedStyleImpl>;
-    // deno-lint-ignore no-explicit-any
-    const externalStyleFilenames = (externalTools as any)
-      .styleFilenames as Map<string, string>;
-    for (const [styleName, instance] of externalScopedStyles) {
+    const externalStyleFilenames = externalTools._styleFilenames;
+    for (const [styleName, instance] of externalTools._styles) {
       if (ClientToolsClass.RESERVED_STYLED_KEYS.has(styleName)) {
         throw new Error(
           `Cannot import style '${styleName}' from '${externalSourceUrl}': this key is reserved by styled API.`,
@@ -1727,8 +1665,7 @@ class ClientToolsClass<
       }
 
       if (!this._scopedStyles.has(styleName)) {
-        // deno-lint-ignore no-explicit-any
-        (this as any)[styleName] = instance;
+        (this as Record<string, unknown>)[styleName] = instance;
         // Use the external bundle filename (not the individual style filename)
         this.styleFilenames.set(
           styleName,
@@ -1832,7 +1769,7 @@ class ClientToolsClass<
 export const ClientTools: ClientToolsConstructor =
   ClientToolsClass as ClientToolsConstructor;
 
-class HandlersClass extends ClientToolsClass<{}, {}, {}> {
+class HandlersClass extends ClientToolsClass<Empty, Empty, Empty> {
   constructor(
     sourceFileUrlOrOptionsOrFunctions:
       | string
@@ -2012,14 +1949,21 @@ function signalNames(factory: SignalFactory): string[] {
 class SignalsClass extends StoreClass {
   #prelude: { code: string };
 
+  /** The one browser module holding the signal classes, shared by every collection. */
+  static #runtime: InstanceType<typeof HandlersClass> | undefined;
+
+  static get runtime(): InstanceType<typeof HandlersClass> {
+    return SignalsClass.#runtime ??= new Handlers(
+      new URL("./signals.ts", import.meta.url),
+      { signalClasses },
+    );
+  }
+
   constructor(sourceFileUrl: string | URL, factory: SignalFactory) {
-    const runtime = new Handlers(new URL("./signals.ts", import.meta.url), {
-      signalClasses,
-    });
     const prelude = { code: "" };
     super(sourceFileUrl, async () => {
       const names = signalNames(factory);
-      await imports(runtime);
+      await imports(SignalsClass.runtime);
       // Module-level names in the bundle must not collide with signal exports.
       const taken = new Set([
         ...names,
@@ -2074,7 +2018,7 @@ class SignalsClass extends StoreClass {
   }
 }
 
-class StylesClass extends ClientToolsClass<{}, {}, {}> {
+class StylesClass extends ClientToolsClass<Empty, Empty, Empty> {
   constructor(
     sourceFileUrlOrStyles:
       | string
@@ -2133,7 +2077,7 @@ export const Signals: SignalsConstructor =
 export const Styles: StylesConstructor =
   StylesClass as unknown as StylesConstructor;
 
-export async function imports(): Promise<ImportedTools<{}, {}>>;
+export async function imports(): Promise<ImportedTools<Empty, Empty>>;
 export async function imports<
   const TTools extends [AnyClientToolsInstance, ...AnyClientToolsInstance[]],
 >(

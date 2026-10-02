@@ -1,191 +1,651 @@
 # @tinytools/hono-tools
 
-A lightweight enhancement layer for [Hono](https://hono.dev/) web applications.
-Provides type-safe client functions, scoped styles, and enhanced JSX event
-handlers. Works with **Deno**, **Bun**, and **Node.js**.
+A lightweight enhancement layer for [Hono](https://hono.dev/) server-rendered
+applications. TinyTools lets you write browser event handlers and scoped CSS
+next to the server components that use them, binds them in JSX with full type
+checking, and ships only the handler bundles and stylesheets a page actually
+uses. On top of that it provides partial page updates, client-side navigation,
+Suspense streaming and server-sent event updates, all driven by plain HTML.
 
-## Features
+Published as `@tinytools/hono-tools` on JSR (Deno) and
+`@tinyenterprise/hono-tools` on npm (Node.js and Bun).
 
-### Core Features
+## Contents
 
-- **Handlers & Styles** - Separate factories for type-safe client-side event
-  handlers and scoped CSS styles
-- **One module per collection** - Each `tiny.Handlers`, `tiny.Store` and
-  `tiny.Signals` instance is served as one browser module exporting its handlers
-  by name. To split handlers into separately loaded files, create several
-  instances (they can share a source file).
+- [Installation](#installation)
+- [Quick start](#quick-start)
+- [Concepts](#concepts)
+- [Middleware and rendering](#middleware-and-rendering)
+- [Event bindings](#event-bindings)
+- [Handler collections](#handler-collections)
+- [Stores](#stores)
+- [Signals](#signals)
+- [Styles](#styles)
+- [Components](#components)
+- [Client-side navigation](#client-side-navigation)
+- [Partial cache](#partial-cache)
+- [Server-sent events](#server-sent-events)
+- [Building and runtime modes](#building-and-runtime-modes)
+- [Utilities](#utilities)
+- [Diagnostics](#diagnostics)
+- [Development](#development)
 
-## Handler Bundles
+## Installation
 
-Every tools instance compiles to `/handlers/<source>_<hash>.js`, named after its
-source file, with one named export per handler. Elements reference a handler as
-`<bundle>.<name>`, for example `tt-handler-click="routes_3fa1c.save"`, and
-`tiny.runHandler` imports the bundle and calls that export. Handlers that import
-other collections (through `tiny.imports()` in a factory, or `imports: [...]` in
-object form) get ordinary ES imports of those bundles.
+### Deno (JSR)
+
+```sh
+deno add jsr:@tinytools/hono-tools
+```
+
+Or add the import map entries by hand. The package is also the JSX runtime, so
+point `jsxImportSource` at it (not at `hono/jsx`):
+
+```json
+{
+  "imports": {
+    "tinytools": "jsr:@tinytools/hono-tools@^0.1.37",
+    "tinytools/build": "jsr:@tinytools/hono-tools@^0.1.37/build",
+    "tinytools/components": "jsr:@tinytools/hono-tools@^0.1.37/components",
+    "tinytools/handlers": "jsr:@tinytools/hono-tools@^0.1.37/handlers",
+    "tinytools/jsx-runtime": "jsr:@tinytools/hono-tools@^0.1.37/jsx-runtime",
+    "tinytools/jsx-dev-runtime": "jsr:@tinytools/hono-tools@^0.1.37/jsx-dev-runtime",
+    "esbuild": "npm:esbuild@^0.28.1",
+    "hono": "jsr:@hono/hono@^4.12.32"
+  },
+  "compilerOptions": {
+    "jsx": "precompile",
+    "jsxImportSource": "tinytools",
+    "lib": ["esnext", "deno.ns", "dom", "dom.iterable", "dom.asynciterable"]
+  }
+}
+```
+
+Both `"jsx": "react-jsx"` and Deno's `"jsx": "precompile"` are supported.
+Handler code is type-checked against the DOM, so include `dom` in `lib`.
+
+### Node.js and Bun (npm)
+
+```sh
+npm install @tinyenterprise/hono-tools
+```
+
+```ts
+import { css, tiny } from "@tinyenterprise/hono-tools";
+import { buildScriptFiles } from "@tinyenterprise/hono-tools/build";
+import { NewPartial, Suspense } from "@tinyenterprise/hono-tools/components";
+```
+
+Install `@hono/node-server` as well on Node.js; it supplies the static file
+adapter.
+
+## Quick start
+
+```tsx
+import { Hono } from "hono";
+import { css, tiny } from "tinytools";
+import { buildScriptFiles } from "tinytools/build";
+
+const buttonHandlers = new tiny.Handlers(import.meta.url, {
+  handleClick(this: HTMLButtonElement, event: MouseEvent) {
+    this.textContent = `Clicked (${event.type})`;
+  },
+});
+
+const buttonStyles = new tiny.Styles(import.meta.url, {
+  button: css`
+    background: royalblue;
+    color: white;
+    padding: 8px 16px;
+    &:hover {
+      background: navy;
+    }
+  `,
+});
+
+const app = new Hono().use(...tiny.middleware.core());
+
+app.get("/", async (c) => {
+  const { fn, styled } = await tiny.imports(buttonHandlers, buttonStyles);
+  return c.render(
+    <button type="button" class={styled.button} onClick={fn.handleClick}>
+      Click me
+    </button>,
+  );
+});
+
+// Optional: build every handler bundle and stylesheet before serving.
+await buildScriptFiles();
+
+export default app;
+```
+
+The page is rendered with a `<script type="module">` for the one handler bundle
+it used, a `<link rel="stylesheet">` for the one style bundle, and the inline
+`tiny.runHandler` dispatcher. Nothing else is loaded.
+
+## Concepts
+
+### Collections
+
+Everything the browser needs is declared in **collections** at module level:
+
+| Collection      | Holds                                         | Imported as |
+| --------------- | --------------------------------------------- | ----------- |
+| `tiny.Handlers` | Functions that run in the browser             | `fn.*`      |
+| `tiny.Store`    | Handlers sharing a private module-level state | `fn.*`      |
+| `tiny.Signals`  | Reactive values shared across the page        | `signal.*`  |
+| `tiny.Styles`   | Scoped CSS blocks                             | `styled.*`  |
+
+The first argument is `import.meta.url`. It tells the build which source file
+owns the collection, so generated filenames stay stable across restarts and only
+files whose source changed are rebuilt. Collections constructed without it are
+rebuilt on every change and never cleaned up.
+
+> **Declare collections at module level**, never inside a route handler.
+> Creating them per request re-registers them on every request and breaks
+> incremental builds.
+
+### `tiny.imports()`
+
+A route or component resolves exactly the collections it needs:
+
+```tsx
+const { fn, signal, styled, events, handlers, c } = await tiny.imports(
+  handlersA,
+  handlersB,
+  styles,
+);
+```
+
+- `fn.name` is a handler reference for JSX event attributes.
+- `signal.name` is a signal reference, usable on `onLoad` / `onInput`.
+- `styled.name` is the generated class string; `styled.mergeClasses(...)` joins
+  class strings without duplicates.
+- `events({...})` is an explicit attribute-spread alternative to `fn`.
+- `handlers.name` is the legacy inline `onclick="..."` expression (blocked by
+  the default CSP, kept for migration).
+- `c` is the current Hono context; reading it outside a request throws.
+
+Each call is independent. When several collections define the same name the last
+one passed wins. Only the handler bundles and style bundles actually accessed
+through `fn`, `signal`, `styled` or `events` are recorded for the request and
+emitted by `AssetTags`.
+
+`await tiny.imports()` with no arguments supplies the request context and empty
+tools. Explicit imports also work outside a request (for example when rendering
+a server-sent update), but then at least one collection must be passed.
+
+### Bundles and filenames
+
+Every collection compiles to one browser module at
+`/handlers/<source>_<hash>.js`, exporting each handler by name. Elements
+reference a handler as `tt-handler-click="<bundle>.<name>"`, and the inline
+`tiny.runHandler` dispatcher imports the bundle on first use.
 
 The hash covers the bundle's own code and every bundle it imports, directly or
-indirectly. Editing any handler therefore gives its bundle, and every bundle
-that depends on it, a new URL, while unrelated bundles keep theirs and stay
-cached. Handlers within one bundle can call each other by name.
+indirectly. Editing a handler gives its bundle, and every bundle depending on
+it, a new URL; unrelated bundles keep theirs and stay cached forever
+(`Cache-Control: immutable`). Style bundles work the same way: one file per
+`tiny.Styles` collection at `/styles/<source>_<hash>.css`.
 
-- **Enhanced JSX Types** - Better inline event types (onSubmit, onClick, etc.)
-  that enforce type safety
+## Middleware and rendering
 
-### Optional Features
+### `tiny.middleware.core(options?)`
 
-- **Suspense Component** - Streaming content with fallback support
-- **Partial Component** - Declarative partial page updates
-- **Client-side Navigation** - Partial navigation and page updates without full
-  reloads
-- **Server-Sent Events** - Real-time server-to-client updates (experimental)
+Spread into `.use()`. It installs, in order: the CSP header, memory-asset and
+static file serving from `./public/`, Hono's context storage, per-request asset
+tracking, and the JSX renderer. `new tiny.Hono({ tools: "core" })` is
+equivalent; a plain `new tiny.Hono()` installs nothing.
 
-## Stateful Handlers
+| Option                        | Default       | Meaning                                                   |
+| ----------------------------- | ------------- | --------------------------------------------------------- |
+| `csp`                         | `true`        | Send the script CSP and use reference bindings (see CSP). |
+| `serveStatic`                 | auto-detected | The static adapter for your runtime (Deno, Bun, Node).    |
+| `generatedFilenameHashLength` | `5`           | Hash length for both handler and style filenames (1-8).   |
+| `generatedHandlerHashLength`  | `5`           | Handler filename hash length.                             |
+| `generatedStyleHashLength`    | `5`           | Style filename hash length.                               |
 
-`tiny.Store` supports the same construction and `fn.*` import syntax as
-`tiny.Handlers`, but its bundle owns a private
-`const stored = Object.create(null)` shared by all of its handlers. Use a
-factory parameter named **`stored`** with an explicit state type:
+The renderer wraps `c.render(content, { title })` in a full document on normal
+requests. When the request carries a `source-url` header (a partial navigation)
+it instead returns an `<update>` document: a head section that imports any new
+scripts and stylesheets and sets the title, followed by the rendered partials.
+
+### Layouts
+
+```tsx
+const app = new tiny.Hono({ tools: "core" })
+  .use(tiny.middleware.layout(async ({ children }, c) => {
+    const { fn, styled } = await tiny.imports(chromeStyles, navigationTools);
+    return (
+      <body class={styled.shell} onNavigate={fn.handleNavigate}>
+        <nav>...</nav>
+        {children}
+      </body>
+    );
+  }));
+```
+
+- `tiny.middleware.layout(callback)` wraps sub-routes on full-page requests and
+  returns the children untouched on partial requests, so persistent shells are
+  not re-sent.
+- `tiny.middleware.partialLayout(callback)` calls the callback on partial
+  requests too. The callback receives `({ children }, c)` and may return the
+  children unchanged after inspecting `c.req.header("source-url")`.
+
+Layouts render once. The root renderer awaits the layout's output before
+emitting `AssetTags`, so assets used by asynchronous components inside the
+layout are discovered. Engage a layout's own collections inside the callback (as
+above) rather than behind a child component that is resolved later.
+
+Because nested layouts are omitted on partial requests, a layout must not be the
+only place that renders the `<NewPartial>` a partial response replaces. Put the
+replacement target in route output, or have partial branches return explicit
+partials (see the dental application for both patterns).
+
+Recommended middleware order for a child router:
+
+1. `...tiny.middleware.core()` (root router only)
+2. feature middleware
+3. `tiny.middleware.layout(...)`
+4. routes or mounted child routers
+
+### Content Security Policy
+
+`core()` sends
+`script-src 'self' 'sha256-…'; script-src-attr 'unsafe-hashes'
+'sha256-…'`. The
+two hashes cover the inline `tiny.runHandler` dispatcher and the shared
+attribute body `tiny.runHandler(this,event)`, so every `fn.*` binding is allowed
+while arbitrary inline scripts, legacy `handlers.*` attributes and cross-origin
+scripts are blocked. The policy restricts scripts only.
+
+`csp: false` sends no header and renders `fn.*` as legacy inline expressions for
+the request. To manage your own policy, disable the default and include the hash
+of the exported `eventHandlerBody` plus the dispatcher script:
+
+```ts
+import { eventHandlerBody } from "tinytools";
+```
+
+`tiny.middleware.csp()` is the standalone CSP middleware. Injected markup can
+reuse an authorised attribute body, so keep sanitising untrusted HTML, including
+`tt-handler-*` attributes.
+
+## Event bindings
+
+With TinyTools as the JSX runtime, handler references go straight on native
+event attributes and keep Go to Definition and event-type checking:
+
+```tsx
+const { fn } = await tiny.imports(buttonHandlers);
+<button onClick={fn.handleClick} onMouseOver={fn.handleHover} />;
+```
+
+A handler declared for `KeyboardEvent` is rejected on `onClick`. The runtime
+expands each reference into `onclick="tiny.runHandler(this,event)"` plus
+`tt-handler-click="<bundle>.handleClick"`. Components receive references
+unchanged and can forward them to intrinsic elements; type such props with
+`HandlerProp`:
+
+```tsx
+import type { HandlerProp } from "tinytools";
+
+function Panel(props: { onLoad?: HandlerProp<(this: HTMLElement) => void> }) {
+  return <section onLoad={props.onLoad} />;
+}
+```
+
+Pass an array to run several handlers for one event, in order, without awaiting
+each other:
+
+```tsx
+<body onLoad={[fn.applyNavigationListener, fn.activateSSE]} />;
+```
+
+Handlers receive the element as `this` and the native event as their argument.
+Call `event.preventDefault()` before awaiting anything; returning `false` does
+not cancel the default action.
+
+`events()` is the explicit spread form and also accepts handler names from the
+imported collections:
+
+```tsx
+const { fn, events } = await tiny.imports(buttonHandlers);
+<button {...events({ click: fn.handleClick, mouseover: "handleHover" })} />;
+```
+
+Besides the standard DOM events, the JSX types cover `onCommand`, `onNavigate`,
+`onCurrentEntryChange`, `onIncomingData` and `onSignal`. The `onMount` /
+`onUnmount` attributes are deliberately unavailable; use the lifecycle
+components instead.
+
+## Handler collections
+
+### Object form
+
+```ts
+export const listHandlers = new tiny.Handlers(import.meta.url, {
+  select(this: HTMLLIElement, event: MouseEvent) { ... },
+  clear(this: HTMLButtonElement) { ... },
+});
+```
+
+Handlers in one collection can call each other by name. To use handlers from
+another collection as bare identifiers, pass `{ imports: [other] }` as the
+second argument.
+
+### Factory form
+
+A factory runs once on the server when the collection is first needed and
+returns the handlers. Use `tiny.imports()` inside it to make other collections
+available as `fn`:
+
+```ts
+export const pageHandlers = new tiny.Handlers(import.meta.url, async () => {
+  const { fn } = await tiny.imports(queryParamTools);
+  return {
+    handleChange(this: HTMLElement, event: NavigationCurrentEntryChangeEvent) {
+      const changes = fn.queryParamChanges(event.from.url);
+      ...
+    },
+  };
+});
+```
+
+Rules for factory code, which is emitted as a browser module:
+
+- Keep the outer binding named `fn` (or destructure the original names, such as
+  `const { queryParamChanges } = fn`). Renamed bindings and arbitrary captured
+  values are not serialised.
+- Static `fn.name()` references are tree-shaken by esbuild, so unused
+  dependencies are not loaded. Dynamic `fn[name]` access retains them all.
+- Forward a receiver explicitly: `fn.other.call(this, event)`.
+- Definition imports give function references only, not request context or
+  styles. Calling them in the outer factory throws; call them inside the
+  returned handlers.
+- Only returned handlers are public. Duplicate imported names and circular
+  definition dependencies are errors.
+
+Factory bodies never run during definition or building. Imports and full builds
+await definition readiness automatically.
+
+### Running handlers on the server
+
+`collection.run.name(...)` calls a registered function directly on the server
+with its original types:
+
+```tsx
+const text = new tiny.Handlers(import.meta.url, {
+  describe(value: string) {
+    return value === "" ? "No text entered." : `Entered: ${value}`;
+  },
+});
+
+<p>{text.run.describe("draft")}</p>;
+```
+
+Factory-form collections must be defined first
+(`await
+collection.ensureDefined()` or `tiny.imports(collection)`). `run`
+neither builds assets nor needs a request context. Only run functions whose
+dependencies exist on the server; browser globals are not provided.
+
+### Module-level references
+
+`collection.getFunctionReferences` returns legacy inline expressions for
+composing handlers during module setup. Prefer the factory form with
+`tiny.imports()`.
+
+## Stores
+
+`tiny.Store` is a `Handlers` collection whose bundle owns a private
+`const stored = Object.create(null)` shared by all of its handlers:
 
 ```ts
 const counters = new tiny.Store(
   import.meta.url,
   (stored: { count?: number }) => ({
-    nextCount: function () {
+    next() {
       stored.count ??= 0;
       return ++stored.count;
     },
   }),
 );
-
-const buttons = new tiny.Handlers(import.meta.url, async () => {
-  const { fn } = await tiny.imports(counters);
-  return {
-    countClick: function (this: HTMLButtonElement) {
-      this.textContent = String(fn.nextCount());
-    },
-  };
-});
 ```
 
-State is shared by every handler in the Store and by all callers of them,
-including separate handler collections and partial navigations. Separate Store
-instances are isolated, even when their code is identical. Nothing is serialized
-into HTML or added to `globalThis` for state storage; the usual handler registry
-is unchanged. State lasts until a full reload (or a changed module URL), not
-across browser tabs. It is page-scoped, not per rendered component instance, and
-is not server state.
-
-Initialize values inside the returned functions. Factories still run on the
-server; their outer closures and initial state are not serialized. The `stored`
-factory parameter supplies types, not browser initialization, and must be a
-single identifier (no destructuring or default value). A different parameter
-name is also supported. Object-form Stores can instead use a type-only
-`declare const stored: { count?: number }` in their source file.
-
-For named signals or other shared objects, define a handler such as
-`testSignal: function () { return fn.signalStore("test-signal", ""); }` and
-import it into consumers. Each consumer can use `fn.testSignal()` without
-repeating the name; the store accessor must return the existing object after the
-first call. Creating the reference in a server-side factory will not capture it
-in the emitted handlers.
+The factory parameter supplies the state type and must be a single plain
+identifier (any name except `fn` or `_handler`). Object-form stores can use a
+type-only `declare const stored: {...}` instead. State is page-scoped, shared by
+every caller of the store's handlers, lasts until a full reload, and is never
+serialised into HTML. Initialise values inside the handlers; the factory's outer
+closure is not shipped.
 
 ## Signals
 
-`tiny.Signals` is additive: `tiny.Store` and its `fn.*` API are unchanged.
-Return signal instances from a self-contained, synchronous factory:
+`tiny.Signals` declares reactive values from a pure, synchronous factory:
 
 ```ts
-const trialSignals = new tiny.Signals(
+const viewerSignals = new tiny.Signals(
   import.meta.url,
   ({ Signal, Computed }) => {
-    const anonOne = new Signal();
-    const anonTwo = new Signal("initial value");
-    const computedOne = new Computed(() => `${anonOne.value} with computed`, [
-      anonOne,
+    const setContrast = new Signal(0);
+    const contrast = new Computed(() => 10 ** Number(setContrast.value), [
+      setContrast,
     ]);
-    return { anonOne, anonTwo, computedOne };
+    contrast.name = "contrast-adjust";
+    return { setContrast, contrast };
   },
 );
+```
 
-const consumers = new tiny.Handlers(import.meta.url, async () => {
-  const { signal } = await tiny.imports(trialSignals);
-  return {
-    update: function () {
-      signal.anonOne.value = "updated";
-      console.log(signal.computedOne.value);
-    },
-  };
+- Initial values are string, number, boolean or `null` (the default). Values
+  written from input events are strings, so convert in computed callbacks.
+- `Computed` is read-only and updates synchronously when its listed dependencies
+  change. Equal values do not notify.
+- The factory runs on the server to validate the definitions and again in the
+  browser. Keep it pure: no outer captures, imports, async work or
+  `tiny.imports()`. Read and write `.value` only in computed callbacks or
+  handlers.
+- Every collection shares one signal runtime module; each collection is one
+  bundle whose state is shared by all consumers on the page.
+
+In handlers, import a collection and use `signal.name.value` directly. In JSX,
+`signal.name` is an event reference:
+
+```tsx
+const { fn, signal } = await tiny.imports(viewerSignals, signalTools);
+
+<input type="range" onInput={signal.setContrast} />;
+<dialog onLoad={signal.contrast} onSignal={fn.setCssProperty} />;
+```
+
+- On `input` / `change` the signal takes the target's value and, if the input
+  has a `name` (or `data-bind-name`), that name.
+- On `load` the element subscribes to the signal and receives `signal` events
+  (`event.signal.value`) whenever it changes. Subscriptions use the element's
+  `abortController` when present (see `UpgradeCustomElement`), so they end when
+  the element is removed.
+- While rendering, a reference exposes no `.value`; reading it throws.
+- `value={signal.x}` is not a binding. Render the initial value yourself.
+
+The `signalTools` collection from `tinytools/handlers` provides `effect`,
+`setTextContent`, `setValue` and `setCssProperty` (which writes
+`--<signal name>`).
+
+### Command signals
+
+For values that must only reach siblings inside one container (for example each
+row of a repeated fieldset), `commandSignalTools` broadcasts an input's value as
+a `CommandEvent`:
+
+```tsx
+<select name="row-1-type" onChange={fn.broadcastType} />
+<select data-signal-tracking="row-1-type" onCommand={fn.applyType} />
+```
+
+`broadcastType` calls `fn.broadcastInputValue(this, this.closest("fieldset"))`
+and `applyType` reads `fn.readBroadcastValue(event).get("row-1-type")`.
+
+## Styles
+
+`css` is a template tag that normalises whitespace; `tiny.Styles` turns each
+block into a hashed class name and emits it inside an `@scope` rule:
+
+```ts
+const cardStyles = new tiny.Styles(import.meta.url, {
+  card: css`
+    padding: 16px;
+    h3 {
+      margin: 0;
+    }
+  `,
 });
 ```
 
-The callback's tools and output types are inferred; `SignalTools` is also
-exported for explicit annotations. Initial writable values are string, number,
-boolean, or null (the default). Computed values are read-only and update
-synchronously when declared dependencies change. Equal values do not notify.
+Generated CSS is layered as
+`@layer global, unscoped, limited, normal,
+important, debug`, declared by the
+core renderer in `<head>`.
 
-Handlers import signals under `signal.*`, not `fn.*`, and use them directly
-(`signal.anonOne.value`). Each collection is one bundle: the factory runs once
-when the bundle loads and each signal is exported as an accessor, which the
-handler's `signal.*` namespace resolves lazily, so computed closures use exactly
-the same signal instances as consumers. All collections share one signal runtime module.
-Collections are isolated; all consumers of one collection share page-scoped
-state.
+### Scope modes
 
-Factories run on the server to validate definitions and again in the browser to
-initialize the graph. Keep them pure: no outer captures, imported helpers, async
-work, or `tiny.imports()` inside them. Read and write `.value` only inside
-computed callbacks or client handlers, not while defining the factory. Computed
-dependencies must be constructed before their dependents. The whole collection
-initializes together; this API does not promise per-signal graph pruning.
+| Helper                                   | Reaches                                                               | Layer      |
+| ---------------------------------------- | --------------------------------------------------------------------- | ---------- |
+| plain `css`, `setCustomScope.toBoundary` | Down to the next styled element (every `styled.*` class carries `sb`) | `normal`   |
+| `setCustomScope.toComponent`             | Everything the component renders, stopping at child component roots   | `normal`   |
+| `setCustomScope.toSelectors(css, [...])` | Down to elements matching the selectors                               | `limited`  |
+| `setCustomScope.unscoped`                | Unlimited                                                             | `unscoped` |
+| `setCustomScope.direct`                  | Content emitted directly inside `@scope` (for `@keyframes` etc.)      | `normal`   |
 
-In JSX, `signal.*` uses the same CSP-aware event references as `fn.*`:
+Every helper accepts `{ layer }` to override the layer. All scoped styles also
+stop at `[data-scope-boundary~="<generated class>"]` and
+`[data-scope-boundary~="global"]`, so an element can end a scope by hand;
+`collection.generatedStyleNames.get("card")` gives the class without a request
+context.
+
+### Component scope
+
+The JSX runtime marks the root element(s) of every `<Component />` with
+`data-tc="<ComponentName>"`. `toComponent` styles end at `[data-tc]`:
+
+- Fragments mark each top-level element.
+- Children passed in through `props.children` belong to the caller and are never
+  marked.
+- Components called as plain functions bypass JSX; wrap their output with
+  `tiny.component(jsx, "Name")`.
+- `tiny.transparent(Component)` opts a wrapper out so it renders in the caller's
+  scope. The built-in components are transparent.
+- Components returning raw `html` strings are not marked.
+
+Keep `Styles` collections beside the components that use them. Generated bundle
+names keep the source module name, so emitted assets are easy to inspect, and a
+style file is only loaded on pages that access one of its classes.
+
+## Components
+
+Import from `tinytools/components`.
+
+### `Suspense`
 
 ```tsx
-const { signal } = await tiny.imports(trialSignals);
-return <input type="text" onInput={signal.anonOne} />;
+<Suspense fallback={<p>Loading…</p>}>
+  <SlowComponent />
+</Suspense>;
 ```
 
-While rendering, `signal.*` is only an event reference: reading `.value` or
-`.subscribe` from it throws. A signal handler receiving an input/change event assigns the target's string value. A
-load event subscribes its receiver; alternatively call
-`signal.anonOne.subscribe(this)` in a client load handler. Signal events carry
-the `signal` (read `event.signal.value`); HTMLElement subscribers run their
-TinyTools signal handler. Subscriptions deduplicate per target and use the
-element's `abortController` when present. Computed accessors reject input/change
-writes. References are not initial values: `value={signal.anonOne}` is
-unsupported, and automatic DOM value binding is not included. Supply a literal
-initial input value where needed.
+Streams the fallback immediately and the resolved content afterwards, as a
+partial that replaces the fallback in place. Assets first used by streamed
+content are imported with the chunk. `CustomSuspense` takes an `onLoad`
+insertion handler for other replacement strategies.
 
-## Client Route Templates
+### Partials
 
-`ClientRoutes` renders local content when a navigation matches a `client-route`.
-Paths use the browser's `URLPattern` syntax, including named parameters and
-wildcards. Optional query rules further restrict a match:
+A partial is a `<template for-partial-id="...">` plus a modulepreload link whose
+`load` event runs the insertion handler. The browser applies it to the live
+element with that id.
 
 ```tsx
-import { ClientRoutes } from "@tinytools/hono-tools/components";
+import {
+  NewPartial,
+  PartialDelete,
+  PartialReplace,
+} from "tinytools/components";
+import { partialInsertHandlers } from "tinytools/handlers";
 
+<PartialReplace id="results">
+  <ResultsList />
+</PartialReplace>;
+
+<PartialReplace id="card-7" includeWrapper>
+  <Card id={7} />
+</PartialReplace>;
+
+<PartialDelete id="card-7" />;
+
+const { fn } = await tiny.imports(partialInsertHandlers);
+<NewPartial
+  id="list"
+  onLoad={fn.partialMergeContent}
+  existing="substitute"
+  new="append"
+>
+  <li id="item-3">...</li>
+</NewPartial>;
+```
+
+| Handler               | Effect                                                         |
+| --------------------- | -------------------------------------------------------------- |
+| `partialReplace`      | Replaces the children of `#id`                                 |
+| `partialBlast`        | Replaces `#id` itself (`PartialReplace` with `includeWrapper`) |
+| `partialDelete`       | Removes `#id`                                                  |
+| `partialMergeContent` | Merges each child into `#id` by id or group (attributes below) |
+
+`partialMergeContent` matches each incoming child against an existing child with
+the same `id` (or `match-id`), then by `group-name` / `data-partial-group`. The
+`existing` and `group` attributes choose `substitute`, `match`,
+`substitute(append)`, `match(append)`, `substitute(prepend)` or
+`match(prepend)`; `new` chooses `append`, `prepend` or `ignore` for children
+with no match.
+
+`fullPageLoad` renders the children in place without the template, for layouts
+that already place the content inside its target on a full page load.
+
+### Lifecycle components
+
+Browsers only fire `load` on a few elements. These wrappers give any element
+lifecycle events:
+
+- `<ActivateOnLoadHandler>` runs each child's `onLoad` once it is in the
+  document.
+- `<UpgradeCustomElement>` upgrades each child to a custom element whose
+  `onLoad` runs whenever it connects (including after cached restoration), whose
+  `onDisconnect` runs when it is removed, and whose `abortController` aborts on
+  removal so handlers can register listeners that clean themselves up. Elements
+  without a hyphenated tag get a proxy sibling instead.
+- `<BuildFromTemplateElement templateId="...">` clones a page `<template>` into
+  the element and fills its named `<slot>`s from the children.
+
+### `ClientRoutes`
+
+`ClientRoutes` renders local content when a navigation matches a `client-route`,
+before (or instead of) the server response:
+
+```tsx
 <ClientRoutes>
   <client-route path="/patients/:id" query="tab=notes&preview=*">
-    <p data-patient="$[id]">Loading notes for $[name]...</p>
+    <PartialReplace id="panel">Loading notes for $[id]…</PartialReplace>
   </client-route>
   <client-route path="/help/:topic" query="" data-nav-block>
-    <p>Help topic: $[topic]</p>
+    <PartialReplace id="panel">Help topic: $[topic]</PartialReplace>
   </client-route>
 </ClientRoutes>;
 ```
 
-All matching routes render in declaration order; matching containers cooperate
-with core navigation. `data-nav-block` suppresses the server fetch only when
-that route's path and query both match. Without it, local content can serve as a
-loading state while the server response is fetched. Use your usual partial
-components inside a route to replace existing content instead of appending it.
-
-Routes default to `method="get"`; use `method="post"` for submission loading
-states. Method matching uses the same resolver as the server fetch, including
-the submit button's `formmethod` override. A method mismatch neither renders
-content nor blocks the fetch.
+Paths use `URLPattern` syntax. All matching routes render in declaration order.
+`data-nav-block` suppresses the server fetch; without it local content acts as a
+loading state. Routes default to `method="get"`; use `method="post"` for
+submission states, where submitted form values also fill placeholders.
 
 | Query rule                    | Meaning                                   |
 | ----------------------------- | ----------------------------------------- |
@@ -199,880 +659,228 @@ content nor blocks the fetch.
 | `a=1&b=2`                     | Both conditions match                     |
 | `a=1\|b=2`                    | Either condition matches                  |
 
-AND binds more tightly than OR: `a=1&b=2|c=3` means `(a=1 AND b=2) OR c=3`. Keys
-and values use URL query decoding (`+` means a space); encode literal `&` and
-`|` as `%26` and `%7C`. An encoded `%2A` matches a literal asterisk rather than
-testing existence. Invalid rules disable that route with a console warning.
-Routes are read on each navigation, so adding or changing a route inside an
-active `ClientRoutes` template does not require reactivating the container.
-Disconnected containers do not participate in navigation.
+AND binds tighter than OR. Keys and values use query decoding; encode literal
+`&` and `|` as `%26` and `%7C`. Invalid rules disable the route with a console
+warning.
 
-`$[name]` placeholders in text and attributes receive named path captures and
-decoded query values. Query values override same-named path captures; repeated
-query keys consistently use their first value. Path captures retain URLPattern's
-encoded representation. Missing values become empty strings. Matching and
-interpolation use the resolved fetch URL, including `data-nav-partial`
-overrides.
+`$[name]` placeholders in text and attributes receive path captures, decoded
+query values (which override captures) and, for POST routes, form values.
+Replacement is literal and single-pass, applied through DOM text and attribute
+APIs, so values are never parsed as HTML. It is not a URL or script sanitiser:
+do not interpolate untrusted values into event handlers, scripts, styles or
+unconstrained URL attributes.
 
-For POST routes, submitted form values override query values and path captures.
-Repeated form keys use their first value, and values are converted to strings.
-For example, `$[pair-id]` and `$[send-as]` can populate a sending-state partial
-from the submitted fields. Query rules still inspect the URL, not the form body.
+Other attributes: `once` moves the authored nodes instead of cloning and removes
+the route; `fallback` suppresses a loading route when another matching route
+blocks the fetch; `interpolate="false"` renders literally; `data-nav-redirect`
+keeps or sets the displayed URL like the attribute on a link.
 
-Each match clones the authored content, including nested templates, so routes
-can render repeatedly without consuming or modifying their source. Replacement
-is single-pass and literal: values containing `$&` or `$[other]` are not
-expanded again. Values are assigned through DOM text and attribute APIs, not
-parsed as HTML. This is not a URL or script sanitizer: do not substitute
-untrusted values into event handlers, scripts, styles, or unconstrained
-URL-valued attributes.
+### `AssetTags`
 
-Add `once` to a route to move its actual child nodes into the document body and
-remove that route after rendering, rather than cloning its content. This works
-for authored routes too, including insertion templates and their load triggers.
-Rendering runs in `intercept({ handler })`, after navigation event dispatch.
-`ClientRoutes` does not capture outgoing content or inspect mounted panels.
+Renders the script, modulepreload and stylesheet tags for the assets a render
+accessed. The core renderer places it for you; use it directly only in custom
+renderers.
 
-Add `fallback` to a loading route to suppress it when any matching route has
-`data-nav-block`. Other matching routes still render normally. Set
-`interpolate="false"` to render literal content without expanding `$[name]`.
+## Client-side navigation
 
-### Partial Cache
+Navigation is opt-in and attribute driven. Register the handlers from
+`tinytools/handlers` on `<body>`:
+
+```tsx
+const { fn } = await tiny.imports(
+  applyNavigationHandlers,
+  navigationTools,
+  processIncomingDataTools,
+);
+
+<body
+  onLoad={[
+    fn.applyNavigationListener,
+    fn.applyCurrentEntryChangeListener,
+    fn.applyIncomingDataListener,
+  ]}
+  onNavigate={fn.handleNavigate}
+  onCurrentEntryChange={fn.setVariablesFromUrl}
+  onIncomingData={fn.appendIncomingHtml}
+  style={urlStyleVariables(c.req.url)}
+>
+```
+
+`handleNavigate` intercepts same-origin navigations through the Navigation API,
+fetches the destination with the headers `partial-nav: true`, `source-url` (the
+current page) and `destination-url`, and streams the `<update>` response into
+the page. Rapid GET requests to the same path abort earlier ones.
+
+| Attribute (link, form or submit button) | Effect                                                             |
+| --------------------------------------- | ------------------------------------------------------------------ |
+| `data-nav-partial="/api/path"`          | Fetch this URL instead of the destination (query copied if absent) |
+| `data-nav-redirect`                     | Keep the current URL after navigating                              |
+| `data-nav-redirect="/path"`             | Display this URL after navigating                                  |
+| `data-no-intercept`                     | Let the browser navigate normally                                  |
+| `data-local-only`                       | Run client routes but skip the server fetch                        |
+
+Responses may set `X-spa-redirect: /path` to update the displayed URL without
+another fetch; this is also recorded by `trackConnectedClients`. Empty query
+parameters are dropped from the displayed URL on push navigations.
+
+Incoming HTML is split on `</update>` and dispatched as `incomingdata` events
+(`{ type: "html", element, paths }` or `{ type: "json", data }`).
+`appendIncomingHtml` applies partials when the update has no `update-paths` or
+one of them matches the page path or a cached region's `update-path`; head
+imports are always applied. Non-update HTML is shown in a
+`<dialog id="global-modal">` when the page has one.
+
+## Partial cache
 
 Opt a replacement partial into the template-based navigation cache:
 
 ```tsx
-<NewPartial id="thirdPanelContent" cache={true} onLoad={fn.partialReplace}>
-  <PatientDetails />
-</NewPartial>;
-```
-
-Both `NewPartial` and `PartialReplaceWithCache` accept `fullPageLoad` (default
-`false`). Set it when the layout already renders the partial directly inside its
-target element:
-
-```tsx
-const sourceUrl = c.req.header("source-url");
-
-<PartialReplaceWithCache id="thirdPanelContent" fullPageLoad={!sourceUrl}>
+<PartialReplaceWithCache id="panel" fullPageLoad={!c.req.header("source-url")}>
   <PatientDetails />
 </PartialReplaceWithCache>;
 ```
 
-With `fullPageLoad`, children render in place without the initial insertion
-template or its load trigger. The component does not create or find the target
-element, and does not run `onLoad` on initial rendering. Keep the component a
-direct child of the element identified by `id` for caching. Cache lifecycle
-markup remains active, and cached restoration still uses the original insertion
-handler, group name, and attributes. Partial navigation retains the usual
-template insertion behavior when `fullPageLoad` is omitted or `false`.
+When the target's children are replaced, a `MutationObserver` moves the outgoing
+nodes into a `client-route` with `once`, `data-nav-block` and
+`interpolate="false"` published in a cache router beside the target. A later
+navigation whose fetch URL matches restores the nodes with their identity, form
+values and listeners intact, without a server fetch.
 
-The partial includes a lifecycle element whose load handler starts a
-`MutationObserver` on the target's direct children. Its suspend handler drains
-pending records and disconnects the observer. A sibling cache route container
-stores the captured routes; no route is published while its content is mounted.
-Pages without cached partials receive no cache handlers or markup.
+- `cache={true}` (the default for `PartialReplaceWithCache`) matches the exact
+  request path; `path="/patients{/:id}?"` supplies a `URLPattern`. Queries and
+  hashes are ignored. A restore blocks the whole fetch, so choose patterns whose
+  stored content suffices.
+- `updatePath` names the page path that server updates are matched against while
+  the content is cached (defaults to the page the request was displayed under).
+- Capture depends on DOM replacement, not on the navigation. Nested regions
+  suspend and resume their observers when a parent is removed or restored.
+- POST, URL-only and non-intercepted navigations do not restore cached routes.
+  Eviction is not implemented.
 
-When another partial replaces the target's children, the observer moves the
-outgoing nodes into an insertion template and publishes an ordinary GET
-`client-route` with `once`, `data-nav-block`, and `interpolate="false"`. Its
-output is the insertion template followed by the modulepreload link that proxies
-its load event. Restoration uses normal client-route rendering and the original
-insertion handler. There is no cache lookup or capture logic in navigation or
-partial replacement, no active-path markers, and no ancestry checks.
+## Server-sent events
 
-Capture depends on DOM replacement, not the URL or navigation event. A failed or
-cancelled navigation that does not replace content leaves it mounted. An
-authored loading partial that replaces content does cause capture. Updating a
-nested panel does not capture its parent. Removing a whole parent subtree leaves
-its nested content intact; nested observers suspend and resume on reconnection.
-Restoration preserves node identity, live form values, and attached listeners.
-Detachment still triggers lifecycle callbacks, and focus or running embedded
-content is not guaranteed to survive.
-
-For an explicit restore pattern spanning several routes, `cache` also accepts a
-URLPattern:
-
-```tsx
-<NewPartial
-  id="thirdPanelContent"
-  cache="/trials/cache-test{/:type(a|b)}?"
-  onLoad={fn.partialReplace}
->
-  <CacheTrial />
-</NewPartial>;
-```
-
-With `cache={true}`, matching uses the exact request pathname as a literal
-URLPattern; a string provides the pattern explicitly. Both ignore query strings
-and hashes. A restore blocks the entire GET fetch, even when only one panel was
-cached; choose patterns whose stored content suffices for the destination. A
-parent restores its captured subtree as-is, including whichever child was
-mounted at replacement time. Reconnecting a child router only resumes listening
-for future navigation; it does not switch child content automatically. POST,
-URL-only, and non-intercepted navigations do not restore GET cache routes. Mark
-authored loading routes `fallback` if they should yield to blocking routes.
-
-Use `partialReplace` from the `handlers` export. Eviction and SSE updates to
-stored content are not implemented.
-
-## CSP-Friendly Event Attributes
-
-TinyTools enables a script Content Security Policy by default in
-`tiny.middleware.core()` and `new tiny.Hono({ tools: "core" })`. It allows
-same-origin scripts and the shared hashed native event dispatcher. Legacy native
-`onClick={handlers.handleClick}` attributes, arbitrary inline scripts,
-cross-origin scripts, and string evaluation are blocked by this policy.
-
-To retain the previous behavior while migrating, disable the middleware:
+The server exports stream tracking so updates reach only the clients showing
+affected content:
 
 ```ts
-new Hono().use(...tiny.middleware.core({ csp: false }));
-new tiny.Hono({ tools: "core", csp: false });
+import {
+  addStream,
+  removeStream,
+  SSE_ID_COOKIE,
+  trackConnectedClients,
+} from "tinytools";
+
+app.use(trackConnectedClients);
+
+app.get("/sse", (c) => {
+  const id = getCookie(c, SSE_ID_COOKIE)!;
+  return streamSSE(c, (stream) => {
+    addStream({ id, userName, userAgent, stream });
+    return new Promise((resolve) =>
+      stream.onAbort(() => {
+        removeStream(stream);
+        resolve();
+      })
+    );
+  });
+});
 ```
 
-`csp: false` adds no CSP header and leaves application-provided policies alone.
-It also bypasses the JSX reference transform: `fn.*` renders as a legacy inline
-expression without `tt-handler-*`. This setting is request-scoped. Explicit
-`events()` bindings still emit their attribute pairs. A plain `new tiny.Hono()`
-still installs no middleware. For standalone use, register
-`tiny.middleware.csp()` before your routes. To manage your own policy, disable
-the default and include the dispatcher hash in your application policy. This
-policy restricts scripts only; it does not restrict styles, images, or
-connections.
+`trackConnectedClients` assigns each browser an `HttpOnly` `sseId` cookie and
+records the page path each response is displayed under (`/api/` requests use
+their `destination-url`). `getStreamsMatchingPaths(patterns)` returns the
+streams that visited a matching page; `streamEvents` emits `streamAdded`,
+`streamUpdated` and `streamRemoved`.
 
-With TinyTools configured as your JSX runtime, handler references can be used
-directly on native event attributes:
+`sendUpdateStream(jsx, streams, { paths })` renders JSX as an `<update>`
+document and writes it to every stream, including a head section for any assets
+the content uses. With `paths`, the client applies the partials only to a page
+or cached region matching one of the patterns. In the browser,
+`sseTools.activateSSE` (bind to `<body onLoad>`) opens `/sse` and feeds messages
+through `processIncomingData`.
 
-```tsx
-const { fn } = await tiny.imports(buttonHandlers);
-
-return (
-  <button onClick={fn.handleClick} onMouseOver={fn.handleHover}>
-    Click
-  </button>
-);
-```
-
-This preserves definition navigation and event-parameter type checking. The JSX
-runtime expands each reference into the same attribute pair as `events()`.
-Ordinary JSX, development JSX, and Deno's `jsx: "precompile"` are supported.
-Configure `jsxImportSource` as `@tinytools/hono-tools` (or your local
-`tinytools` alias), not `hono/jsx`. Components receive references unchanged and
-can forward them to intrinsic elements rendered with the TinyTools runtime.
-
-`fn.*` exposes CSP-friendly references; `handlers.*` exposes the previous inline
-expressions for legacy testing. `events()` is an explicit attribute-spread
-alternative to direct `fn.*` bindings. It accepts native DOM event names
-(lowercase, without `on`) and handler references or names from the tools passed
-to `tiny.imports()`:
-
-```tsx
-const { fn, handlers, events } = await tiny.imports(buttonHandlers);
-
-return (
-  <>
-    <button onClick={handlers.handleClick}>Legacy</button>
-    <button
-      {...events({
-        click: fn.handleClick,
-        mouseover: fn.handleHover,
-      })}
-    >
-      CSP alternative
-    </button>
-  </>
-);
-```
-
-`fn` is a mapped collection that preserves Go to Definition navigation to the
-original handler properties. References carry the literal handler name and
-function signature, so same-signature handlers with unimported names are
-rejected. The runtime also rejects a reference whose name resolves to a
-different generated handler ID in the receiving tools. References are opaque
-values, not callable server functions. Direct attributes use the imported
-reference's resolved ID; `events()` additionally validates that reference
-against its own imported tools. `onClick={handlers.handleClick}` emits the
-legacy inline expression in either mode and is blocked by the default CSP.
-
-Inside `Handlers` factory definitions, `tiny.imports(...).fn` continues to
-expose callable client dependencies for generated modules. Outside those
-definitions, `fn` references are render-only objects and must not be called on
-the server.
-
-References and string names autocomplete from the imported tools, including
-their declared dependencies. `events({ click: "handleClick" })` remains
-supported and emits the same HTML. Unknown names, raw functions, legacy
-`handlers` expressions, and incompatible event parameter types are rejected. For
-example, a `KeyboardEvent` handler cannot be assigned to `click`. As with the
-existing JSX handlers, the receiving element's `this` type is not checked by the
-spread helper.
-
-Each binding emits `tt-handler-click="<bundle>_<hash>.handleClick"` and
-`onclick` with exactly this body, shared across all event types and handler
-names:
-
-```text
-tiny.runHandler(this,event)
-```
-
-Pass an array of `fn` references to run multiple handlers for one event:
-
-```tsx
-<signal-output
-  onLoad={[fn.anonymousSignalTest, fn.otherAnonymousSignalTest]}
-/>;
-```
-
-The generated `tt-handler-load` attribute contains the handler references
-separated by a single space. Handlers are invoked in array order without
-awaiting their results, with the same `this` and event. Returning `false` does
-not skip later handlers. Empty arrays emit no event binding. Arrays support `fn`
-references, not legacy inline `handlers` expressions.
-
-Only the bundles of accessed handlers are tracked for loading, just as with
-`fn`. The handler receives the element as `this` and the native event as its
-argument. Use `event.preventDefault()` to cancel a native default action, before
-awaiting in an async handler. The current shared body does not return the
-dispatcher's result, so returning `false` from the handler alone does not cancel
-the action.
-
-The middleware derives its hash from the exported `eventHandlerBody`. For a
-custom policy, hash that exact string, not its HTML-escaped representation:
+## Building and runtime modes
 
 ```ts
-import { eventHandlerBody } from "@tinytools/hono-tools";
-
-const digest = await crypto.subtle.digest(
-  "SHA-256",
-  new TextEncoder().encode(eventHandlerBody),
-);
-const hash = btoa(String.fromCharCode(...new Uint8Array(digest)));
-const policy =
-  `script-src 'self'; script-src-attr 'unsafe-hashes' 'sha256-${hash}'`;
-```
-
-When managing your own CSP, merge these directives into your application's
-policy. This does not authorize legacy `handlers` inline attributes or other
-inline scripts. The standard `'unsafe-hashes'` keyword is required for hashed
-event attributes. Any injected markup can reuse an authorized body, so continue
-to sanitize untrusted HTML, including `tt-handler-*` attributes.
-
-This first alternative handles native DOM events, one handler per event.
-Handlers invoked directly by custom components instead of native event dispatch
-should use `handlers` when they require serialized inline expressions.
-
-For a standalone comparison, run from the package directory:
-
-```sh
-deno run -A tests/fixtures/events-csp.tsx
-```
-
-Open `http://127.0.0.1:3047/` to compare both approaches, or
-`http://127.0.0.1:3047/?csp` to enable the single-hash policy. In the latter
-mode, the legacy `handlers` button is deliberately blocked and `fn` works. The
-fixture serves its small handler registry directly; the application integration
-still uses normal TinyTools asset loading.
-
-## Installation
-
-> **Note:** The package is published under different scope names depending on
-> the registry:
->
-> - **JSR** (Deno): `@tinytools/hono-tools`
-> - **npm** (Node.js / Bun): `@tinyenterprise/hono-tools`
-
-### Deno (via JSR)
-
-```bash
-deno add jsr:@tinytools/hono-tools
-```
-
-Or manually add to your `deno.json`:
-
-```json
-{
-  "imports": {
-    "@tinytools/hono-tools": "jsr:@tinytools/hono-tools@^0.1.0",
-    "@tinytools/hono-tools/build": "jsr:@tinytools/hono-tools@^0.1.0/build",
-    "@tinytools/hono-tools/components": "jsr:@tinytools/hono-tools@^0.1.0/components"
-  }
-}
-```
-
-Optionally, Deno supports precompiled JSX for better performance:
-
-```json
-{
-  "compilerOptions": {
-    "jsx": "precompile",
-    "jsxImportSource": "@tinytools/hono-tools"
-  }
-}
-```
-
-### Node.js / Bun (via npm)
-
-```bash
-# npm
-npm install @tinyenterprise/hono-tools
-
-# bun
-bun add @tinyenterprise/hono-tools
-```
-
-Then import using the npm scope:
-
-```ts
-import { css, tiny } from "@tinyenterprise/hono-tools";
-import { buildScriptFiles } from "@tinyenterprise/hono-tools/build";
-import { NewPartial, Suspense } from "@tinyenterprise/hono-tools/components";
-```
-
-## Quick Start
-
-```tsx
-import { Hono } from "hono";
-import { css, setCustomScope, tiny } from "@tinytools/hono-tools";
-import { buildScriptFiles } from "@tinytools/hono-tools/build";
-
-// Define client-side event handlers and styles separately
-const buttonStyle = css`
-  background: blue;
-  color: white;
-  padding: 8px 16px;
-  border-radius: 4px;
-  &:hover {
-    background: darkblue;
-  }
-`;
-
-const routeHandlers = new tiny.Handlers(import.meta.url, {
-  handleClick(this: HTMLButtonElement, e: MouseEvent) {
-    console.log("Clicked!", e);
-    this.textContent = "Clicked!";
-  },
-  handleSubmit(this: HTMLFormElement, e: SubmitEvent) {
-    e.preventDefault();
-    console.log("Form submitted!");
-  },
-});
-
-const routeStyles = new tiny.Styles(import.meta.url, {
-  buttonStyle,
-  cardLayout: setCustomScope.toSelectors(
-    css`
-      display: grid;
-      gap: 12px;
-    `,
-    [".scopeBoundary>*"],
-  ),
-  articleBody: setCustomScope.toSelectors(
-    css`
-      font-size: 0.95rem;
-    `,
-    [".scope-break", "[data-scope-stop]"],
-  ),
-  articleInnerLayout: setCustomScope.toSelectors(
-    css`
-      margin-block: 8px;
-    `,
-    [".scope-break>*", "[data-scope-stop]>*"],
-  ),
-});
-
-// Create Hono app with tools using middleware
-const app = new Hono()
-  .use(...tiny.middleware.core());
-
-// Use in routes
-app.get("/", async (c) => {
-  const { fn, styled } = await tiny.imports(routeHandlers, routeStyles);
-
-  return c.render(
-    <button class={styled.buttonStyle} onClick={fn.handleClick}>
-      Click me
-    </button>,
-  );
-});
-
-// Build client files before starting server
-await buildScriptFiles();
-
-export default app;
-```
-
-> Scope helper methods are exposed under `setCustomScope` (for example
-> `setCustomScope.toSelectors(..., [".scopeBoundary>*"])`). Direct named imports
-> of `scopedTo*`/`unscoped` are no longer part of the top-level API.
-
-> Use `setCustomScope.direct(cssContent)` for content that must be emitted
-> directly inside `@scope` instead of inside the generated `:scope` rule. This
-> supports name-defining at-rules such as `@keyframes`; those names remain
-> global according to CSS scoping rules, so they should be chosen to avoid
-> collisions.
-
-> All scoped styles automatically include two additional scope limits:
-> `[data-scope-boundary~="<generated-style-class>"]` and
-> `[data-scope-boundary~="global"]`. The `~=` operator ensures exact token
-> matching, so `global` does not match partial values like `my-global-theme`.
-
-### Component scope
-
-By default a style reaches down until the next styled element (every
-`styled.*` class carries the `sb` boundary class). Use
-`setCustomScope.toComponent(...)` to scope a style to the **component** instead:
-it reaches through everything the component renders, including its other styled
-elements, and stops at the root of any child component.
-
-```tsx
-const cardStyles = new tiny.Styles(import.meta.url, {
-  card: setCustomScope.toComponent(css`
-    padding: 16px;
-    p { margin: 0; }            /* every <p> Card renders... */
-    a { color: var(--accent); } /* ...but none inside child components */
-  `),
-  title: css`font-weight: 700;`,
-});
-
-export async function Card({ children }: PropsWithChildren) {
-  const { styled } = await tiny.imports(cardStyles);
-  return (
-    <article class={styled.card}>
-      <h3 class={styled.title}><a href="#">Link</a></h3>
-      <Avatar /> {/* its own scope: Card's `a` and `p` rules stop here */}
-      {children}
-    </article>
-  );
-}
-```
-
-No wrapper is needed. The TinyTools JSX runtime marks the root element(s) of
-every `<Component />` with `data-tc="<ComponentName>"`, which also shows the
-component tree in devtools. Component-scoped styles end at `[data-tc]`.
-
-- **Fragments** mark each top-level element.
-- **Children passed in** (`props.children`) belong to the caller and are never
-  marked, so a component that just returns `children` adds no boundary. Slot
-  content rendered inside another component's element is outside the caller's
-  donut, however. Style it with a class on the element itself.
-- **Direct calls** such as `await SiteChrome({ children })` bypass JSX. Wrap the
-  result: `return tiny.component(<div>...</div>, "SiteChrome")`.
-- **Transparent components** render into the caller's scope. Opt out with
-  `tiny.transparent(MyWrapper)`. Built-in components (`Partial*`, `Suspense`,
-  `ClientRoutes`, ...) are transparent already.
-- Both `"jsx": "react-jsx"` and `"jsx": "precompile"` are supported. Components
-  returning raw strings from Hono's ``html`...` `` helper are not marked.
-
-> **⚠️ Important:** Always declare `Handlers` and `Styles` instances at **module
-> level** (outside of route handlers). This ensures handlers and styles are
-> registered once at startup and included in the build. Creating them inside a
-> route handler would re-register them on every request, causing performance
-> issues and build inconsistencies.
-
-## API Reference
-
-### Core Module (`@tinytools/hono-tools`)
-
-#### `tiny.middleware`
-
-Core middleware supplies request context, asset tracking, rendering, and CSP.
-Navigation, SSE listeners, client routes, and lifecycle behavior are activated
-by importing handlers or rendering their components, not by feature middleware.
-
-**`tiny.middleware.core(options?)`** - Core middleware array (CSP, context
-storage, static file serving, JSX renderer, asset tracking). Spread into
-`.use()`.
-
-**`tiny.middleware.csp()`** - Sets the script CSP using the shared event
-dispatcher hash. Included by default in `core()`; pass `{ csp: false }` to
-preserve inline-handler behavior.
-
-**`tiny.middleware.layout(renderFn)`** - Adds a layout wrapper for sub-routes.
-Skips the callback on partial requests with a `source-url` header.
-
-**`tiny.middleware.partialLayout(renderFn)`** - Uses the same layout
-composition, but invokes the callback for both full-page and partial requests.
-The callback receives `({ children }, c)` and can inspect
-`c.req.header("source-url")` to decide whether to render a wrapper or return
-children directly. Layouts render once; the root renderer awaits their output
-before emitting asset tags.
-
-```ts
-import { Hono } from "hono";
-import { tiny } from "@tinytools/hono-tools";
-
-const app = new Hono().use(...tiny.middleware.core());
-const equivalent = new tiny.Hono({ tools: "core" });
-const plainSubroute = new tiny.Hono();
-```
-
-Core options include `csp`, `serveStatic`, `generatedFilenameHashLength`,
-`generatedHandlerHashLength`, and `generatedStyleHashLength`. Hash lengths are
-clamped to 1-8. `serveStatic` accepts the Hono adapter for your runtime.
-
-#### `await tiny.imports(...tools)`
-
-Import exactly the collections a route or component needs. The returned `fn`,
-`events`, `handlers`, and `styled` are inferred from those collections; `c`
-provides the current Hono request context. Each call is independent, and later
-collections win when render-time imports contain the same name. Only accessed
-handler/style assets are recorded for that request.
-
-```tsx
-async function Button() {
-  const { fn, styled } = await tiny.imports(routeHandlers, routeStyles);
-  return (
-    <button class={styled.buttonStyle} onClick={fn.handleClick}>Click</button>
-  );
-}
-```
-
-`await tiny.imports()` with no arguments supplies request context and empty
-tools. Explicit imports also work outside a request for update rendering, but
-accessing `c` without an active request throws. No-argument imports require a
-request. Handler factories require explicit imports and expose only `fn`.
-
-#### Server-Sent Events
-
-The server exports `addStream`, `removeStream`, `activeStreams`,
-`trackConnectedClients`, path-query helpers, and `sendUpdateStream`. Register
-your own SSE endpoint and opt into `trackConnectedClients` explicitly when
-client/path tracking is needed. Core does not register an SSE endpoint or track
-clients automatically.
-
-#### `Handlers` & `Styles`
-
-Separate factories for creating type-safe client-side event handlers and scoped
-CSS styles.
-
-> **⚠️ Always declare at module level** - `Handlers` and `Styles` instances must
-> be created outside of route handlers so they are registered once at startup
-> and included in the build process.
-
-The first argument to `Handlers` and `Styles` is an optional `import.meta.url`.
-When provided, the build step tracks which file each handler/style belongs to
-and only rebuilds the files that have changed. This makes development faster
-because rebuilds happen lazily — only the affected output files are regenerated
-instead of everything. If omitted, all handlers and styles are rebuilt on every
-change.
-
-```ts
-// With import.meta.url (recommended) — enables lazy, incremental rebuilds
-const handlers = new tiny.Handlers(import.meta.url, { ... });
-
-// Without — still works, but every change triggers a full rebuild
-const handlers = new tiny.Handlers({ ... });
-```
-
-```ts
-import { css, tiny } from "@tinytools/hono-tools";
-
-const myStyle = css`
-  color: blue;
-  padding: 16px;
-`;
-
-// ✅ Correct: declared at module level
-const handlers = new tiny.Handlers(import.meta.url, {
-  handlerName(this: HTMLElement, e: Event) {
-    // Handler code runs in the browser
-  },
-});
-
-const styles = new tiny.Styles(import.meta.url, {
-  myStyle,
-});
-
-// Import handlers from other files
-const localHandlers = new tiny.Handlers(import.meta.url, {
-  imports: [externalHandlers],
-}, {
-  localHandler() {
-    // ...
-  },
-});
-```
-
-#### Running Handlers on the Server
-
-Use `.run` to execute a registered function directly on the server, with its
-original argument and return types:
-
-```tsx
-const textHandlers = new tiny.Handlers(import.meta.url, {
-  writeTextContent: function (value: string) {
-    return value === "" ? "No text entered." : `Entered text: ${value}`;
-  },
-});
-
-const output = <p>{textHandlers.run.writeTextContent("placeholder text")}</p>;
-```
-
-Object-form handlers are callable immediately. For factory-form handlers, first
-await `textHandlers.ensureDefined()` or `tiny.imports(textHandlers)`; accessing
-`.run` before definition readiness throws. `.run` itself does not build or mark
-client assets as used and does not require a request context. Async handlers
-still return promises; use `.call(receiver, ...args)` when a handler needs an
-explicit `this`.
-
-After initialization, returned factory handlers can call their imported `fn.*`
-dependencies on the server too. Those dependencies remain private unless
-explicitly exposed by the collection. Render-time `fn.*` values are still JSX
-event references, not server-callable functions; legacy `getFunctionReferences`
-values are still generated client references, not executable dependencies.
-
-Only run functions whose dependencies are available on the server: `.run` does
-not provide browser globals or serialize server state into the browser. Captured
-mutable state, including factory-form `tiny.Store` state, belongs to the server
-instance and can be shared across requests. Do not use it for request-specific
-or per-user data. The name `run` is reserved for this API.
-
-#### Async Handler Factories (Experimental)
-
-`tiny.Handlers` accepts either a handler object or a synchronous or asynchronous
-factory. Use `tiny.imports()` inside the factory to make other handlers
-available as `fn`:
-
-```ts
-import { tiny } from "@tinytools/hono-tools";
-import { signalTools } from "./signals.ts";
-
-export const pageHandlers = new tiny.Handlers(import.meta.url, async () => {
-  const { fn } = await tiny.imports(signalTools);
-  return {
-    handleCommand: function (event: CommandEvent) {
-      const values = fn.useSignal(event);
-      console.log(values);
-    },
-  };
-});
-```
-
-The factory runs once on the server when definitions are first needed. Returned
-handler bodies are never executed during definition or building: they are
-emitted as browser modules. Imports and full builds await definition readiness
-automatically, including production and fresh builds.
-
-- Pass multiple collections in one call: `await tiny.imports(toolA, toolB)`.
-  Duplicate imported names and circular definition dependencies are errors.
-- Only returned handlers are public. Here, components importing `pageHandlers`
-  receive `handleCommand`, not `useSignal`.
-- Static `fn.handlerName()` references are tree-shaken by esbuild. Used handlers
-  remain separate, cacheable ESM files; unused dependencies are not loaded by
-  the consumer. Dynamic `fn[name]` access or passing the whole namespace can
-  retain all candidates. A full build still emits independently registered
-  handlers.
-- Keep the outer binding named `fn`. Original-name destructuring, such as
-  `const { useSignal } = fn`, also works. Renamed outer bindings and arbitrary
-  captured values are not serialized. Avoid identifier mangling in server builds
-  that would rename those captured bindings.
-- To forward an element receiver, use `fn.handlerName.call(this, event)`.
-  Namespace calls do not automatically forward the current handler's `this`.
-- Definition imports provide function references only, not request context,
-  styles, event bindings, or rendering helpers. Calling these references in the
-  outer factory throws; call them inside returned handlers instead.
-
-The existing `tiny.Handlers` API remains supported. Prefer
-`await tiny.imports()` when consuming an async collection. Synchronous
-`getFunctionReferences` access before initialization throws; explicit setup code
-can first await `pageHandlers.ensureDefined()` without building assets.
-
-#### Reusing a client function inside another client function
-
-Use `getFunctionReferences` when a client function needs to call another client
-function during module-level setup.
-
-Why this is required:
-
-- `fn.*` is an activated request-time proxy (available in route/component
-  context)
-- `functions: { ... }` is declared at module load time (no request context yet)
-- `getFunctionReferences` gives stable function references that can be called
-  from inside other client function bodies
-
-There are two different patterns to follow:
-
-- **Across separate instances**: use `otherTools.getFunctionReferences`, and
-  ensure the calling instance includes the referenced tools in `imports: [...]`.
-- **Within the same `Handlers` instance**: if one handler calls another, declare
-  the referenced function at module scope (outside the constructor) and then
-  assign it into the handlers, instead of only declaring it inline.
-
-##### Across separate instances (including different files)
-
-```ts
-import { tiny } from "@tinytools/hono-tools";
-
-const externalHandlers = new tiny.Handlers(import.meta.url, {
-  externalFunction(msg: string) {
-    console.log("external", msg);
-  },
-});
-
-// Module-level reference for composition inside another client function
-const { externalFunction } = externalHandlers.getFunctionReferences;
-
-export const localHandlers = new tiny.Handlers(
-  import.meta.url,
-  // Required when localHandlers calls functions from externalHandlers
-  { imports: [externalHandlers] },
-  {
-    handleClick(this: HTMLElement, _e: MouseEvent) {
-      externalFunction("called from handleClick");
-      this.textContent = "done";
-    },
-  },
-);
-```
-
-##### Within the same `Handlers` instance
-
-```ts
-import { tiny } from "@tinytools/hono-tools";
-
-// Declare at module scope so other handlers can reference it safely. Must be defined in the same file.
-const sharedHandler = function (this: HTMLElement, e: MouseEvent) {
-  console.log("shared", this, e);
-};
-
-export const handlers = new tiny.Handlers(import.meta.url, {
-  sharedHandler,
-  nestedHandler: function (this: HTMLElement, e: MouseEvent) {
-    sharedHandler.call(this, e);
-  },
-});
-```
-
-Use `fn.*` only when attaching handlers in JSX/render code:
-
-```tsx
-app.get("/", async (c) => {
-  const { fn } = await tiny.imports(localHandlers);
-  return c.render(<button onClick={fn.handleClick}>Run</button>);
-});
-```
-
-### Build Module (`@tinytools/hono-tools/build`)
-
-#### Memory-Only Mode
-
-Start the server with `--none` to generate handlers and scoped styles on demand
-in memory, without writing generated files to `public/` or `.cache/`:
-
-```sh
-deno run --allow-net --allow-read --allow-env --allow-run main.tsx --none
-```
-
-Use `tiny.middleware.core()` or `new tiny.Hono({ tools: "core" })` as usual.
-`tiny.imports(...)` prepares assets lazily, including handler dependencies. Core
-serves them from memory at the usual `/handlers/` and `/styles/` URLs. No build
-step is needed; `tiny.build()` and `buildScriptFiles()` reject in this mode.
-
-The mode is process-wide and selected before modules load. `--none` takes
-precedence over `--lazy` and ignores any existing disk cache. Without either
-flag, the existing prebuilt-cache behavior is unchanged.
-
-This avoids generated build files, not runtime compilation: esbuild is still
-required (native or the existing WASM fallback). Runtime dependency installation
-and caching are separate from TinyTools' generated assets. Package client
-scripts and user-provided static assets must still be available to the runtime.
-Standalone client TypeScript files are not transpiled by this mode.
-
-Assets remain in process memory until restart. Restart to pick up source
-changes; source mtimes are not checked. This suits small, long-lived instances
-with read-only deployment filesystems. Each instance must render/import the
-relevant tools before it can serve their assets, so independently routed
-serverless asset requests need instance affinity or a prebuilt deployment.
-
-#### `buildScriptFiles(options?)`
-
-Builds all registered client functions and scoped styles to the public
-directory.
-
-```ts
-import { buildScriptFiles } from "@tinytools/hono-tools/build";
+import { buildScriptFiles } from "tinytools/build";
 
 await buildScriptFiles({
-  clientDir: "./client", // Source directory for client scripts
-  publicDir: "./public", // Output directory
+  publicDir: "./public",
   handlerDir: "./public/handlers",
   stylesDir: "./public/styles",
+  fresh: false,
+  transpileClientFiles: false,
+  clientDir: "./client",
 });
 ```
 
-### Components Module (`@tinytools/hono-tools/components`)
+`buildScriptFiles()` (also `tiny.build()`) defines every registered collection,
+writes every handler bundle and style bundle, removes stale files and persists
+`.cache/clientToolsCache.json`. `fresh: true` skips every cache and existence
+check, for isolated deployments. `transpileClientFiles` transpiles standalone
+`.ts` files from `clientDir` into `publicDir`.
 
-#### `Suspense`
+Three process-wide modes are selected by command-line flags:
 
-Streaming content with fallback support.
+| Mode | Flag     | Behaviour                                                                                    |
+| ---- | -------- | -------------------------------------------------------------------------------------------- |
+| prod | (none)   | Trusts the cache; nothing is built during requests. Falls back to lazy without a cache.      |
+| lazy | `--lazy` | `tiny.imports()` builds or revalidates the collections it needs, on demand, by source mtime. |
+| none | `--none` | Assets are generated in memory and served from it; nothing is written to disk.               |
 
-```tsx
-import { Suspense } from "@tinytools/hono-tools/components";
+Use lazy mode with a file watcher during development and run a build before
+starting in prod mode. Running a build while a watcher is rebuilding can race on
+the cache file; stop the watcher first. In none mode, builds reject and each
+instance must render a collection before it can serve its assets.
 
-<Suspense fallback={<Loading />}>
-  <AsyncContent />
-</Suspense>;
+Add `.cache/`, `public/handlers/` and `public/styles/` to your ignore file.
+
+## Utilities
+
+- `titled(title, handler)` attaches a title to a route handler. The core
+  renderer uses it as the document title and partial responses include it in the
+  head update; `handler.title` is also readable for building navigation.
+- `urlStyleVariables(url)` returns an inline style declaring `--path-<index>`
+  and `--param-<key>` custom properties. Together with `fn.setVariablesFromUrl`
+  on `onCurrentEntryChange`, CSS can react to the URL (for example
+  `@container style(--path-1: 42)`) with no handler code.
+- `queryParamTools.queryParamChanges(fromUrl)` returns a map of changed query
+  parameters between a previous URL and the current entry.
+- `logStartupPerformanceSummary()` prints a startup breakdown. Place marks named
+  `startup:importsComplete` and `startup:routesRegistered`, plus
+  `import:<name>:done` after costly imports and `import:route:<name>:start` /
+  `:end` around route imports, to see them in the summary.
+
+## Diagnostics
+
+A route can pass type checks, builds and full-page checks while partial
+navigation remains unstyled. For routes with their own styles, test the
+sequence: load a different route, navigate with client navigation, confirm new
+`/styles/*.css` links were added to `<head>`, and check one meaningful computed
+style. When styles appear missing, verify in order that the scoped class is in
+the returned HTML, the bundle exists under `public/styles`, the full page links
+it, the `<update>` head links it, and the browser appended the link.
+
+Private fields such as `_styleFilenames` and `_styles` are internal; register
+styles through `tiny.imports()` rather than reading them.
+
+## Development
+
+From the package directory:
+
+```sh
+deno task check   # type-check the public entry points
+deno task lint
+deno task test    # full test suite (writes under ./.test-* and ./public)
 ```
 
-#### `NewPartial`
+`tests/fixtures/events-csp.tsx` is a runnable comparison of legacy and reference
+bindings: `deno run -A tests/fixtures/events-csp.tsx` and open
+`http://127.0.0.1:3047/` (add `?csp` to enable the policy).
 
-Declarative partial page updates.
-
-```tsx
-import { NewPartial } from "@tinytools/hono-tools/components";
-import { partialInsertHandlers } from "@tinytools/hono-tools/handlers";
-
-const app = new Hono()
-  .use(...tiny.middleware.core());
-
-app.get("/profile", async (c) => {
-  const { fn } = await tiny.imports(partialInsertHandlers);
-  return c.render(
-    <NewPartial
-      id="user-profile"
-      onLoad={fn.partialReplace}
-    >
-      <UserProfile />
-    </NewPartial>,
-  );
-});
-```
-
-Available handlers are `partialReplace`, `partialDelete`, `partialBlast`, and
-`partialMergeContent`. Every `NewPartial` requires an `onLoad` handler.
-
-The server renders a `<template for-partial-id="...">` and a module-preload link
-that dispatches its load event. Insertion handlers use `for-partial-id` to find
-the live target and read incoming nodes from the template's content.
-
-Set `cache` to `true` or a route pattern to opt into route caching. Set
-`fullPageLoad` when rendering the initial page to render the content directly.
-
-### Browser Dispatcher
-
-Core includes the `tiny.runHandler` dispatcher inline on full page loads and
-hashes that script in its CSP policy. The dispatcher imports handler modules
-directly from `/handlers/`. There is no separate client entry point, package
-client build, or generated client folder to watch. All other client behavior is
-built into imported handlers.
-
-## Type Safety
-
-The package provides full TypeScript support with branded types for client
-functions:
-
-```tsx
-// Imported references retain their handler signatures.
-const { fn } = await tiny.imports(routeHandlers);
-<button onClick={fn.handleClick}>Click</button>;
-
-// Definitions must be imported before use in JSX.
-const handlers = new tiny.Handlers(import.meta.url, {
-  fn() {},
-});
-<button onClick={handlers.fn}>Click</button>; // Type error!
-```
+Publishing is driven from the workspace root (`deno task release:patch`), which
+bumps the version, publishes to JSR, syncs `package.json` and updates the
+consumers' pins.
 
 ## License
 

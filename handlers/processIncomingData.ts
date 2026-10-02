@@ -25,7 +25,7 @@ export const processIncomingDataTools = new Handlers(import.meta.url, {
     };
 
     if (response.body === null) {
-      console.log("No content to render, response status: ", response.status);
+      console.warn("Empty response body, status:", response.status);
       return;
     }
 
@@ -94,20 +94,18 @@ export const processIncomingDataTools = new Handlers(import.meta.url, {
       ) {
         // Incomplete update, wait for the next chunk.
       } else {
-        // Then its not a partial
-        console.warn("Non-update HTML response, showing in modal:", buffer);
-        // Append to the global modal dialog for display (for debugging/testing)
-        const fragment = globalThis.document.createRange()
-          .createContextualFragment(buffer);
-        const children = Array.from(fragment.children);
-        const popupDialog = document.getElementById(
-          "global-modal",
-        ) as HTMLDialogElement;
-        children.forEach((child) => {
-          popupDialog.appendChild(child);
-        });
-        popupDialog.showModal();
-        buffer = ""; // clear once successfully processed
+        // Not a partial: show the HTML in the page's global modal, if any.
+        console.warn("Non-update HTML response:", buffer);
+        const popupDialog = document.getElementById("global-modal") as
+          | HTMLDialogElement
+          | null;
+        if (typeof popupDialog?.showModal === "function") {
+          const fragment = globalThis.document.createRange()
+            .createContextualFragment(buffer);
+          popupDialog.replaceChildren(...Array.from(fragment.children));
+          popupDialog.showModal();
+        }
+        buffer = "";
       }
     }
     if (buffer.trim()) {

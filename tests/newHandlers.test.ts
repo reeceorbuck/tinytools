@@ -388,7 +388,7 @@ Deno.test("Signals reject non-signal outputs and definition-time value access", 
     );
     const asynchronous = new Signals(
       import.meta.url,
-      (async () => ({})) as never,
+      (() => Promise.resolve({})) as never,
     );
     await assertRejects(
       () => asynchronous.ensureDefined(),

@@ -76,7 +76,9 @@ if (!Deno.args.includes("--none")) {
         const { fn, styled } = await tiny.imports(handlers, styles);
         return context.render(
           <>
-            <button class={styled.button} onClick={fn.click}>Run</button>
+            <button type="button" class={styled.button} onClick={fn.click}>
+              Run
+            </button>
             <UpgradeCustomElement>
               <store-test-output />
             </UpgradeCustomElement>

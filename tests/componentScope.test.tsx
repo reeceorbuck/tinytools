@@ -106,7 +106,7 @@ Deno.test("component scope - transparent components are not marked", async () =>
 });
 
 Deno.test("component scope - tiny.component marks directly-called output", async () => {
-  const direct = async () => component(<main>hi</main>, "Shell");
+  const direct = () => component(<main>hi</main>, "Shell");
   assertEquals(await render(await direct()), '<main data-tc="Shell">hi</main>');
 });
 

@@ -9,6 +9,7 @@ import {
   navigationUrlTools,
 } from "./navigationUrlTools.ts";
 import { processIncomingDataTools } from "./processIncomingData.ts";
+import { queryParamTools } from "./queryParams.ts";
 
 export type AppNavigation = Navigation & {
   inflightGetRequests?: Map<string, AbortController>;
@@ -136,6 +137,7 @@ export const navigationTools = new Handlers(import.meta.url, async () => {
   const { fn } = await imports(
     navigationUrlTools,
     performFetchAndUpdateTools,
+    queryParamTools,
   );
   return {
     /**
@@ -270,52 +272,18 @@ export const navigationTools = new Handlers(import.meta.url, async () => {
       const fromSplitPath = fromUrl.pathname.split("/").filter(Boolean);
       const toSplitPath = toUrl.pathname.split("/").filter(Boolean);
       toSplitPath.forEach((partPath, i) => {
-        // Only update path variables if they have changed
+        // Only update path variables that changed.
         if (partPath !== fromSplitPath[i]) {
-          this.style.setProperty(
-            `--path-${i}`,
-            partPath,
-          );
+          this.style.setProperty(`--path-${i}`, partPath);
         }
       });
-      if (fromSplitPath.length > toSplitPath.length) {
-        // Remove extra path parts
-        for (let i = toSplitPath.length; i < fromSplitPath.length; i++) {
-          this.style.removeProperty(`--path-${i}`);
-        }
+      for (let i = toSplitPath.length; i < fromSplitPath.length; i++) {
+        this.style.removeProperty(`--path-${i}`);
       }
-      const fromParams = fromUrl.searchParams;
-      const paramChanges = toUrl.searchParams.entries().toArray().map(
-        ([key, value]) => {
-          if (fromParams.get(key) === value) return null;
-          return {
-            key,
-            from: fromParams.get(key),
-            to: value || null,
-          };
-        },
-      ).concat(
-        fromParams.entries().toArray().map(([key, value]) => {
-          if (toUrl.searchParams.has(key)) return null;
-          return {
-            key,
-            from: value || null,
-            to: null,
-          };
-        }),
-      ).filter((change) => change !== null);
-      const changeMap = new Map(paramChanges.map(({ key, ...rest }) => [
-        key,
-        rest,
-      ]));
-      changeMap.forEach(({ to }, key) => {
-        if (!to) {
-          this.style.removeProperty(`--param-${key}`);
-        } else {this.style.setProperty(
-            `--param-${key}`,
-            to,
-          );}
-      });
+      for (const [key, { to }] of fn.queryParamChanges(event.from.url)) {
+        if (to) this.style.setProperty(`--param-${key}`, to);
+        else this.style.removeProperty(`--param-${key}`);
+      }
     },
   };
 });

@@ -1,6 +1,13 @@
-export interface PartialAbortableHTMLElement extends HTMLElement {
-  abortController: AbortController;
-}
+/**
+ * Lifecycle components for @tinytools/hono-tools.
+ *
+ * Browsers only fire `load` on a handful of elements, so these components
+ * emit a tiny trigger (an image or a modulepreload link) whose own `load`
+ * event is forwarded to the preceding element. That lets any element bind
+ * `onLoad` to run a handler once it is in the document.
+ *
+ * @module
+ */
 
 import type { PropsWithChildren } from "hono/jsx";
 import type { HtmlEscapedString } from "hono/utils/html";
@@ -8,65 +15,82 @@ import { tiny } from "../mod.ts";
 import { Handlers } from "../clientTools.ts";
 import { transparent } from "../componentScope.ts";
 
+/** An upgraded custom element: its controller aborts when it disconnects. */
+export interface PartialAbortableHTMLElement extends HTMLElement {
+  abortController: AbortController;
+}
+
+/** A 1x1 transparent GIF whose `load` event triggers the preceding element's handler. */
+const TRANSPARENT_PIXEL =
+  "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
+
+/** Forwards lifecycle events to neighbouring elements. */
 const lifecycleHandlers = new Handlers(import.meta.url, {
-  referOnLoadOnce: function (this: HTMLElement, e: Event) {
-    console.log("referOnLoadOnce", e);
+  /** Fires `load` on the previous sibling once, then removes this trigger. */
+  referOnLoadOnce: function (this: HTMLElement, _e: Event): void {
     const target = this.previousSibling;
-    if (target instanceof Element) {
-      target.dispatchEvent(new Event("load"));
-    }
+    if (target instanceof Element) target.dispatchEvent(new Event("load"));
     this.remove();
   },
-  referOnLoad: function (this: HTMLElement, e: Event) {
-    console.log("NEW referOnLoad", e);
+  /** Fires `load` on the first child of the previous sibling. */
+  referOnLoad: function (this: HTMLElement, _e: Event): void {
     const target = this.previousSibling?.firstChild;
-    if (target instanceof Element) {
-      target.dispatchEvent(new Event("load"));
-    }
+    if (target instanceof Element) target.dispatchEvent(new Event("load"));
   },
-  referOnSuspend: function (this: HTMLElement, e: Event) {
-    console.log("NEW referOnSuspend", e);
+  /** Fires `suspend` on this element's first child. */
+  referOnSuspend: function (this: HTMLElement, _e: Event): void {
     const target = this.firstChild;
-    if (target instanceof Element) {
-      target.dispatchEvent(new Event("suspend"));
-    }
+    if (target instanceof Element) target.dispatchEvent(new Event("suspend"));
   },
-  referOnConnect: function (this: HTMLElement) {
+  /** Fires `load` on this element's first element child. */
+  referOnConnect: function (this: HTMLElement): void {
     this.firstElementChild?.dispatchEvent(new Event("load"));
   },
 });
 
+function childList(children: PropsWithChildren["children"]): unknown[] {
+  return Array.isArray(children) ? children.flat() : [children];
+}
+
+/** A modulepreload link for the bundle holding `handlerName`, used as a load trigger. */
+function preloadHref(
+  tools: { _handlerFilenames: ReadonlyMap<string, string> },
+  handlerName: string,
+): string {
+  return `/handlers/${tools._handlerFilenames.get(handlerName)}.js`;
+}
+
+/**
+ * Runs each child's `onLoad` handler once it is in the document, for
+ * elements that do not fire `load` natively.
+ */
 export async function ActivateOnLoadHandler(
   { children }: PropsWithChildren,
 ): Promise<HtmlEscapedString> {
   const { fn } = await tiny.imports(lifecycleHandlers);
-  const childElements = Array.isArray(children) ? children.flat() : [children];
-
   return (
     <>
-      {childElements.map((child) => (
+      {childList(children).map((child) => (
         <>
           {child}
-          <img
-            hidden
-            src="data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs="
-            onLoad={fn.referOnLoadOnce}
-          />
+          <img hidden src={TRANSPARENT_PIXEL} onLoad={fn.referOnLoadOnce} />
         </>
       ))}
     </>
   );
 }
 
+/**
+ * Wraps each child in an `<abortable-lifecycle-element>` that forwards
+ * `load` on connection and `suspend` on removal to the child.
+ */
 export async function ActivateLifecycleHandlers(
   { children }: PropsWithChildren,
 ): Promise<HtmlEscapedString> {
   const { fn } = await tiny.imports(lifecycleHandlers);
-  const childElements = Array.isArray(children) ? children.flat() : [children];
-
   return (
     <>
-      {childElements.map((child) => (
+      {childList(children).map((child) => (
         <>
           <abortable-lifecycle-element
             onLoad={fn.referOnConnect}
@@ -76,9 +100,7 @@ export async function ActivateLifecycleHandlers(
           </abortable-lifecycle-element>
           <link
             rel="modulepreload"
-            href={`/handlers/${
-              lifecycleHandlers._handlerFilenames.get("referOnLoad")
-            }.js`}
+            href={preloadHref(lifecycleHandlers, "referOnLoad")}
             onLoad={fn.referOnLoad}
           />
         </>
@@ -87,232 +109,135 @@ export async function ActivateLifecycleHandlers(
   );
 }
 
-export async function BuildFromTemplateElement(
-  { children, templateId }: PropsWithChildren<{ templateId: string }>,
-) {
-  const { fn } = await tiny.imports(lifecycleHandlers, buildTemplateHandlers);
-  return (
-    <ActivateOnLoadHandler>
-      <temp-element
-        onLoad={fn.buildTemplate}
-        data-template={templateId}
-      >
-        <template>
-          {children}
-        </template>
-      </temp-element>
-    </ActivateOnLoadHandler>
-  );
-}
-
+/** Builds a `<template id="...">` into the element, filling its named slots. */
 export const buildTemplateHandlers = new Handlers(import.meta.url, {
-  buildTemplate: function (this: HTMLElement, _e: Event) {
+  buildTemplate: function (this: HTMLElement, _e: Event): void {
     const templateId = this.dataset.template;
-    if (!templateId) {
-      console.error("Template ID not found!");
+    const template = templateId ? document.getElementById(templateId) : null;
+    if (!(template instanceof HTMLTemplateElement)) {
+      console.error(`buildTemplate: template "${templateId}" not found.`);
       return;
     }
 
-    const template = document.getElementById(templateId) as
-      | HTMLTemplateElement
-      | null;
-
-    if (!template) {
-      console.error("Template not found!");
-      return;
-    }
-    console.log("AAA Template: ", template);
-
-    const templateClone = template.content.cloneNode(
-      true,
-    ) as DocumentFragment;
-
+    const built = template.content.cloneNode(true) as DocumentFragment;
     const childTemplate = this.querySelector("template");
     const insertContent = childTemplate?.content.cloneNode(true) as
       | DocumentFragment
-      | null;
+      | undefined;
 
-    console.log("Insert content: ", insertContent?.cloneNode(true));
-    const slotChildren = Array.from(insertContent?.children ?? []).filter(
-      (child) => child.hasAttribute("slot"),
-    );
-    console.log("Slot children: ", slotChildren);
-    slotChildren?.forEach((slotChild) => {
+    for (const slotChild of Array.from(insertContent?.children ?? [])) {
       const slotName = slotChild.getAttribute("slot");
-      if (!slotName) {
-        console.error("Slot name not found: ", slotChild);
-        return;
-      }
-      const slotElement = templateClone.querySelector(
-        `slot[name="${slotName}"]`,
-      );
+      if (!slotName) continue;
+      const slotElement = built.querySelector(`slot[name="${slotName}"]`);
       if (!slotElement) {
-        console.error("Slot element not found: ", slotName);
-        console.log("templateClone: ", templateClone);
-        return;
+        console.error(`buildTemplate: no slot named "${slotName}".`);
+        continue;
       }
       const inputClone = slotChild.cloneNode(true) as HTMLElement;
       inputClone.removeAttribute("slot");
       slotElement.insertAdjacentElement("beforebegin", inputClone);
-      slotChild.remove();
-    });
-    console.log("Appending template clone: ", templateClone.cloneNode(true));
-    this.appendChild(templateClone);
+    }
+    this.appendChild(built);
     childTemplate?.remove();
   },
-  loadTextArea: function (this: HTMLElement, _e: Event) {
+  /** Replaces the parent element with a textarea carrying its attributes and decoded text. */
+  loadTextArea: function (this: HTMLElement, _e: Event): void {
     const replaceElement = this.parentElement;
     if (!replaceElement) {
-      console.error("No parent element found");
+      console.error("loadTextArea: no parent element found.");
       return;
     }
-    console.log("loadTextArea activated, replaceElement: ", replaceElement);
     const textarea = document.createElement("textarea");
-    Array.from(replaceElement.attributes).forEach((attr) => {
-      textarea.setAttribute(attr.name, attr.value);
-    });
+    for (const attribute of Array.from(replaceElement.attributes)) {
+      textarea.setAttribute(attribute.name, attribute.value);
+    }
     textarea.value = new DOMParser().parseFromString(
       replaceElement.textContent,
       "text/html",
     ).body.textContent;
-    console.log("textarea value: ", textarea.value);
     replaceElement.setAttribute("replaced", "true");
     replaceElement.replaceWith(textarea);
   },
 });
 
-const partialLogic = new Handlers(import.meta.url, {
-  passLoadEvent: function (this: HTMLElement) {
-    const precedingTemplate = this.previousElementSibling;
-    if (precedingTemplate && precedingTemplate.tagName === "TEMPLATE") {
-      precedingTemplate.dispatchEvent(new Event("load"));
-      this.remove();
-    } else {
-      console.error(
-        "No preceding template found for loadPartialTemplate handler.",
-      );
-    }
-  },
-});
-
-// export async function ReferLifecycleEventsOntoParentElement() {
-//   const { fn } = await tiny.imports(partialLogic);
-//   return (
-//     <abortable-lifecycle-element
-//       onLoad={fn.referToPrecedingOnConnect}
-//       onSuspend={fn.referToPrecedingOnSuspend}
-//     >
-//     </abortable-lifecycle-element>
-//   );
-// }
+/**
+ * Renders the child element and builds the `<template id={templateId}>`
+ * into it on load, filling the template's named slots from the children.
+ */
+export async function BuildFromTemplateElement(
+  { children, templateId }: PropsWithChildren<{ templateId: string }>,
+): Promise<HtmlEscapedString> {
+  const { fn } = await tiny.imports(buildTemplateHandlers);
+  return (
+    <ActivateOnLoadHandler>
+      <temp-element onLoad={fn.buildTemplate} data-template={templateId}>
+        <template>{children}</template>
+      </temp-element>
+    </ActivateOnLoadHandler>
+  );
+}
 
 const upgradePrecedingTools = new Handlers(import.meta.url, {
-  upgradePrecedingCustomElement: function (this: HTMLElement) {
-    const precedingCustomElement = this.previousElementSibling as
+  /**
+   * Defines the preceding element's tag as a custom element whose
+   * `connectedCallback` fires `load` and whose `disconnectedCallback`
+   * aborts `abortController`. Elements without a custom tag get a proxy
+   * `<upgrade-preceding>` sibling that forwards those events to them.
+   */
+  upgradePrecedingCustomElement: function (this: HTMLElement): void {
+    const precedingElement = this.previousElementSibling as
       | HTMLElement
       | null;
-    // console.log("UPGRADING precedingCustomElement: ", precedingCustomElement);
-
-    if (!precedingCustomElement) {
-      console.error("No preceding custom element found");
+    if (!precedingElement) {
+      console.error("upgradePrecedingCustomElement: no preceding element.");
       return;
     }
 
-    let upgradeTagName = precedingCustomElement.tagName.toLowerCase();
+    let upgradeTagName = precedingElement.tagName.toLowerCase();
     if (!upgradeTagName.includes("-")) {
       upgradeTagName = "upgrade-preceding";
       const proxyElement = document.createElement(
         upgradeTagName,
       ) as PartialAbortableHTMLElement;
       proxyElement.addEventListener("load", function () {
-        tiny.runHandler(
-          precedingCustomElement,
-          new Event("load"),
-        );
-        // Mutation observer if the previous element is replaced?
+        tiny.runHandler(precedingElement, new Event("load"));
+        // Remove the proxy if the element it stands for is removed.
         const observer = new MutationObserver((mutations) => {
           for (const mutation of mutations) {
-            if (mutation.type === "childList") {
-              for (const removedNode of Array.from(mutation.removedNodes)) {
-                if (removedNode === precedingCustomElement) {
-                  // Remove the new element if the preceding custom element is removed
-                  proxyElement.remove();
-                }
-              }
+            if (Array.from(mutation.removedNodes).includes(precedingElement)) {
+              proxyElement.remove();
             }
           }
         });
-
-        observer.observe(precedingCustomElement.parentElement!, {
-          childList: true,
-        });
+        observer.observe(precedingElement.parentElement!, { childList: true });
         proxyElement.addEventListener("load", () => {
-          tiny.runHandler(
-            precedingCustomElement,
-            new Event("load"),
-          );
-          observer.observe(precedingCustomElement.parentElement!, {
+          tiny.runHandler(precedingElement, new Event("load"));
+          observer.observe(precedingElement.parentElement!, {
             childList: true,
           });
         }, { signal: proxyElement.abortController.signal });
         proxyElement.addEventListener("suspend", () => {
-          tiny.runHandler(
-            precedingCustomElement,
-            new Event("suspend"),
-          );
-          // stop observing when the element is disconnected
+          tiny.runHandler(precedingElement, new Event("suspend"));
           observer.disconnect();
         }, { signal: proxyElement.abortController.signal });
       }, { once: true });
-      precedingCustomElement.insertAdjacentElement("afterend", proxyElement);
+      precedingElement.insertAdjacentElement("afterend", proxyElement);
     }
 
-    const isDefined = customElements.get(
-      upgradeTagName,
-    );
-    if (!isDefined) {
-      // register it
+    if (!customElements.get(upgradeTagName)) {
       customElements.define(
         upgradeTagName,
         class extends HTMLElement {
-          abortController: AbortController;
-
-          constructor() {
-            super();
-            this.abortController = new AbortController();
-          }
+          abortController = new AbortController();
 
           connectedCallback() {
             this.abortController = new AbortController();
             this.dispatchEvent(new Event("load"));
-            try {
-              tiny.runHandler(
-                this,
-                new Event("connect"),
-              );
-            } catch (error) {
-              // May just be because there is no listener for this event
-              console.warn(
-                "Error during connect event (no listener?):",
-                error,
-              );
-            }
+            tiny.runHandler(this, new Event("connect"));
           }
 
           disconnectedCallback() {
-            // this next one should allow for custom events on the element
-            try {
-              tiny.runHandler(
-                this,
-                new Event("disconnect"),
-              );
-            } catch (error) {
-              // May just be because there is no listener for this event
-              console.warn(
-                "Error during disconnect event (no listener?):",
-                error,
-              );
-            }
+            tiny.runHandler(this, new Event("disconnect"));
             this.abortController.abort();
           }
         },
@@ -320,28 +245,29 @@ const upgradePrecedingTools = new Handlers(import.meta.url, {
     }
     this.remove();
   },
-  testSuspension: function (this: HTMLElement) {
-    console.log("testSuspension activated for element: ", this);
-  },
 });
 
-export async function UpgradeCustomElement(props: PropsWithChildren) {
-  const { fn } = await tiny.imports(upgradePrecedingTools, lifecycleHandlers);
-  const childElements = Array.isArray(props.children)
-    ? props.children.flat()
-    : [props.children];
+/**
+ * Upgrades each child to a custom element with lifecycle events: `onLoad`
+ * runs whenever the element connects (including after cached restoration),
+ * `onDisconnect` when it is removed, and its `abortController` aborts on
+ * removal so listeners can clean up.
+ */
+export async function UpgradeCustomElement(
+  props: PropsWithChildren,
+): Promise<HtmlEscapedString> {
+  const { fn } = await tiny.imports(upgradePrecedingTools);
   return (
     <>
-      {childElements.map((child) => (
+      {childList(props.children).map((child) => (
         <>
           {child}
           <link
             rel="modulepreload"
-            href={`/handlers/${
-              lifecycleHandlers._handlerFilenames.get(
-                "referOnLoad",
-              )
-            }.js`}
+            href={preloadHref(
+              upgradePrecedingTools,
+              "upgradePrecedingCustomElement",
+            )}
             onLoad={fn.upgradePrecedingCustomElement}
           />
         </>
@@ -349,20 +275,6 @@ export async function UpgradeCustomElement(props: PropsWithChildren) {
     </>
   );
 }
-
-const usageExampleComponent = async () => {
-  const { fn } = await tiny.imports(upgradePrecedingTools);
-  return (
-    <UpgradeCustomElement>
-      <upgradeable-element
-        onLoad={fn.upgradePrecedingCustomElement}
-        onDisconnect={fn.testSuspension}
-      >
-        <h1>Hello World</h1>
-      </upgradeable-element>
-    </UpgradeCustomElement>
-  );
-};
 
 // Framework wrappers render into the caller's component scope.
 transparent(ActivateOnLoadHandler);
