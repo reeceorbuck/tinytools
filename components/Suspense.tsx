@@ -10,11 +10,10 @@
 import { raw } from "hono/html";
 import { HtmlEscapedCallbackPhase, resolveCallback } from "hono/utils/html";
 import type { HtmlEscapedString } from "hono/utils/html";
-import type { Child, FC, PropsWithChildren } from "hono/jsx";
+import type { Child, PropsWithChildren } from "hono/jsx";
 import { getContext } from "hono/context-storage";
-import { tiny } from "@tinytools/hono-tools";
 import { partialInsertHandlers } from "../handlers/partialInsertHandlers.ts";
-import { headHandler } from "../honoFactory.tsx";
+import { headHandler, tiny } from "../honoFactory.tsx";
 import { NewPartial } from "./NewPartial.tsx";
 import { renderToReadableStream } from "hono/jsx/dom/server";
 import { AssetTags } from "./AssetTags.tsx";
@@ -23,8 +22,8 @@ import { transparent } from "../componentScope.ts";
 export type PartialInsertHandler = Parameters<typeof NewPartial>[0]["onLoad"];
 
 export type SuspenseProps = PropsWithChildren<{
-  // deno-lint-ignore no-explicit-any
-  fallback: any;
+  /** Rendered immediately in place of the children until they resolve. */
+  fallback: Child;
 }>;
 
 export type CustomSuspenseProps = SuspenseProps & {
@@ -95,13 +94,13 @@ let suspenseCounter = 0;
  * });
  * ```
  */
-export const CustomSuspense: FC<CustomSuspenseProps> = async ({
+export async function CustomSuspense({
   children,
   fallback,
   onLoad,
-}) => {
+}: CustomSuspenseProps): Promise<HtmlEscapedString> {
   if (!children) {
-    return fallback?.toString() ?? "";
+    return raw(await childToString(fallback));
   }
   if (!Array.isArray(children)) {
     children = [children];
@@ -147,7 +146,7 @@ export const CustomSuspense: FC<CustomSuspenseProps> = async ({
 
   if (resArray.some((res) => (res as unknown) instanceof Promise)) {
     const index = suspenseCounter++;
-    const fallbackStr = (await fallback?.toString() ?? "") as HtmlEscapedString;
+    const fallbackStr = (await childToString(fallback)) as HtmlEscapedString;
     return raw(
       `<div id="suspended-${index}" style="display:contents">${fallbackStr}</div>`,
       [
@@ -222,13 +221,18 @@ export const CustomSuspense: FC<CustomSuspenseProps> = async ({
   } else {
     return raw(resArray.join(""));
   }
-};
+}
 
-export const Suspense: FC<SuspenseProps> = async (props) => {
+/**
+ * Streams the fallback immediately and replaces it with the resolved content
+ * once the async children finish, using the `partialBlast` insertion handler.
+ */
+export async function Suspense(
+  props: SuspenseProps,
+): Promise<HtmlEscapedString> {
   const { fn } = await tiny.imports(partialInsertHandlers);
-  return await CustomSuspense({ ...props, onLoad: fn.partialBlast }) ??
-    raw("");
-};
+  return await CustomSuspense({ ...props, onLoad: fn.partialBlast });
+}
 
 // Framework wrappers render into the caller's component scope.
 transparent(CustomSuspense);

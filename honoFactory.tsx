@@ -9,7 +9,7 @@ import { raw } from "hono/html";
 import type { Child } from "hono/jsx";
 import { contextStorage } from "hono/context-storage";
 import { jsxRenderer } from "hono/jsx-renderer";
-import type { JSX } from "hono/jsx/jsx-runtime";
+
 import {
   Handlers,
   imports,
@@ -32,10 +32,11 @@ const ROUTE_LAYOUT_APPLIED_KEY = "tinyToolsRouteLayoutApplied";
 const runHandlerScript = `${runHandler.toString()}; const tiny = {runHandler};`;
 
 export type RouteLayoutProps = { children: Child };
-type RouteLayoutComponent = (
+/** A layout callback; it may return the children unchanged. */
+export type RouteLayoutComponent = (
   props: RouteLayoutProps,
   context: Context,
-) => JSX.Element | Promise<JSX.Element>;
+) => Child | Promise<Child>;
 
 function createRouteLayout(
   LayoutComponent: RouteLayoutComponent,
@@ -138,7 +139,9 @@ function isLikelyAssetRequestPath(path: string): boolean {
   return /\.[a-z0-9]{1,8}$/i.test(segments.at(-1) ?? "");
 }
 
+/** Handlers for the `<update>` head section of partial responses. */
 export const headHandler = new Handlers(import.meta.url, {
+  /** Moves the template's title, scripts and stylesheets into `<head>`, waiting for new stylesheets. */
   importIntoHead: async function (this: HTMLTemplateElement) {
     const head = this.content;
     if (head) {
@@ -176,6 +179,7 @@ export const headHandler = new Handlers(import.meta.url, {
       this.remove();
     }
   },
+  /** Appends a partial response's body (templates and their triggers) to the document. */
   cacheRoute: function (this: HTMLTemplateElement) {
     for (const child of Array.from(this.content.children)) {
       document.body.appendChild(child);
@@ -377,10 +381,21 @@ export function runHandler(
     if (dot < 1) continue;
     const name = reference.slice(0, dot);
     const handler = reference.slice(dot + 1);
-    if (registry?.[name]) registry[name][handler].call(el, e);
+    const run = (
+      bundle: Record<string, (this: unknown, event: Event) => unknown>,
+    ) => {
+      if (typeof bundle[handler] !== "function") {
+        console.error(`Handler ${reference} not found in its bundle.`);
+        return;
+      }
+      bundle[handler].call(el, e);
+    };
+    if (registry?.[name]) run(registry[name]);
     else {
-      import(`/handlers/${name}.js`).then((bundle) =>
-        bundle[handler].call(el, e)
+      import(`/handlers/${name}.js`).then(
+        run,
+        (error) =>
+          console.error(`Failed to load handler bundle ${name}:`, error),
       );
     }
   }

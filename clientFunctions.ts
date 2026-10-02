@@ -14,6 +14,7 @@ type AnyFunction = (...args: any[]) => any;
 import { mkdir, rm, stat as fsStat, writeFile } from "node:fs/promises";
 import {
   cache,
+  emptySourceFileCacheEntry,
   generateFullHash,
   generateHandlerHash,
   memoryAssets,
@@ -182,7 +183,6 @@ export class HandlerBundle {
       new Map(options.dependencies);
     handlerBundles.add(this);
     if (this.sourceFileUrl) {
-      cache.registerHandlerForSource(this.sourceFileUrl, this);
       const cached = cache.getCachedHandler(
         this.sourceFileUrl,
         BUNDLE_CACHE_KEY,
@@ -297,12 +297,7 @@ export class HandlerBundle {
       ?.replace(/\.[^.]+$/, "").replace(/\W/g, "_") || "handlers";
     const filename = `${baseName}_${generateHandlerHash(parts.join("\n"))}`;
     if (this.sourceFileUrl) {
-      cache.files[this.sourceFileUrl] ??= {
-        mtimeMs: 0,
-        externalImports: [],
-        handlers: {},
-        styles: {},
-      };
+      cache.files[this.sourceFileUrl] ??= emptySourceFileCacheEntry();
       cache.setCachedHandler(
         this.sourceFileUrl,
         BUNDLE_CACHE_KEY,

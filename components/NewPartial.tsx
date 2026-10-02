@@ -4,7 +4,7 @@ import type { HtmlEscapedString } from "hono/utils/html";
 import { Handlers } from "../clientTools.ts";
 import { tiny } from "../honoFactory.tsx";
 import { routeCacheTools } from "../handlers/routeCacheTools.ts";
-import type { ActivatedClientFunction } from "../jsx-runtime.ts";
+import type { ActivatedClientFunction, JSX } from "../jsx-runtime.ts";
 import type { HandlerReference } from "../eventAttributes.ts";
 import { PartialCacheRoutes } from "./ClientRoutes.tsx";
 import { UpgradeCustomElement } from "./ActivateOnLoadHandler.tsx";
@@ -13,18 +13,22 @@ import { transparent } from "../componentScope.ts";
 import { getDisplayedPath } from "../sse.ts";
 
 const partialLogic = new Handlers(import.meta.url, {
-  passLoadEvent: function (this: HTMLElement) {
+  /** Fires `load` on the preceding `<template>` so its insertion handler runs. */
+  passLoadEvent: function (this: HTMLElement): void {
     const precedingTemplate = this.previousElementSibling;
-    if (precedingTemplate && precedingTemplate.tagName === "TEMPLATE") {
+    if (precedingTemplate?.tagName === "TEMPLATE") {
       precedingTemplate.dispatchEvent(new Event("load"));
       this.remove();
     } else {
-      console.error(
-        "No preceding template found for loadPartialTemplate handler.",
-      );
+      console.error("passLoadEvent: no preceding template found.");
     }
   },
 });
+
+/** The modulepreload link that triggers a partial template's insertion handler. */
+function passLoadEventHref(): string {
+  return `/handlers/${partialLogic._handlerFilenames.get("passLoadEvent")}.js`;
+}
 
 type PartialInsertHandler =
   | HandlerReference<
@@ -36,19 +40,28 @@ type PartialInsertHandler =
   >;
 
 export type PartialProps = PropsWithChildren<{
+  /** Insertion handler run when the partial's template loads, e.g. `fn.partialReplace`. */
   onLoad: PartialInsertHandler;
+  /** The `id` of the live element the partial targets. */
   id?: string;
+  /** Group name for `partialMergeContent` matching. */
   groupName?: string;
+  /** `true` caches under the request path; a string gives the URLPattern to cache under. */
   cache?: boolean | string;
   /**
    * Path that server update patterns are tested against while this content
    * is cached. Defaults to the page path the content is displayed under.
    */
   updatePath?: string;
+  /** Render the children in place (the layout already placed them in the target). */
   fullPageLoad?: boolean;
   [attribute: string]: unknown;
 }>;
 
+/**
+ * Declares a partial page update: a `<template for-partial-id>` holding the
+ * children plus a modulepreload trigger that runs `onLoad` once it arrives.
+ */
 export async function NewPartial(
   props: PartialProps,
 ): Promise<HtmlEscapedString> {
@@ -99,9 +112,7 @@ export async function NewPartial(
                 </template>
                 <link
                   rel="modulepreload"
-                  href={`/handlers/${
-                    partialLogic._handlerFilenames.get("passLoadEvent")
-                  }.js`}
+                  href={passLoadEventHref()}
                   onLoad={fn.passLoadEvent}
                 />
               </client-route>
@@ -127,19 +138,22 @@ export async function NewPartial(
       </template>
       <link
         rel="modulepreload"
-        href={`/handlers/${
-          partialLogic._handlerFilenames.get("passLoadEvent")
-        }.js`}
+        href={passLoadEventHref()}
         onLoad={fn.passLoadEvent}
       />
     </>
   );
 }
 
+/**
+ * Replaces the children of `#id` (or the element itself with
+ * `includeWrapper`) with this partial's children.
+ */
 export const PartialReplace = async function (
   props: PropsWithChildren<{
     id: string;
     fullPageLoad?: boolean;
+    /** Replace the target element itself rather than its children. */
     includeWrapper?: boolean;
     cache?: boolean | string;
     updatePath?: string;
@@ -159,8 +173,10 @@ export const PartialReplace = async function (
   );
 };
 
+/** A `PartialReplace` whose outgoing content is cached for client-side restoration. */
 export const PartialReplaceWithCache = function (
   props: PropsWithChildren<{
+    /** URLPattern to cache under; defaults to the request path. */
     path?: string;
     /** Path matched by server update patterns while cached. */
     updatePath?: string;
@@ -168,7 +184,7 @@ export const PartialReplaceWithCache = function (
     fullPageLoad?: boolean;
     includeWrapper?: boolean;
   }>,
-) {
+): JSX.Element {
   return (
     <PartialReplace
       id={props.id}
@@ -182,11 +198,10 @@ export const PartialReplaceWithCache = function (
   );
 };
 
+/** Removes `#id` from the page. */
 export const PartialDelete = async function (
-  props: {
-    id: string;
-  },
-) {
+  props: { id: string },
+): Promise<HtmlEscapedString> {
   const { fn } = await tiny.imports(partialInsertHandlers);
   return (
     <NewPartial

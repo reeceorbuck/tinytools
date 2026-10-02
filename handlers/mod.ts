@@ -1,3 +1,12 @@
+/**
+ * Browser handler collections shipped with @tinytools/hono-tools.
+ *
+ * Import a collection with `tiny.imports()` to bind its handlers in JSX; only
+ * the bundles of handlers actually accessed are loaded by the page.
+ *
+ * @module
+ */
+
 export {
   applyNavigationHandlers,
   type AppNavigation,
@@ -9,6 +18,11 @@ export {
   processIncomingDataTools,
 } from "./processIncomingData.ts";
 export { partialInsertHandlers } from "./partialInsertHandlers.ts";
-export { type SignalEvent, signalTools } from "./signals.ts";
+export {
+  type SignalElement,
+  type SignalEvent,
+  signalTools,
+} from "./signals.ts";
+export { commandSignalTools } from "./commandSignals.ts";
 export { sseTools } from "./sseTools.ts";
 export { queryParamTools } from "./queryParams.ts";

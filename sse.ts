@@ -1,15 +1,34 @@
+/**
+ * Server-sent event stream tracking for @tinytools/hono-tools.
+ *
+ * Applications register their own SSE endpoint and call {@link addStream} /
+ * {@link removeStream} for each connection. {@link trackConnectedClients}
+ * records which page paths each client has displayed, so server events can
+ * be sent only to clients that are showing (or have cached) affected content.
+ *
+ * @module
+ */
+
 import { getCookie, setCookie } from "hono/cookie";
 import { createMiddleware } from "hono/factory";
-import type { Context } from "hono";
+import type { Context, MiddlewareHandler } from "hono";
 import type { SSEStreamingApi } from "hono/streaming";
+
+/** Name of the cookie identifying a browser's SSE connection. */
+export const SSE_ID_COOKIE = "sseId";
+
+/** How long a path record is kept for a client whose stream has closed. */
+const INACTIVE_STREAM_TTL_MS = 10_000;
+
+/** Maximum number of recently displayed paths remembered per client. */
+const MAX_TRACKED_PATHS = 10;
 
 export interface StreamData {
   id: string;
   userName: string;
   userAgent: string;
-  paths: Map<string, {
-    lastUpdated: number;
-  }>;
+  /** Recently displayed page paths, oldest first. */
+  paths: Map<string, { lastUpdated: number }>;
 }
 
 export function getTrackedStreamPaths(
@@ -29,10 +48,7 @@ export function streamHasExactPath(
   streamData: Pick<StreamData, "paths">,
   path: string,
 ): boolean {
-  return streamHasMatchingPath(
-    streamData,
-    (trackedPath) => trackedPath === path,
-  );
+  return streamData.paths.has(path);
 }
 
 export function streamHasPathPrefix(
@@ -61,22 +77,22 @@ export function streamHasPathPattern(
   );
 }
 
-/** Streams that have visited a path matching one of the patterns. */
+/** Streams that have displayed a path matching one of the patterns. */
 export function getStreamsMatchingPaths(
   patterns: readonly string[],
 ): Set<SSEStreamingApi> {
-  return new Set(
-    activeStreams.entries().filter(([, streamData]) =>
-      streamHasPathPattern(streamData, patterns)
-    ).map(([stream]) => stream),
-  );
+  const matching = new Set<SSEStreamingApi>();
+  for (const [stream, streamData] of activeStreams) {
+    if (streamHasPathPattern(streamData, patterns)) matching.add(stream);
+  }
+  return matching;
 }
 
 /**
  * The page path a request's response is displayed under: the request path,
  * or for `/api/` requests the `destination-url` pathname. Undefined when the
- * request isn't displayed as a page (API call without a destination, or a
- * dot-path asset).
+ * request is not displayed as a page (an API call without a destination, or
+ * a dot-path asset).
  */
 export function getDisplayedPath(c: Context): string | undefined {
   let path = c.req.path;
@@ -88,53 +104,47 @@ export function getDisplayedPath(c: Context): string | undefined {
   return path.startsWith("/.") ? undefined : path;
 }
 
+/** Every open stream and what its client has displayed. */
 export const activeStreams: Map<SSEStreamingApi, StreamData> = new Map();
+
+/**
+ * Streams by client id. A string value is the last displayed path of a client
+ * whose stream has closed, kept briefly so a reconnecting client keeps it.
+ */
 const streamsById: Map<string, SSEStreamingApi | string> = new Map();
 
-class AddedStreamEvent extends Event {
+export class AddedStreamEvent extends Event {
   static readonly eventName = "streamAdded";
 
-  readonly stream: SSEStreamingApi;
-  readonly addedId: string;
-
-  constructor(stream: SSEStreamingApi, addedId: string) {
-    super(AddedStreamEvent.eventName, { bubbles: true, composed: true });
-    this.stream = stream;
-    this.addedId = addedId;
+  constructor(readonly stream: SSEStreamingApi, readonly addedId: string) {
+    super(AddedStreamEvent.eventName);
   }
 }
 
-class RemovedStreamEvent extends Event {
+export class RemovedStreamEvent extends Event {
   static readonly eventName = "streamRemoved";
 
-  readonly removedId: string;
-
-  constructor(removedId: string) {
-    super(RemovedStreamEvent.eventName, { bubbles: true, composed: true });
-    this.removedId = removedId;
+  constructor(readonly removedId: string) {
+    super(RemovedStreamEvent.eventName);
   }
 }
 
-class UpdatedStreamEvent extends Event {
+export class UpdatedStreamEvent extends Event {
   static readonly eventName = "streamUpdated";
 
-  readonly stream: SSEStreamingApi;
-  readonly updatedId: string;
-
-  constructor(stream: SSEStreamingApi, updatedId: string) {
-    super(UpdatedStreamEvent.eventName, { bubbles: true, composed: true });
-    this.stream = stream;
-    this.updatedId = updatedId;
+  constructor(readonly stream: SSEStreamingApi, readonly updatedId: string) {
+    super(UpdatedStreamEvent.eventName);
   }
 }
 
-interface StreamEventMap {
+export interface StreamEventMap {
   streamAdded: AddedStreamEvent;
   streamRemoved: RemovedStreamEvent;
   streamUpdated: UpdatedStreamEvent;
 }
 
-class TypedEventTarget {
+/** An `EventTarget` whose listeners are typed by {@link StreamEventMap}. */
+export class StreamEventTarget {
   #target = new EventTarget();
 
   addEventListener<K extends keyof StreamEventMap>(
@@ -142,16 +152,7 @@ class TypedEventTarget {
     listener: ((event: StreamEventMap[K]) => void) | null,
     options?: boolean | AddEventListenerOptions,
   ): void {
-    if (!listener) {
-      this.#target.addEventListener(type, null, options);
-      return;
-    }
-
-    this.#target.addEventListener(
-      type,
-      listener as EventListener,
-      options,
-    );
+    this.#target.addEventListener(type, listener as EventListener, options);
   }
 
   removeEventListener<K extends keyof StreamEventMap>(
@@ -159,26 +160,18 @@ class TypedEventTarget {
     listener: ((event: StreamEventMap[K]) => void) | null,
     options?: boolean | EventListenerOptions,
   ): void {
-    if (!listener) {
-      this.#target.removeEventListener(type, null, options);
-      return;
-    }
-
-    this.#target.removeEventListener(
-      type,
-      listener as EventListener,
-      options,
-    );
+    this.#target.removeEventListener(type, listener as EventListener, options);
   }
 
-  dispatchEvent(event: StreamEventMap[keyof StreamEventMap]): boolean;
-  dispatchEvent(event: Event): boolean {
+  dispatchEvent(event: StreamEventMap[keyof StreamEventMap]): boolean {
     return this.#target.dispatchEvent(event);
   }
 }
 
-export const streamEvents = new TypedEventTarget();
+/** Emits `streamAdded`, `streamRemoved` and `streamUpdated` events. */
+export const streamEvents: StreamEventTarget = new StreamEventTarget();
 
+/** Registers a newly connected stream under the client's id. */
 export function addStream(
   { id, userName, userAgent, stream }: {
     id: string;
@@ -186,13 +179,11 @@ export function addStream(
     userAgent: string;
     stream: SSEStreamingApi;
   },
-) {
+): void {
   const existingEntry = streamsById.get(id);
   if (existingEntry && typeof existingEntry !== "string") {
-    console.log("Stream with this ID already exists: ", id);
+    console.warn(`[tiny-tools] SSE stream ${id} is already connected.`);
     return;
-  } else if (existingEntry) {
-    console.log("Activating existing inactive stream found for ID: ", id);
   }
 
   activeStreams.set(stream, {
@@ -204,49 +195,50 @@ export function addStream(
     userAgent,
   });
   streamsById.set(id, stream);
-  console.log("New SSE stream added, active count:", activeStreams.size);
+  console.log(`[tiny-tools] SSE stream added (${activeStreams.size} active).`);
   streamEvents.dispatchEvent(new AddedStreamEvent(stream, id));
 }
 
-export function setInactiveStream(id: string, path: string) {
+/**
+ * Remembers `path` for a client without an open stream, so a reconnection
+ * within the inactive TTL keeps receiving updates for it.
+ */
+export function setInactiveStream(id: string, path: string): void {
   streamsById.set(id, path);
-  console.log("Inactive SSE stream added, active count:", activeStreams.size);
   setTimeout(() => {
-    const entry = streamsById.get(id);
-    if (entry && typeof entry === "string") {
-      streamsById.delete(id);
-      console.log("Inactive SSE stream removed:", id);
-    } else {
-      console.log("Inactive SSE stream not removed, active stream exists:", id);
-    }
-  }, 10000);
+    if (typeof streamsById.get(id) === "string") streamsById.delete(id);
+  }, INACTIVE_STREAM_TTL_MS);
 }
 
-export function removeStream(stream: SSEStreamingApi) {
+/** Removes a closed stream, keeping its last path briefly for reconnection. */
+export function removeStream(stream: SSEStreamingApi): void {
   const entry = activeStreams.get(stream);
   if (!entry) return;
 
   activeStreams.delete(stream);
 
-  const currentEntry = streamsById.get(entry.id);
-  if (currentEntry === stream) {
-    const lastPath = [...entry.paths.keys()].pop();
-    if (lastPath) {
-      setInactiveStream(entry.id, lastPath);
-    } else {
-      streamsById.delete(entry.id);
-    }
+  if (streamsById.get(entry.id) === stream) {
+    const lastPath = getTrackedStreamPaths(entry).at(-1);
+    if (lastPath) setInactiveStream(entry.id, lastPath);
+    else streamsById.delete(entry.id);
   }
 
-  console.log("SSE stream removed, active count:", activeStreams.size);
+  console.log(
+    `[tiny-tools] SSE stream removed (${activeStreams.size} active).`,
+  );
   streamEvents.dispatchEvent(new RemovedStreamEvent(entry.id));
 }
 
+/**
+ * Records that client `id` is now displaying `path`, optionally replacing a
+ * previously recorded path (for example after a client-side redirect).
+ * Returns the client's tracked paths.
+ */
 export function updateStreamPath(
   id: string,
   path: string,
   replacePath?: string,
-) {
+): Map<string, { lastUpdated: number }> {
   let streamOrPath = streamsById.get(id);
   if (!streamOrPath) {
     setInactiveStream(id, path);
@@ -255,87 +247,69 @@ export function updateStreamPath(
 
   if (typeof streamOrPath === "string") {
     streamsById.set(id, path);
-    console.log(
-      `Updated inactive stream path for SSE ID: ${id}, path: ${path}`,
-    );
     return new Map([[path, { lastUpdated: Date.now() }]]);
   }
 
   const streamData = activeStreams.get(streamOrPath);
-  if (!streamData) throw new Error(`No stream data found for stream id: ${id}`);
+  if (!streamData) throw new Error(`No stream data found for stream id ${id}`);
 
-  if (replacePath) {
-    console.log("replacePath: ", replacePath);
-    const matchedReplacePath = streamData.paths.get(replacePath);
-    console.log("matchedReplacePath: ", matchedReplacePath);
-    if (matchedReplacePath) streamData.paths.delete(replacePath);
-  }
-
-  const matchedPath = streamData.paths.get(path);
-  if (matchedPath) streamData.paths.delete(path);
+  if (replacePath) streamData.paths.delete(replacePath);
+  // Re-inserting moves the path to the end, keeping the map ordered by recency.
+  streamData.paths.delete(path);
   streamData.paths.set(path, { lastUpdated: Date.now() });
 
-  if (streamData.paths.size > 10) {
-    const firstKey = streamData.paths.keys().next().value;
-    if (!firstKey) throw new Error("No first key found in stream paths");
-    streamData.paths.delete(firstKey);
+  while (streamData.paths.size > MAX_TRACKED_PATHS) {
+    const oldest = streamData.paths.keys().next().value!;
+    streamData.paths.delete(oldest);
   }
-
-  console.log(`Updated stream data for SSE ID: ${id}, path: ${path}`);
 
   streamEvents.dispatchEvent(new UpdatedStreamEvent(streamOrPath, id));
   return streamData.paths;
 }
 
-export function getStreamDataById(id: string) {
+/** The open stream and tracked data for a client id, if connected. */
+export function getStreamDataById(
+  id: string,
+): { stream: SSEStreamingApi; streamData: StreamData | undefined } | undefined {
   const stream = streamsById.get(id);
   if (!stream || typeof stream === "string") return undefined;
   return { stream, streamData: activeStreams.get(stream) };
 }
 
-export const trackConnectedClients = createMiddleware(async (c, next) => {
-  if (c.req.path === "/sse" || c.req.path.startsWith("/sse/")) {
-    await next();
-    return;
-  }
-
-  const displayedPath = getDisplayedPath(c);
-  const blockPathUpdate = displayedPath === undefined;
-  const path = displayedPath ?? c.req.path;
-
-  const existingSseId = getCookie(c, "sseId");
-  const sseId = existingSseId || crypto.randomUUID();
-  c.set("sseId", sseId);
-
-  if (!blockPathUpdate) {
-    if (!existingSseId) {
-      console.log("No existing SSE ID cookie found in request");
-      setCookie(c, "sseId", sseId);
-      console.log("Assigned new sseId cookie: ", sseId);
+/**
+ * Assigns each browser an `sseId` cookie and records the page path every
+ * response is displayed under. Sets `sseId` and `paths` on the context.
+ * Requests under `/sse` are left alone.
+ */
+export const trackConnectedClients: MiddlewareHandler = createMiddleware(
+  async (c, next) => {
+    if (c.req.path === "/sse" || c.req.path.startsWith("/sse/")) {
+      await next();
+      return;
     }
 
-    const updatedPaths = updateStreamPath(sseId, path);
-    console.log("Updated paths: ", updatedPaths);
-    c.set("paths", updatedPaths.entries().toArray());
-  } else if (existingSseId) {
-    const data = getStreamDataById(existingSseId);
-    c.set("paths", data?.streamData?.paths.entries().toArray());
-  }
+    const displayedPath = getDisplayedPath(c);
+    const existingSseId = getCookie(c, SSE_ID_COOKIE);
+    const sseId = existingSseId || crypto.randomUUID();
+    c.set("sseId", sseId);
 
-  await next();
+    if (displayedPath !== undefined) {
+      if (!existingSseId) {
+        setCookie(c, SSE_ID_COOKIE, sseId, {
+          path: "/",
+          httpOnly: true,
+          sameSite: "Lax",
+        });
+      }
+      c.set("paths", [...updateStreamPath(sseId, displayedPath)]);
+    } else if (existingSseId) {
+      const data = getStreamDataById(existingSseId);
+      c.set("paths", data?.streamData ? [...data.streamData.paths] : undefined);
+    }
 
-  console.log("Finished processing request for path: ", c.req.path);
-  const redirectedPath = c.res.headers.get("X-spa-redirect");
-  if (redirectedPath) {
-    console.log(
-      "Request has X-spa-redirect header, redirectedPath: ",
-      redirectedPath,
-    );
-    const redirectedPaths = updateStreamPath(
-      sseId,
-      redirectedPath,
-      c.req.path,
-    );
-    console.log("Updated paths after redirect: ", redirectedPaths);
-  }
-});
+    await next();
+
+    const redirectedPath = c.res.headers.get("X-spa-redirect");
+    if (redirectedPath) updateStreamPath(sseId, redirectedPath, c.req.path);
+  },
+);

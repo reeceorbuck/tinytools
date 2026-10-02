@@ -7,6 +7,7 @@ import {
 import type { JSX } from "./jsx-runtime.ts";
 import { headHandler, tiny } from "./honoFactory.tsx";
 
+/** The part of Hono's SSE stream API that {@link sendUpdateStream} writes to. */
 export interface UpdateStreamApi {
   writeSSE(payload: { data: string }): Promise<unknown>;
 }
@@ -19,47 +20,39 @@ export interface SendUpdateOptions {
    * whose `update-path` matches. Without paths it applies to the live page.
    */
   paths?: readonly string[];
+  /** Called for each stream that could not be written to (usually closed). */
   onStreamWriteError?: (stream: UpdateStreamApi) => void;
 }
 
-export let lastUpdated = Date.now();
-
+/**
+ * Renders `content` as a partial `<update>` document and writes it to every
+ * stream. The update carries a head section importing any handler bundles and
+ * stylesheets the content used, so pushed partials work like partial
+ * navigation responses.
+ *
+ * @example
+ * ```tsx
+ * sendUpdateStream(
+ *   <PartialReplace id="status">Updated</PartialReplace>,
+ *   getStreamsMatchingPaths(["/dashboard"]),
+ *   { paths: ["/dashboard"] },
+ * );
+ * ```
+ */
 export async function sendUpdateStream(
-  jsxContent: JSX.Element,
-  watchingStreams: Set<UpdateStreamApi>,
-  options:
-    | SendUpdateOptions
-    | SendUpdateOptions["onStreamWriteError"] = {},
-) {
+  content: JSX.Element,
+  streams: Iterable<UpdateStreamApi>,
+  options: SendUpdateOptions | SendUpdateOptions["onStreamWriteError"] = {},
+): Promise<void> {
   const { paths, onStreamWriteError } = typeof options === "function"
     ? { paths: undefined, onStreamWriteError: options }
     : options;
-  console.log(
-    `Sending out stream notifications to ${watchingStreams.size} clients`,
-  );
-  lastUpdated = Date.now();
+  const targets = [...streams];
+  if (targets.length === 0) return;
 
   const toolUsageTracker = createNoContextToolUsageTracker();
-
-  // const wrappedContent = (
-  //   <update>
-  //     <template>
-  //       <head-update>
-  //         <AssetTags
-  //           accessedHandlerFiles={toolUsageTracker.accessedHandlerFiles}
-  //           accessedStyleFiles={toolUsageTracker.accessedStyleFiles}
-  //         />
-  //       </head-update>
-  //       <body-update>
-  //         {jsxContent}
-  //       </body-update>
-  //     </template>
-  //   </update>
-  // );
-
   const { fn } = await tiny.imports(headHandler);
-
-  const wrappedContent = (
+  const update = (
     <update update-paths={paths?.length ? JSON.stringify(paths) : undefined}>
       <NewPartial onLoad={fn.importIntoHead}>
         <AssetTags
@@ -67,25 +60,24 @@ export async function sendUpdateStream(
           accessedStyleFiles={toolUsageTracker.accessedStyleFiles}
         />
       </NewPartial>
-      {jsxContent}
+      {content}
     </update>
   );
 
+  const decoder = new TextDecoder();
   await withNoContextToolUsageTracker(toolUsageTracker, async () => {
-    await renderToReadableStream(wrappedContent).pipeTo(
+    await renderToReadableStream(update).pipeTo(
       new WritableStream({
         async write(chunk) {
-          const chunkString = new TextDecoder().decode(chunk);
-          await Promise.all([...watchingStreams].map(async (stream) => {
-            // console.log(
-            //   `Writing update to stream, chunk: ${chunkString}`,
-            // );
+          const data = decoder.decode(chunk, { stream: true });
+          await Promise.all(targets.map(async (stream) => {
             try {
-              await stream.writeSSE({ data: chunkString });
-            } catch (_error) {
+              await stream.writeSSE({ data });
+            } catch (error) {
               onStreamWriteError?.(stream);
               console.error(
-                `Failed writing to stream ${stream}. It may be closed.`,
+                "[tiny-tools] Failed writing an update to a stream; it may be closed.",
+                error,
               );
             }
           }));

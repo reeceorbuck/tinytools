@@ -71,7 +71,6 @@ export const jsxAttr = (
   } ${honoJsxAttr(...handlerAttribute as [string, string])}`;
 };
 import type { JSX as HonoJSX } from "hono/jsx/jsx-runtime";
-import type { ClientTools } from "./clientTools.ts";
 import type { IncomingDataEvent } from "./handlers/processIncomingData.ts";
 
 /**
@@ -191,24 +190,7 @@ export type ActivateClientFunctions<T> =
     multiHandlerSync(
       ...handlers: ActivatedClientFunction[]
     ): ActivatedClientFunction;
-
-    /**
-     * Activate local component functions and merge them with context fn.
-     * Returns a single proxy that should be used for all handler references in the component.
-     */
-    // deno-lint-ignore no-explicit-any
-    extend<TLocal extends { [key: string]: any }>(
-      localFactory: TLocal,
-    ): ActivateClientFunctions<T & ActivateAllInFactory<TLocal>>;
   };
-
-/**
- * Helper to extract and activate all functions from a ClientTools.
- * @internal
- */
-// deno-lint-ignore no-explicit-any
-type ActivateAllInFactory<T> = T extends ClientTools<infer A, any> ? A
-  : never;
 
 /**
  * Type guard to check if a value is a ClientFunction at the type level.
@@ -237,6 +219,7 @@ export type IsClientFunction<T> = T extends ClientFunction<infer _F> ? true
  * 2. Access handlers through tiny.imports() (not the factory)
  */
 type ClientEventHandler<E extends Event> =
+  // deno-lint-ignore no-explicit-any
   | ActivatedClientFunction<(this: any, event: E) => void>
   | HandlerReference<string, (event: E) => unknown>
   | readonly HandlerReference<string, (event: E) => unknown>[]

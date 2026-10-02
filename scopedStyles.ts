@@ -1,14 +1,19 @@
 /**
- * Scoped Styles Registry module for @tinytools/hono-tools
+ * Scoped styles for @tinytools/hono-tools.
  *
- * Provides shared registries for scoped CSS styles.
- * The actual implementation is in clientTools.ts.
+ * A `tiny.Styles` collection turns each `css` block into a {@link ScopedStyleImpl}
+ * whose generated class name is a content hash. The CSS is emitted inside an
+ * `@scope` rule so a style only reaches the elements below the one carrying
+ * its class, stopping at the next scope boundary. This module holds the style
+ * registries and the scope helpers (`setCustomScope`); bundling lives in
+ * `clientTools.ts` and `build.ts`.
  *
  * @module
  */
 
 import {
   cache,
+  emptySourceFileCacheEntry,
   generateStyleHash,
   normalizeSourceFileUrl,
 } from "./clientTools.ts";
@@ -233,18 +238,17 @@ export interface ScopedStyleEntry {
   revalidate(): Promise<boolean>;
 }
 
-/** Global registry of all scoped styles for build process */
-export const scopedStylesRegistry = new Map<string, ScopedStyleEntry>();
+/** Every scoped style, keyed by its generated filename (class name). */
+export const scopedStylesRegistry: Map<string, ScopedStyleEntry> = new Map();
 
 /**
- * Global registry of style bundles for the build process.
- * Maps bundle filename -> array of constituent ScopedStyleImpl instances.
- * Each ClientTools instance with scoped styles registers one bundle here.
+ * Style bundles for the build process, keyed by bundle filename. Each
+ * `tiny.Styles` instance registers one bundle holding its own styles.
  */
-export const styleBundleRegistry = new Map<string, ScopedStyleEntry[]>();
+export const styleBundleRegistry: Map<string, ScopedStyleEntry[]> = new Map();
 
-/** Track which styles had filename changes this run */
-export const changedStyleKeys = new Set<string>();
+/** `sourceFileUrl::styleName` keys of styles whose filename changed this run. */
+export const changedStyleKeys: Set<string> = new Set();
 
 /**
  * Type for the tracked scoped styles - each style returns a class name string.
@@ -349,24 +353,11 @@ export class ScopedStyleImpl {
       );
     }
 
-    let resolvedFilename: string;
-    if (cachedFilename) {
-      resolvedFilename = cachedFilename;
-    } else {
-      console.log(
-        "Generating filename for scoped style by hashing:",
-        styleName,
-      );
-      resolvedFilename = `${styleName}_${generateStyleHash(hashInput)}`;
-    }
+    const resolvedFilename = cachedFilename ??
+      `${styleName}_${generateStyleHash(hashInput)}`;
 
     if (normalizedSourceFileUrl) {
-      cache.files[normalizedSourceFileUrl] ??= {
-        mtimeMs: 0,
-        externalImports: [],
-        handlers: {},
-        styles: {},
-      };
+      cache.files[normalizedSourceFileUrl] ??= emptySourceFileCacheEntry();
 
       cache.setCachedStyle(
         normalizedSourceFileUrl,

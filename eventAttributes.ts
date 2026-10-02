@@ -1,11 +1,13 @@
 import type { ActivatedClientFunction } from "./jsx-runtime.ts";
 import { tryGetContext } from "hono/context-storage";
 
+/** Context variable recording whether the CSP-friendly reference transform is active. */
 export const CSP_ENABLED_KEY = "tinyToolsCspEnabled";
 
-// export const eventHandlerBody =
-//   'return globalThis.handlers[this.getAttribute("tt-handler-"+event.type)].call(this,event)';
-
+/**
+ * The inline attribute body every TinyTools event binding emits. It is shared by
+ * all events and handlers so one CSP hash authorises every binding.
+ */
 export const eventHandlerBody = "tiny.runHandler(this,event)";
 
 /** Matches `handlers.<bundle>.<name>.call(this, event)`, capturing `<bundle>.<name>`. */
@@ -20,6 +22,19 @@ export type HandlerReference<TName extends string, TFunction> = {
     readonly signature: TFunction;
   };
 };
+
+/**
+ * Type for a component prop that receives an imported handler reference, such as
+ * `fn.handleClick`, which the component forwards to an element's event attribute.
+ *
+ * @example
+ * ```tsx
+ * function Card(props: { onLoad?: HandlerProp<(this: HTMLElement) => void> }) {
+ *   return <article onLoad={props.onLoad}>...</article>;
+ * }
+ * ```
+ */
+export type HandlerProp<TFunction> = HandlerReference<string, TFunction>;
 
 export type HandlerReferences<TFunctions> = {
   readonly [Name in keyof TFunctions]:

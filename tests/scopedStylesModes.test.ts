@@ -1,5 +1,5 @@
 import { assertEquals } from "@std/assert";
-import { Handlers, Styles } from "../clientTools.ts";
+import { Styles } from "../clientTools.ts";
 import {
   css,
   mergeClassNames,

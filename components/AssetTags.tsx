@@ -1,75 +1,65 @@
-import type { FC } from "hono/jsx";
 import { tryGetContext } from "hono/context-storage";
 import { transparent } from "../componentScope.ts";
 import { handlerFileDependencies } from "../clientFunctions.ts";
+import type { JSX } from "../jsx-runtime.ts";
 
 type AssetTagsProps = {
-  /** Optional explicit handler assets (e.g. for non-request update rendering) */
+  /** Handler bundle files (`<name>.js`) to load; defaults to the request's accessed handlers. */
   accessedHandlerFiles?: Iterable<string>;
-  /** Optional explicit style assets (e.g. for non-request update rendering) */
+  /** Stylesheet files (`<name>.css`) to load; defaults to the request's accessed styles. */
   accessedStyleFiles?: Iterable<string>;
 };
 
+type AssetContext = {
+  var?: {
+    accessedHandlerFiles?: Set<string>;
+    accessedStyleFiles?: Set<string>;
+  };
+};
+
 /**
- * Renders accessed handler and style assets.
- *
- * @example
- * ```tsx
- * <AssetTags />
- * ```
+ * Renders the script, modulepreload and stylesheet tags for the handler
+ * bundles and style bundles a render accessed. Without explicit props the
+ * request's tracked sets are used and then cleared, so later renders in the
+ * same request (such as streamed Suspense content) only emit new assets.
  */
-export const AssetTags: FC<AssetTagsProps> = ({
+export function AssetTags({
   accessedHandlerFiles: explicitHandlerFiles,
   accessedStyleFiles: explicitStyleFiles,
-}) => {
-  let accessedStyleFilesArray: string[];
-  let accessedHandlerFilesArray: string[];
-
-  // deno-lint-ignore no-explicit-any
-  const c = tryGetContext() as any;
+}: AssetTagsProps): JSX.Element {
+  let handlerFiles: string[];
+  let styleFiles: string[];
 
   if (explicitHandlerFiles || explicitStyleFiles) {
-    accessedHandlerFilesArray = Array.from(explicitHandlerFiles ?? []);
-    accessedStyleFilesArray = Array.from(explicitStyleFiles ?? []);
+    handlerFiles = Array.from(explicitHandlerFiles ?? []);
+    styleFiles = Array.from(explicitStyleFiles ?? []);
   } else {
-    // These are set internally by the tools middleware initialized by tiny.middleware.core()
-    const accessedStyleFiles = c?.var?.accessedStyleFiles as Set<string> ||
-      new Set<string>();
-    const accessedHandlerFiles = c?.var?.accessedHandlerFiles as Set<string> ||
-      new Set<string>();
-
-    accessedStyleFilesArray = Array.from(accessedStyleFiles);
+    // Set by tiny.middleware.core() for every request.
+    const context = tryGetContext() as AssetContext | undefined;
+    const accessedStyleFiles = context?.var?.accessedStyleFiles ?? new Set();
+    const accessedHandlerFiles = context?.var?.accessedHandlerFiles ??
+      new Set();
+    styleFiles = Array.from(accessedStyleFiles);
     accessedStyleFiles.clear();
-
-    accessedHandlerFilesArray = Array.from(accessedHandlerFiles);
+    handlerFiles = Array.from(accessedHandlerFiles);
     accessedHandlerFiles.clear();
   }
 
   return (
     <>
-      {/* User-defined handler scripts */}
-      {accessedHandlerFilesArray.map((file) => (
+      {handlerFiles.map((file) => (
         <script src={`/handlers/${file}`} type="module" />
       ))}
-
-      {
-        /* Bundles those scripts import, fetched in parallel rather than
-          discovered one import level per round trip. */
-      }
-      {handlerFileDependencies(accessedHandlerFilesArray).map((file) => (
+      {/* Bundles those scripts import, fetched in parallel rather than one import level per round trip. */}
+      {handlerFileDependencies(handlerFiles).map((file) => (
         <link rel="modulepreload" href={`/handlers/${file}`} />
       ))}
-
-      {/* User-defined stylesheets */}
-      {accessedStyleFilesArray.map((file) => (
-        <link
-          rel="stylesheet"
-          href={`/styles/${file}`}
-        />
+      {styleFiles.map((file) => (
+        <link rel="stylesheet" href={`/styles/${file}`} />
       ))}
     </>
   );
-};
+}
 
 // Framework wrappers render into the caller's component scope.
 transparent(AssetTags);

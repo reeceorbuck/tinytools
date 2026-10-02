@@ -1,43 +1,41 @@
 import { tiny } from "../mod.ts";
 import { processIncomingDataTools } from "./processIncomingData.ts";
 
+/**
+ * Opens the application's `/sse` event stream and feeds its `<update>`
+ * messages through `processIncomingData`, so pushed partials are applied
+ * exactly like partial navigation responses.
+ */
 export const sseTools = new tiny.Handlers(import.meta.url, async () => {
   const { fn } = await tiny.imports(processIncomingDataTools);
   return {
-    activateSSE: function (
-      this: HTMLElement,
-      _e: Event,
-    ) {
-      const currentUrl = new URL(globalThis.location.href);
-      const sseIdCookie = document.cookie
-        .split("; ")
-        .find((cookie) => cookie.startsWith("sseId="))?.split("=")[1];
-
-      const sseTarget = this as HTMLElement & {
-        sse: EventSource & { wasConnected?: boolean };
+    /** Bind to `onLoad` of the element that owns the connection, typically `<body>`. */
+    activateSSE: function (this: HTMLElement, _e: Event): void {
+      const owner = this as HTMLElement & {
+        sse?: EventSource & { wasConnected?: boolean };
       };
-
-      sseTarget.sse = new EventSource(
-        `/sse?path=${encodeURIComponent(currentUrl.pathname)}`,
-        {
-          withCredentials: false,
-        },
-      ) as EventSource & { wasConnected?: boolean };
+      const path = encodeURIComponent(globalThis.location.pathname);
+      const source = new EventSource(`/sse?path=${path}`) as EventSource & {
+        wasConnected?: boolean;
+      };
+      owner.sse = source;
 
       // Warn once per outage rather than on every retry.
       let connectionLost = false;
 
-      sseTarget.sse.onopen = () => {
+      source.onopen = () => {
         connectionLost = false;
-        if (sseTarget.sse.wasConnected) {
+        if (source.wasConnected) {
+          // The server forgets a client's state when its stream closes, so a
+          // reconnecting page may have missed updates: reload to resync.
           console.log("SSE reconnected, reloading page");
           globalThis.location.reload();
         }
-        sseTarget.sse.wasConnected = true;
+        source.wasConnected = true;
       };
 
-      sseTarget.sse.onerror = () => {
-        const closed = sseTarget.sse.readyState === EventSource.CLOSED;
+      source.onerror = () => {
+        const closed = source.readyState === EventSource.CLOSED;
         if (connectionLost && !closed) return;
         connectionLost = true;
         console.warn(
@@ -47,84 +45,39 @@ export const sseTools = new tiny.Handlers(import.meta.url, async () => {
         );
       };
 
-      // SSE message stream controller - we create a synthetic Response
-      // that processIncomingData can consume, piping SSE messages into it
-      let streamController: ReadableStreamDefaultController<Uint8Array> | null =
-        null;
-      let sseBuffer = "";
-      let messageCount = 0;
+      // Each `<update>` document may arrive over several SSE messages. They
+      // are piped into a synthetic Response so processIncomingData can parse
+      // them as a stream, which closes once the document is complete.
+      let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
+      let pending = "";
       const encoder = new TextEncoder();
 
-      sseTarget.sse.onmessage = (event) => {
+      source.onmessage = (event) => {
         const text = event.data as string;
-        messageCount++;
+        pending += text;
 
-        sseBuffer += text;
-
-        // If we don't have an active stream and we're receiving data, start one
-        if (streamController === null) {
+        if (controller === null) {
           const stream = new ReadableStream<Uint8Array>({
-            start(controller) {
-              streamController = controller;
+            start(streamController) {
+              controller = streamController;
             },
           });
-
-          // Process this response asynchronously
           fn.processIncomingData(
-            new Response(stream, {
-              headers: { "Content-Type": "text/html" },
-            }),
-          ).catch((err) => {
-            console.error("Error processing SSE response:", err);
+            new Response(stream, { headers: { "Content-Type": "text/html" } }),
+          ).catch((error) => {
+            console.error("Error processing SSE update:", error);
           });
         }
+        controller!.enqueue(encoder.encode(text));
 
-        // Enqueue the text into the stream for processIncomingData to consume
-        if (streamController) {
-          streamController.enqueue(encoder.encode(text));
-        }
-
-        // Check if we've received the closing </update> tag - if so, close the stream
-        if (sseBuffer.endsWith("</update>")) {
-          console.log(
-            `SSE update received (${sseBuffer.length} chars` +
-              (messageCount > 1 ? ` over ${messageCount} messages)` : ")"),
-          );
-          messageCount = 0;
-          if (streamController) {
-            streamController.close();
-            streamController = null;
-          }
-          sseBuffer = "";
+        if (pending.endsWith("</update>")) {
+          controller!.close();
+          controller = null;
+          pending = "";
         }
       };
 
-      sseTarget.sse.addEventListener("connection", async (event) => {
-        console.log("SSE connected", {
-          id: event.data,
-          previousId: sseIdCookie ?? null,
-          path: currentUrl.pathname,
-        });
-        await cookieStore.set({
-          name: "sseId",
-          value: event.data,
-          expires: Temporal.Now.instant().add({ hours: 24 }).epochMilliseconds,
-          path: "/",
-        });
-      });
-
-      globalThis.addEventListener("visibilitychange", () => {
-        if (
-          globalThis.document.visibilityState === "visible" &&
-          sseTarget.sse.readyState === EventSource.CLOSED
-        ) {
-          console.warn("Page visible again but SSE connection is closed");
-        }
-      });
-
-      globalThis.addEventListener("beforeunload", () => {
-        sseTarget.sse.close();
-      });
+      globalThis.addEventListener("beforeunload", () => source.close());
     },
   };
 });

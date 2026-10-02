@@ -66,7 +66,9 @@ Deno.test("core loads only the dispatcher plus accessed handler and style assets
     const { fn, styled } = await tiny.imports(first, styles);
     assertEquals(Reflect.get(context.var, "tools"), undefined);
     return context.render(
-      <button onClick={fn.click} class={styled.panel}>Home</button>,
+      <button type="button" onClick={fn.click} class={styled.panel}>
+        Home
+      </button>,
     );
   });
   const response = await app.request("/");
@@ -113,7 +115,9 @@ Deno.test("imports do not leak handlers or assets between calls and concurrent r
     const empty = await tiny.imports();
     assertEquals(Reflect.get(empty.handlers, "click"), undefined);
     await Promise.resolve();
-    return context.render(<button onClick={local.fn.click}>Click</button>);
+    return context.render(
+      <button type="button" onClick={local.fn.click}>Click</button>,
+    );
   });
   const [firstHtml, secondHtml] = await Promise.all(
     ["first", "second"].map(async (path) =>

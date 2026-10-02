@@ -37,9 +37,6 @@ import {
 } from "node:fs/promises";
 import { readdir } from "node:fs/promises";
 
-// deno-lint-ignore no-explicit-any
-type AnyFunction = (...args: any[]) => any;
-
 const STYLE_LAYER_ORDER: ScopedStyleLayer[] = [
   "global",
   "unscoped",
@@ -256,29 +253,24 @@ export async function transpileClientDir(
 export async function cleanupStaleFiles(
   handlerDir: string,
   stylesDir: string,
-  validHandlerFiles: string[],
-  validStyleFiles: string[],
+  validHandlerFiles: Iterable<string>,
+  validStyleFiles: Iterable<string>,
 ): Promise<void> {
-  const handlerEntries = await readdir(handlerDir, { withFileTypes: true });
-  for (const dirEntry of handlerEntries) {
-    if (dirEntry.isFile() && dirEntry.name.endsWith(".js")) {
-      const fileName = dirEntry.name.replace(/\.js$/, "");
-      if (!validHandlerFiles.includes(fileName)) {
-        console.log("Removing handler file: ", dirEntry.name);
-        await rm(`${handlerDir}/${dirEntry.name}`);
-      }
-    }
-  }
+  await removeUnlisted(handlerDir, ".js", new Set(validHandlerFiles));
+  await removeUnlisted(stylesDir, ".css", new Set(validStyleFiles));
+}
 
-  const styleEntries = await readdir(stylesDir, { withFileTypes: true });
-  for (const dirEntry of styleEntries) {
-    if (dirEntry.isFile() && dirEntry.name.endsWith(".css")) {
-      const fileName = dirEntry.name.replace(/\.css$/, "");
-      if (!validStyleFiles.includes(fileName)) {
-        console.log("Removing style file: ", dirEntry.name);
-        await rm(`${stylesDir}/${dirEntry.name}`);
-      }
-    }
+/** Remove every `<name><extension>` file in `directory` whose name is not in `keep`. */
+async function removeUnlisted(
+  directory: string,
+  extension: string,
+  keep: ReadonlySet<string>,
+): Promise<void> {
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(extension)) continue;
+    if (keep.has(entry.name.slice(0, -extension.length))) continue;
+    console.log(`Removing stale file: ${directory}/${entry.name}`);
+    await rm(`${directory}/${entry.name}`);
   }
 }
 

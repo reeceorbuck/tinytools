@@ -2,12 +2,17 @@ export type SignalValue = string | number | boolean | null;
 
 export interface ReadonlySignal<Value = SignalValue> {
   readonly value: Value;
+  /**
+   * Optional name, used by handlers such as `setCssProperty`. Set in the
+   * factory, or automatically from the `name` (or `data-bind-name`) of an
+   * input whose input/change event writes the signal.
+   */
+  name?: string;
   subscribe(target: EventTarget): void;
 }
 
 export interface Signal<Value = SignalValue> extends ReadonlySignal<Value> {
   value: Value;
-  name?: string;
 }
 
 export interface SignalTools {
@@ -46,7 +51,7 @@ export function signalClasses(runtime = true): SignalTools {
       return this.#name;
     }
 
-    set name(name: string) {
+    set name(name: string | undefined) {
       this.#name = name;
     }
 
