@@ -4,7 +4,7 @@ import { loadHandler } from "./helpers/loadHandler.ts";
 
 void parseNavigationUrlsTools;
 const parseNavigationUrls = await loadHandler<
-  typeof parseNavigationUrlsTools.getFunctionReferences.parseNavigationUrls
+  typeof parseNavigationUrlsTools.run.parseNavigationUrls
 >("parseNavigationUrls");
 
 class SourceElement {

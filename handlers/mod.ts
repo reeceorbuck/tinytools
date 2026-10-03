@@ -23,6 +23,5 @@ export {
   type SignalEvent,
   signalTools,
 } from "./signals.ts";
-export { commandSignalTools } from "./commandSignals.ts";
 export { sseTools } from "./sseTools.ts";
 export { queryParamTools } from "./queryParams.ts";

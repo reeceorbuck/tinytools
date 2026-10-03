@@ -112,6 +112,9 @@ export async function ActivateLifecycleHandlers(
 /** Builds a `<template id="...">` into the element, filling its named slots. */
 export const buildTemplateHandlers = new Handlers(import.meta.url, {
   buildTemplate: function (this: HTMLElement, _e: Event): void {
+    // Runs on every connect; build only once.
+    if (this.hasAttribute("data-built")) return;
+    this.setAttribute("data-built", "");
     const templateId = this.dataset.template;
     const template = templateId ? document.getElementById(templateId) : null;
     if (!(template instanceof HTMLTemplateElement)) {
@@ -169,11 +172,11 @@ export async function BuildFromTemplateElement(
 ): Promise<HtmlEscapedString> {
   const { fn } = await tiny.imports(buildTemplateHandlers);
   return (
-    <ActivateOnLoadHandler>
+    <UpgradeCustomElement>
       <temp-element onLoad={fn.buildTemplate} data-template={templateId}>
         <template>{children}</template>
       </temp-element>
-    </ActivateOnLoadHandler>
+    </UpgradeCustomElement>
   );
 }
 
@@ -185,6 +188,36 @@ const upgradePrecedingTools = new Handlers(import.meta.url, {
    * `<upgrade-preceding>` sibling that forwards those events to them.
    */
   upgradePrecedingCustomElement: function (this: HTMLElement): void {
+    const define = (tagName: string) => {
+      if (customElements.get(tagName)) return;
+      customElements.define(
+        tagName,
+        class extends HTMLElement {
+          abortController = new AbortController();
+
+          connectedCallback() {
+            this.abortController = new AbortController();
+            this.dispatchEvent(new Event("load"));
+            tiny.runHandler(this, new Event("connect"));
+          }
+
+          disconnectedCallback() {
+            tiny.runHandler(this, new Event("disconnect"));
+            this.abortController.abort();
+          }
+        },
+      );
+    };
+
+    // A custom tag named at render time is defined directly, so it does not
+    // matter where this trigger has moved relative to the element.
+    const definedTag = this.dataset.define;
+    if (definedTag) {
+      define(definedTag);
+      this.remove();
+      return;
+    }
+
     const precedingElement = this.previousElementSibling as
       | HTMLElement
       | null;
@@ -224,34 +257,28 @@ const upgradePrecedingTools = new Handlers(import.meta.url, {
       precedingElement.insertAdjacentElement("afterend", proxyElement);
     }
 
-    if (!customElements.get(upgradeTagName)) {
-      customElements.define(
-        upgradeTagName,
-        class extends HTMLElement {
-          abortController = new AbortController();
-
-          connectedCallback() {
-            this.abortController = new AbortController();
-            this.dispatchEvent(new Event("load"));
-            tiny.runHandler(this, new Event("connect"));
-          }
-
-          disconnectedCallback() {
-            tiny.runHandler(this, new Event("disconnect"));
-            this.abortController.abort();
-          }
-        },
-      );
-    }
+    define(upgradeTagName);
     this.remove();
   },
 });
+
+/** The tag of a JSX child when it is a custom element (contains a hyphen). */
+function customTagName(child: unknown): string | undefined {
+  const tag = typeof child === "object" && child !== null
+    ? (child as { tag?: unknown }).tag
+    : undefined;
+  return typeof tag === "string" && tag.includes("-") ? tag : undefined;
+}
 
 /**
  * Upgrades each child to a custom element with lifecycle events: `onLoad`
  * runs whenever the element connects (including after cached restoration),
  * `onDisconnect` when it is removed, and its `abortController` aborts on
  * removal so listeners can clean up.
+ *
+ * Prefer custom tags (`<note-entry>`): their tag is defined by name, so it
+ * works wherever the element or its trigger is moved. Other tags get a proxy
+ * sibling, which relies on the element staying next to its trigger.
  */
 export async function UpgradeCustomElement(
   props: PropsWithChildren,
@@ -268,6 +295,7 @@ export async function UpgradeCustomElement(
               upgradePrecedingTools,
               "upgradePrecedingCustomElement",
             )}
+            data-define={customTagName(child)}
             onLoad={fn.upgradePrecedingCustomElement}
           />
         </>

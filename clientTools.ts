@@ -1,7 +1,7 @@
 /**
  * Client tools for @tinytools/hono-tools.
  *
- * Defines the `tiny.Handlers`, `tiny.Store`, `tiny.Signals` and `tiny.Styles`
+ * Defines the `tiny.Handlers`, `tiny.Signals` and `tiny.Styles`
  * collections, the `tiny.imports()` call that resolves them for a request, and
  * the on-disk cache that keeps generated asset filenames stable across
  * restarts. Handler bundling is in `clientFunctions.ts`, style scoping in
@@ -29,6 +29,7 @@ import { tryGetContext } from "hono/context-storage";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Context } from "hono";
 import {
+  type InstanceLevels,
   type SignalAccessors,
   signalClasses,
   type SignalDefinitions,
@@ -992,6 +993,15 @@ interface SignalsConstructor {
   ): ClientToolsClass<SignalAccessors<Definitions>, Empty, Empty> & {
     readonly _isSignals: true;
     /**
+     * Marks an instance root for this collection's `perInstance` signals:
+     * `<fieldset tt-instance={collection.instanceKey}>`. Per-instance signals
+     * bound anywhere inside it resolve to that instance. One element can root
+     * several collections by listing their keys separated by spaces.
+     */
+    readonly instanceKey: string;
+    /** The root marker for the signals of `perInstance(name, ...)`. */
+    instanceKeyFor(name: InstanceLevels<Definitions>): string;
+    /**
      * Runs the factory on the server with `inputs` written to its writable
      * signals and returns every signal's value, so initial markup can be
      * rendered by the same computations the browser runs. Each call builds a
@@ -1073,7 +1083,7 @@ class ClientToolsClass<
     "run",
   ]);
 
-  private sourceFileUrl: string;
+  protected sourceFileUrl: string;
   /** Maps fnName -> filename for all handlers added via defineFunction() or import() */
   private handlerFilenames = new Map<string, string>();
   /** Stores ClientFunctionImpl instances for all handlers in this factory */
@@ -1104,7 +1114,7 @@ class ClientToolsClass<
   /** The browser module holding this instance's own handlers. */
   private _bundle?: HandlerBundle;
   /** Construction order within the source file; keys the bundle's cache entry. */
-  private _bundleIndex: number;
+  protected _bundleIndex: number;
 
   protected get stateful(): boolean {
     return false;
@@ -1718,31 +1728,6 @@ class ClientToolsClass<
     return this._scopedStyles;
   }
 
-  /**
-   * Get raw references to registered client functions for module-level composition.
-   * Use these references when one client function needs to call another (especially
-   * imported handlers) during `functions` declaration.
-   *
-   * Why this is required:
-   * - `fn.*` handlers are request-activated proxies and only exist in render/context flow.
-   * - Client function definitions run at module setup time, before any request context exists.
-   * - Grabbing references here lets you safely call another registered client function inside
-   *   a client function body.
-   */
-  get getFunctionReferences(): AccumulatedFunctions {
-    if (!this._definitionReady) {
-      throw new Error(
-        "Handler definitions are not ready. Await tiny.imports(tools) or tools.ensureDefined() first.",
-      );
-    }
-    const result = {} as AccumulatedFunctions;
-    for (const fnName of this._clientFunctions.keys()) {
-      // deno-lint-ignore no-explicit-any
-      (result as any)[fnName] = (this as any)[fnName];
-    }
-    return result;
-  }
-
   get run(): AccumulatedFunctions {
     if (!this._definitionReady) {
       throw new Error(
@@ -1936,17 +1921,26 @@ function splitFactory(
   return undefined;
 }
 
+/** `signalClasses` also returns the per-instance handle class, for validation. */
+type InternalSignalTools = SignalTools & {
+  // deno-lint-ignore no-explicit-any
+  InstanceSignal: new (...args: any[]) => { readonly initialValue: unknown };
+};
+
 /** Runs the factory server-side (values inert) to validate it and list its signals. */
 function signalNames(factory: SignalFactory): string[] {
-  const tools = signalClasses(false);
+  const tools = signalClasses(false) as InternalSignalTools;
   const definitions = factory(tools);
   if (
     !definitions || typeof definitions !== "object" ||
     definitions instanceof Promise ||
-    Object.values(definitions).some((value) => !(value instanceof tools.Signal))
+    Object.values(definitions).some((value) =>
+      !(value instanceof tools.Signal) &&
+      !(value instanceof tools.InstanceSignal)
+    )
   ) {
     throw new TypeError(
-      "Signals factory must synchronously return an object of Signal or Computed instances.",
+      "Signals factory must synchronously return an object of Signal or Computed instances, or perInstance signals.",
     );
   }
   return Object.keys(definitions);
@@ -1973,6 +1967,7 @@ class SignalsClass extends StoreClass {
 
   constructor(sourceFileUrl: string | URL, factory: SignalFactory) {
     const prelude = { code: "" };
+    const owner: { collection?: SignalsClass } = {};
     super(sourceFileUrl, async () => {
       const names = signalNames(factory);
       await imports(SignalsClass.runtime);
@@ -1994,6 +1989,9 @@ class SignalsClass extends StoreClass {
       // once, e.g. `const { Signal } = fn.signalClasses();` followed by
       // `const signals = (() => {...})();`. Factories of other shapes are
       // called with the toolkit instead.
+      const tools = `fn.signalClasses(true, ${
+        JSON.stringify(owner.collection!.instanceKey)
+      })`;
       const split = splitFactory(factory.toString());
       const parameterNames = split?.parameter.match(/[$A-Z_a-z][$\w]*/g) ??
         [];
@@ -2001,14 +1999,14 @@ class SignalsClass extends StoreClass {
       if (split && !parameterNames.some((name) => taken.has(name))) {
         parameterNames.forEach((name) => taken.add(name));
         graph = free("signals");
-        prelude.code = (split.parameter
-          ? `const ${split.parameter} = fn.signalClasses();\n`
-          : "") + `const ${graph} = (${split.body})();`;
+        prelude.code =
+          (split.parameter ? `const ${split.parameter} = ${tools};\n` : "") +
+          `const ${graph} = (${split.body})();`;
       } else {
         const define = free("defineSignals");
         graph = free("signals");
         prelude.code = `const ${define} = ${factory};\n` +
-          `const ${graph} = ${define}(fn.signalClasses());`;
+          `const ${graph} = ${define}(${tools});`;
       }
       return Object.fromEntries(names.map((name) => {
         const property = /^[$A-Z_a-z][$\w]*$/.test(name)
@@ -2023,24 +2021,56 @@ class SignalsClass extends StoreClass {
       }));
     });
     this.#prelude = prelude;
+    owner.collection = this;
     this.#factory = factory;
+  }
+
+  /**
+   * Identifies this collection's instance roots. Derived from the source file
+   * and construction order rather than the bundle filename, which hashes the
+   * code this key is compiled into.
+   */
+  get instanceKey(): string {
+    const baseName = this.sourceFileUrl.replace(/\\/g, "/").split("/").pop()
+      ?.replace(/\.[^.]+$/, "").replace(/\W/g, "_") || "signals";
+    return `${baseName}_${
+      generateHandlerHash(`${this.sourceFileUrl}#${this._bundleIndex}`)
+    }`;
+  }
+
+  /** Must match the key `perInstance(name, ...)` builds in signals.ts. */
+  instanceKeyFor(name: string): string {
+    return `${this.instanceKey}-${name}`;
   }
 
   evaluateUsingInitialValues(
     inputs: Record<string, unknown> = {},
   ): Record<string, unknown> {
-    const graph = this.#factory(signalClasses(true));
+    const tools = signalClasses(true) as InternalSignalTools;
+    const graph = this.#factory(tools);
     for (const [name, value] of Object.entries(inputs)) {
       if (!Object.hasOwn(graph, name)) {
         throw new TypeError(
           `Signal '${name}' is not defined in this collection.`,
         );
       }
+      if (graph[name] instanceof tools.InstanceSignal) {
+        throw new TypeError(
+          `Signal '${name}' is per-instance and cannot be set here.`,
+        );
+      }
       // Assigning to a computed signal throws: only writable signals are inputs.
       (graph[name] as { value: unknown }).value = value;
     }
+    // Per-instance signals report a fresh instance's value; `.all` aggregates
+    // see no instances on the server.
     return Object.fromEntries(
-      Object.entries(graph).map(([name, signal]) => [name, signal.value]),
+      Object.entries(graph).map(([name, signal]) => [
+        name,
+        signal instanceof tools.InstanceSignal
+          ? signal.initialValue
+          : (signal as { value: unknown }).value,
+      ]),
     );
   }
 
@@ -2099,6 +2129,7 @@ class StylesClass extends ClientToolsClass<Empty, Empty, Empty> {
 export const Handlers: HandlersConstructor =
   HandlersClass as unknown as HandlersConstructor;
 
+/** @deprecated Use Signals instead. Retained for compatibility. */
 export const Store: StoreConstructor =
   StoreClass as unknown as StoreConstructor;
 

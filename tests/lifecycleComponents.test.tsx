@@ -26,6 +26,23 @@ Deno.test("UpgradeCustomElement preloads the bundle holding its own handler", as
   }
 });
 
+Deno.test("UpgradeCustomElement names custom tags so they upgrade wherever they move", async () => {
+  const app = new tiny.Hono({ tools: "core" });
+  app.get("/", (context) =>
+    context.render(
+      <UpgradeCustomElement>
+        <x-panel>One</x-panel>
+        <section>Two</section>
+      </UpgradeCustomElement>,
+    ));
+  const html = await (await app.request("/")).text();
+  const defined = [...html.matchAll(/<link rel="modulepreload"[^>]*>/g)].map((
+    [link],
+  ) => /data-define="([^"]+)"/.exec(link)?.[1] ?? null);
+  // Custom tags are defined by name; plain tags fall back to a proxy sibling.
+  assertEquals(defined, ["x-panel", null]);
+});
+
 Deno.test("Signals collections share one runtime bundle", async () => {
   const first = new Signals(import.meta.url, ({ Signal }) => ({
     one: new Signal(1),

@@ -18,7 +18,6 @@ Published as `@tinytools/hono-tools` on JSR (Deno) and
 - [Middleware and rendering](#middleware-and-rendering)
 - [Event bindings](#event-bindings)
 - [Handler collections](#handler-collections)
-- [Stores](#stores)
 - [Signals](#signals)
 - [Styles](#styles)
 - [Components](#components)
@@ -130,12 +129,11 @@ it used, a `<link rel="stylesheet">` for the one style bundle, and the inline
 
 Everything the browser needs is declared in **collections** at module level:
 
-| Collection      | Holds                                         | Imported as |
-| --------------- | --------------------------------------------- | ----------- |
-| `tiny.Handlers` | Functions that run in the browser             | `fn.*`      |
-| `tiny.Store`    | Handlers sharing a private module-level state | `fn.*`      |
-| `tiny.Signals`  | Reactive values shared across the page        | `signal.*`  |
-| `tiny.Styles`   | Scoped CSS blocks                             | `styled.*`  |
+| Collection      | Holds                                  | Imported as |
+| --------------- | -------------------------------------- | ----------- |
+| `tiny.Handlers` | Functions that run in the browser      | `fn.*`      |
+| `tiny.Signals`  | Reactive values shared across the page | `signal.*`  |
+| `tiny.Styles`   | Scoped CSS blocks                      | `styled.*`  |
 
 The first argument is `import.meta.url`. It tells the build which source file
 owns the collection, so generated filenames stay stable across restarts and only
@@ -391,36 +389,6 @@ collection.ensureDefined()` or `tiny.imports(collection)`). `run`
 neither builds assets nor needs a request context. Only run functions whose
 dependencies exist on the server; browser globals are not provided.
 
-### Module-level references
-
-`collection.getFunctionReferences` returns legacy inline expressions for
-composing handlers during module setup. Prefer the factory form with
-`tiny.imports()`.
-
-## Stores
-
-`tiny.Store` is a `Handlers` collection whose bundle owns a private
-`const stored = Object.create(null)` shared by all of its handlers:
-
-```ts
-const counters = new tiny.Store(
-  import.meta.url,
-  (stored: { count?: number }) => ({
-    next() {
-      stored.count ??= 0;
-      return ++stored.count;
-    },
-  }),
-);
-```
-
-The factory parameter supplies the state type and must be a single plain
-identifier (any name except `fn` or `_handler`). Object-form stores can use a
-type-only `declare const stored: {...}` instead. State is page-scoped, shared by
-every caller of the store's handlers, lasts until a full reload, and is never
-serialised into HTML. Initialise values inside the handlers; the factory's outer
-closure is not shipped.
-
 ## Signals
 
 `tiny.Signals` declares reactive values from a pure, synchronous factory:
@@ -490,19 +458,111 @@ The `signalTools` collection from `tinytools/handlers` provides `effect`,
 `setTextContent`, `setValue` and `setCssProperty` (which writes
 `--<signal name>`).
 
-### Command signals
+### Per-instance signals
 
-For values that must only reach siblings inside one container (for example each
-row of a repeated fieldset), `commandSignalTools` broadcasts an input's value as
-a `CommandEvent`:
+When a component renders several times on a page (for example each layer of a
+repeated fieldset), wrap its signals in `perInstance`. The callback describes
+one instance and runs once per instance root, so signals and computeds inside it
+see only that instance:
 
 ```tsx
-<select name="row-1-type" onChange={fn.broadcastType} />
-<select data-signal-tracking="row-1-type" onCommand={fn.applyType} />
+const layerSignals = new tiny.Signals(
+  import.meta.url,
+  ({ Signal, Computed, perInstance }) => {
+    const layer = perInstance(() => {
+      const material = new Signal<string>("composite");
+      const shade = new Signal<string>("A2");
+      const description = new Computed(
+        () => `${material.value} ${shade.value}`,
+        [material, shade],
+      );
+      return { material, shade, description };
+    });
+    return {
+      ...layer,
+      summary: new Computed(
+        () => layer.description.all.value.join("; "),
+        [layer.description.all],
+      ),
+    };
+  },
+);
+
+<fieldset tt-instance={layerSignals.instanceKey}>
+  <select onChange={signal.material}>...</select>
+  <select onLoad={signal.material} onSignal={fn.applyMaterial}>...</select>
+</fieldset>;
 ```
 
-`broadcastType` calls `fn.broadcastInputValue(this, this.closest("fieldset"))`
-and `applyType` reads `fn.readBroadcastValue(event).get("row-1-type")`.
+- Set `tt-instance={collection.instanceKey}` on the element wrapping each
+  instance. References inside it (`onChange`, `onLoad`) resolve to that
+  instance, so consuming elements need no extra attributes. Using one outside a
+  root throws.
+- Roots of different collections can nest. One element can root several
+  collections by listing their keys separated by spaces.
+- In handlers, `signal.material.for(this)` is the signal of the instance
+  enclosing `this`. A per-instance signal has no single `.value`.
+- `signal.x.all` is a read-only signal of every instance's value in document
+  order. It updates when any instance changes and when roots are added or
+  removed, so a `Computed` depending on it is the net result of all instances.
+- Signals outside `perInstance` stay page-wide, and collections without it work
+  as before.
+- `evaluateUsingInitialValues` reports a fresh instance's value for per-instance
+  signals, sees no instances for `.all`, and does not accept them as inputs.
+
+#### Nested instances
+
+When instances contain instances (several open forms, each with its own layers),
+nest a named `perInstance` inside another. The inner callback runs once per
+inner root within each outer instance, so its `.all` covers only that outer
+instance, and its computeds can read the outer instance's signals:
+
+```tsx
+const noteSignals = new tiny.Signals(
+  import.meta.url,
+  ({ Signal, Computed, perInstance }) => {
+    const note = perInstance(() => {
+      const isolation = new Signal<string>("rdam");
+      const layer = perInstance("layer", () => {
+        const material = new Signal<string>("composite");
+        return {
+          material,
+          label: new Computed(() => `${material.value} (${isolation.value})`, [
+            material,
+            isolation,
+          ]),
+        };
+      });
+      return {
+        isolation,
+        ...layer,
+        summary: new Computed(
+          () => layer.label.all.value.join("; "),
+          [layer.label.all],
+        ),
+      };
+    });
+    return { ...note };
+  },
+);
+
+<form tt-instance={noteSignals.instanceKey}>
+  <select onChange={signal.isolation}>...</select>
+  <fieldset tt-instance={noteSignals.instanceKeyFor("layer")}>
+    <select onChange={signal.material}>...</select>
+  </fieldset>
+  <output onLoad={signal.summary} onSignal={fn.setTextContent} />
+</form>;
+```
+
+- A nested `perInstance` needs a name. Its roots carry `instanceKeyFor(name)`;
+  unnamed top-level roots carry `instanceKey`. `instanceKeyFor` only accepts
+  names whose signals the factory returns, so a typo fails type checking.
+- Signals resolve level by level: `signal.material.for(this)` finds the
+  enclosing form, then the layer inside it. A layer signal used outside a layer
+  root throws.
+- Read a nested signal's `.all` inside the enclosing `perInstance`, where it is
+  scoped to that instance. Outside it, `signal.material.all` throws.
 
 ## Styles
 
@@ -633,13 +693,19 @@ that already place the content inside its target on a full page load.
 Browsers only fire `load` on a few elements. These wrappers give any element
 lifecycle events:
 
-- `<ActivateOnLoadHandler>` runs each child's `onLoad` once it is in the
-  document.
 - `<UpgradeCustomElement>` upgrades each child to a custom element whose
   `onLoad` runs whenever it connects (including after cached restoration), whose
   `onDisconnect` runs when it is removed, and whose `abortController` aborts on
-  removal so handlers can register listeners that clean themselves up. Elements
-  without a hyphenated tag get a proxy sibling instead.
+  removal so handlers can register listeners that clean themselves up. Prefer
+  this with a hyphenated tag (`<load-more>`): the tag is defined by name, so it
+  keeps working however the element is moved, substituted or cloned. Since
+  `onLoad` can run more than once, guard one-time setup. Elements without a
+  hyphenated tag get a proxy sibling instead, which must stay next to them.
+- `<ActivateOnLoadHandler>` runs each child's `onLoad` once, via a trigger
+  placed right after it. The trigger acts on its previous sibling, so content
+  that moves the element away from it (such as a partial substituting it in a
+  list) can fire the handler on the wrong element. Prefer `UpgradeCustomElement`
+  with a custom tag.
 - `<BuildFromTemplateElement templateId="...">` clones a page `<template>` into
   the element and fills its named `<slot>`s from the children.
 

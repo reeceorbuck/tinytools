@@ -1,7 +1,7 @@
 /**
  * Client Functions Registry module for @tinytools/hono-tools
  *
- * Every tiny.Handlers / tiny.Store / tiny.Signals instance compiles to one
+ * Every tiny.Handlers / tiny.Signals instance compiles to one
  * browser module (a {@link HandlerBundle}) exporting each of its handlers by
  * name. Handlers are referenced as `<bundle filename>.<handler name>`.
  *

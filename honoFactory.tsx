@@ -404,6 +404,7 @@ export function runHandler(
 export type TinyApi = {
   readonly Hono: typeof TinyHono;
   readonly Handlers: typeof Handlers;
+  /** @deprecated Use tiny.Signals instead. Retained for compatibility. */
   readonly Store: typeof Store;
   readonly Signals: typeof Signals;
   readonly runHandler: typeof runHandler;

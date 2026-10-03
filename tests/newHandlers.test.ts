@@ -190,7 +190,7 @@ Deno.test({
       assertStringIncludes(signalCode, "const fn = { signalClasses };");
       assertStringIncludes(
         signalCode,
-        "const { Signal, Computed } = fn.signalClasses();",
+        'const { Signal, Computed } = fn.signalClasses(true, "newHandlers_',
       );
       assertStringIncludes(
         signalCode,
@@ -346,14 +346,14 @@ Deno.test({
       const plainBundle = await load(plain);
       assertStringIncludes(
         plainBundle.code,
-        "const tools = fn.signalClasses();",
+        'const tools = fn.signalClasses(true, "newHandlers_',
       );
       assertStringIncludes(plainBundle.code, "const signals = (() =>");
       assertEquals(plainBundle.module.total().value, 2);
       const expressionBundle = await load(expression);
       assertStringIncludes(
         expressionBundle.code,
-        "const { Signal } = fn.signalClasses();",
+        'const { Signal } = fn.signalClasses(true, "newHandlers_',
       );
       assertStringIncludes(
         expressionBundle.code,
@@ -363,10 +363,62 @@ Deno.test({
       const clashingBundle = await load(clashing);
       assertStringIncludes(
         clashingBundle.code,
-        "const signals = defineSignals(fn.signalClasses());",
+        'const signals = defineSignals(fn.signalClasses(true, "newHandlers_',
       );
       assertEquals(clashingBundle.module.Signal().value, 3);
     } finally {
+      await Deno.remove(directory, { recursive: true }).catch(() => {});
+      reset();
+      (await getEsbuild()).stop();
+    }
+  },
+});
+
+Deno.test({
+  name: "Signals bundles scope perInstance signals to the collection's roots",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  async fn() {
+    reset();
+    const directory = "./.test-build-output/instance-signals";
+    const layers = new Signals(
+      import.meta.url,
+      ({ Signal, Computed, perInstance }) => {
+        const layer = perInstance(() => ({ material: new Signal("bulk") }));
+        const materials = new Computed(
+          () => layer.material.all.value.join(", "),
+          [layer.material.all],
+        );
+        return { ...layer, materials };
+      },
+    );
+    const { parseHTML } = await import("linkedom");
+    // The second root also roots another collection.
+    const window = parseHTML(
+      `<html><body><p tt-instance="${layers.instanceKey}"><i id="a"></i></p><p tt-instance="other ${layers.instanceKey}"><i id="b"></i></p></body></html>`,
+    );
+    Object.assign(globalThis, {
+      document: window.document,
+      MutationObserver: window.MutationObserver,
+    });
+    try {
+      await buildScriptFiles({ fresh: true, publicDir: directory });
+      const filename = [...layers._handlerFilenames.values()][0];
+      const path = `${Deno.cwd()}/${directory}/handlers/${filename}.js`;
+      const module = await import(pathToFileURL(path).href);
+      const a = window.document.getElementById("a");
+      // `onChange={signal.material}` on an element inside the first root.
+      module.material.call(a, {
+        type: "change",
+        target: { value: "flow", dataset: {}, name: "" },
+      });
+      assertEquals(module.materials().value, "flow, bulk");
+      // Read from a handler, the accessor is the per-instance handle.
+      assertEquals(module.material().for(a).value, "flow");
+    } finally {
+      const globals = globalThis as Record<string, unknown>;
+      delete globals.document;
+      delete globals.MutationObserver;
       await Deno.remove(directory, { recursive: true }).catch(() => {});
       reset();
       (await getEsbuild()).stop();
@@ -561,9 +613,6 @@ Deno.test({
         second.ensureDefined(),
       ]);
       assertEquals(definitions, 2);
-      const reference: (step?: number) => number =
-        first.getFunctionReferences.counter;
-      assertEquals(typeof reference, "string");
       const firstHandler = first._handlerDefinitions.get("counter")!;
       const secondHandler = second._handlerDefinitions.get("counter")!;
       assertNotEquals(firstHandler.filename, secondHandler.filename);
@@ -753,11 +802,6 @@ Deno.test({
         }.js"`,
       );
       assertEquals(code.includes("unused"), false);
-      const reference: (value: number) => number =
-        collection.getFunctionReferences.consumer;
-      assertEquals(typeof reference, "string");
-      // @ts-expect-error imported handlers are private
-      collection.getFunctionReferences.used;
       // @ts-expect-error imported handlers remain private through run
       collection.run.used;
     } finally {
@@ -976,7 +1020,7 @@ Deno.test({
       Error,
       "Circular handler definition",
     );
-    assertThrows(() => cycleA.getFunctionReferences, Error, "not ready");
+    assertThrows(() => cycleA.run, Error, "not ready");
     reset();
   },
 });

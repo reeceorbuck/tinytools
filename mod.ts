@@ -58,6 +58,10 @@ export {
   Styles,
 } from "./clientTools.ts";
 export type {
+  InstanceDefinitions,
+  InstanceLevels,
+  InstanceSignal,
+  InstanceSignals,
   ReadonlySignal,
   Signal,
   SignalAccessors,
