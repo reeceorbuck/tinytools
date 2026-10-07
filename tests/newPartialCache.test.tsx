@@ -93,9 +93,16 @@ Deno.test("NewPartial full page loads render directly and retain cache restorati
   const { document } = parseHTML(cached);
   const panel = document.getElementById("panel")!;
   assertEquals(panel.firstElementChild?.tagName, "INPUT");
-  assertEquals(panel.children.length, 3);
-  assertEquals(panel.children[1]?.tagName, "CACHE-COLLECTOR");
-  assertEquals(panel.lastElementChild?.getAttribute("rel"), "modulepreload");
+  // The collector's tag is defined by a head script, so nothing follows it.
+  assertEquals(panel.children.length, 2);
+  assertEquals(panel.lastElementChild?.tagName, "CACHE-COLLECTOR");
+  assertEquals(
+    document.head.querySelector(
+      'meta[name="tt-define"][content="cache-collector"]',
+    )
+      ?.getAttribute("content"),
+    "cache-collector",
+  );
   assertEquals((cached.match(/<template\b/g) ?? []).length, 3);
   assertEquals(
     (cached.match(/tt-handler-load="\w+\.passLoadEvent"/gi) ?? []).length,

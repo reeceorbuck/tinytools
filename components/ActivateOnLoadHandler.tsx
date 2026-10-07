@@ -12,41 +12,48 @@
 import type { PropsWithChildren } from "hono/jsx";
 import type { HtmlEscapedString } from "hono/utils/html";
 import { tiny } from "../mod.ts";
-import { Handlers } from "../clientTools.ts";
-import { transparent } from "../componentScope.ts";
+import { Handlers, recordLifecycleTag } from "../clientTools.ts";
+import { templateRootTags, transparent } from "../componentScope.ts";
+import type { LifecycleElement } from "../lifecycleElement.ts";
 
 /** An upgraded custom element: its controller aborts when it disconnects. */
-export interface PartialAbortableHTMLElement extends HTMLElement {
-  abortController: AbortController;
-}
+export type PartialAbortableHTMLElement = LifecycleElement;
 
-/** A 1x1 transparent GIF whose `load` event triggers the preceding element's handler. */
-const TRANSPARENT_PIXEL =
-  "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
-
-/** Forwards lifecycle events to neighbouring elements. */
+/** The trigger of `ActivateParsedHandler` and the forwarding of `<upgrade-preceding>`. */
 const lifecycleHandlers = new Handlers(import.meta.url, {
-  /** Fires `load` on the previous sibling once, then removes this trigger. */
-  referOnLoadOnce: function (this: HTMLElement, _e: Event): void {
+  /** Runs the preceding element's `onLoad` handlers; bound to a proxy's `onLoad`. */
+  forwardLoad: function (this: HTMLElement): void {
+    const target = this.previousElementSibling;
+    if (target instanceof HTMLElement) {
+      tiny.runHandler(target, new Event("load"));
+    }
+  },
+  /** Runs the preceding element's `onSuspend` handlers; bound to a proxy's `onDisconnect`. */
+  forwardSuspend: function (this: HTMLElement): void {
+    const target = this.previousElementSibling;
+    if (target instanceof HTMLElement) {
+      tiny.runHandler(target, new Event("suspend"));
+    }
+  },
+  /**
+   * Runs the previous sibling's `onParsed` handlers once, then removes this
+   * trigger. `parsed` is not a browser event, so it is dispatched through
+   * `runHandler` rather than as a DOM event. A trigger fires `load` once per
+   * connection, so one that was moved before it fired may fire again after
+   * removing itself; the first firing did the work.
+   */
+  referParsed: function (this: HTMLElement, _e: Event): void {
+    if (!this.isConnected) return;
     const target = this.previousSibling;
-    if (target instanceof Element) target.dispatchEvent(new Event("load"));
+    if (target instanceof HTMLElement) {
+      tiny.runHandler(target, new Event("parsed"));
+    }
     this.remove();
   },
-  /** Fires `load` on the first child of the previous sibling. */
-  referOnLoad: function (this: HTMLElement, _e: Event): void {
-    const target = this.previousSibling?.firstChild;
-    if (target instanceof Element) target.dispatchEvent(new Event("load"));
-  },
-  /** Fires `suspend` on this element's first child. */
-  referOnSuspend: function (this: HTMLElement, _e: Event): void {
-    const target = this.firstChild;
-    if (target instanceof Element) target.dispatchEvent(new Event("suspend"));
-  },
-  /** Fires `load` on this element's first element child. */
-  referOnConnect: function (this: HTMLElement): void {
-    this.firstElementChild?.dispatchEvent(new Event("load"));
-  },
 });
+
+/** The lifecycle element rendered after a child that has no custom tag of its own. */
+const PROXY_TAG = "upgrade-preceding";
 
 function childList(children: PropsWithChildren["children"]): unknown[] {
   return Array.isArray(children) ? children.flat() : [children];
@@ -61,10 +68,18 @@ function preloadHref(
 }
 
 /**
- * Runs each child's `onLoad` handler once it is in the document, for
- * elements that do not fire `load` natively.
+ * Runs each child's `onParsed` handler exactly once, as soon as the child
+ * and its content have been parsed: a trigger link placed right after the
+ * child fires when it loads, which is after everything before it exists.
+ * The link preloads the bundle holding the trigger's own handler, so it
+ * costs no extra request, and as a script preload it is allowed wherever
+ * the page's scripts are, unlike an image under a strict `img-src`.
+ *
+ * `parsed` is distinct from `load`: a lifecycle element's `onLoad` runs again
+ * whenever it reconnects, while `onParsed` is for one-time work such as
+ * building the element's content from a template.
  */
-export async function ActivateOnLoadHandler(
+export async function ActivateParsedHandler(
   { children }: PropsWithChildren,
 ): Promise<HtmlEscapedString> {
   const { fn } = await tiny.imports(lifecycleHandlers);
@@ -73,35 +88,10 @@ export async function ActivateOnLoadHandler(
       {childList(children).map((child) => (
         <>
           {child}
-          <img hidden src={TRANSPARENT_PIXEL} onLoad={fn.referOnLoadOnce} />
-        </>
-      ))}
-    </>
-  );
-}
-
-/**
- * Wraps each child in an `<abortable-lifecycle-element>` that forwards
- * `load` on connection and `suspend` on removal to the child.
- */
-export async function ActivateLifecycleHandlers(
-  { children }: PropsWithChildren,
-): Promise<HtmlEscapedString> {
-  const { fn } = await tiny.imports(lifecycleHandlers);
-  return (
-    <>
-      {childList(children).map((child) => (
-        <>
-          <abortable-lifecycle-element
-            onLoad={fn.referOnConnect}
-            onSuspend={fn.referOnSuspend}
-          >
-            {child}
-          </abortable-lifecycle-element>
           <link
             rel="modulepreload"
-            href={preloadHref(lifecycleHandlers, "referOnLoad")}
-            onLoad={fn.referOnLoad}
+            href={preloadHref(lifecycleHandlers, "referParsed")}
+            onLoad={fn.referParsed}
           />
         </>
       ))}
@@ -180,94 +170,22 @@ export async function BuildFromTemplateElement(
   );
 }
 
-const upgradePrecedingTools = new Handlers(import.meta.url, {
-  /**
-   * Defines the preceding element's tag as a custom element whose
-   * `connectedCallback` fires `load` and whose `disconnectedCallback`
-   * aborts `abortController`. Elements without a custom tag get a proxy
-   * `<upgrade-preceding>` sibling that forwards those events to them.
-   */
-  upgradePrecedingCustomElement: function (this: HTMLElement): void {
-    const define = (tagName: string) => {
-      if (customElements.get(tagName)) return;
-      customElements.define(
-        tagName,
-        class extends HTMLElement {
-          abortController = new AbortController();
-
-          connectedCallback() {
-            this.abortController = new AbortController();
-            this.dispatchEvent(new Event("load"));
-            tiny.runHandler(this, new Event("connect"));
-          }
-
-          disconnectedCallback() {
-            tiny.runHandler(this, new Event("disconnect"));
-            this.abortController.abort();
-          }
-        },
-      );
-    };
-
-    // A custom tag named at render time is defined directly, so it does not
-    // matter where this trigger has moved relative to the element.
-    const definedTag = this.dataset.define;
-    if (definedTag) {
-      define(definedTag);
-      this.remove();
-      return;
-    }
-
-    const precedingElement = this.previousElementSibling as
-      | HTMLElement
-      | null;
-    if (!precedingElement) {
-      console.error("upgradePrecedingCustomElement: no preceding element.");
-      return;
-    }
-
-    let upgradeTagName = precedingElement.tagName.toLowerCase();
-    if (!upgradeTagName.includes("-")) {
-      upgradeTagName = "upgrade-preceding";
-      const proxyElement = document.createElement(
-        upgradeTagName,
-      ) as PartialAbortableHTMLElement;
-      proxyElement.addEventListener("load", function () {
-        tiny.runHandler(precedingElement, new Event("load"));
-        // Remove the proxy if the element it stands for is removed.
-        const observer = new MutationObserver((mutations) => {
-          for (const mutation of mutations) {
-            if (Array.from(mutation.removedNodes).includes(precedingElement)) {
-              proxyElement.remove();
-            }
-          }
-        });
-        observer.observe(precedingElement.parentElement!, { childList: true });
-        proxyElement.addEventListener("load", () => {
-          tiny.runHandler(precedingElement, new Event("load"));
-          observer.observe(precedingElement.parentElement!, {
-            childList: true,
-          });
-        }, { signal: proxyElement.abortController.signal });
-        proxyElement.addEventListener("suspend", () => {
-          tiny.runHandler(precedingElement, new Event("suspend"));
-          observer.disconnect();
-        }, { signal: proxyElement.abortController.signal });
-      }, { once: true });
-      precedingElement.insertAdjacentElement("afterend", proxyElement);
-    }
-
-    define(upgradeTagName);
-    this.remove();
-  },
-});
-
-/** The tag of a JSX child when it is a custom element (contains a hyphen). */
+/**
+ * The tag of a JSX child when it is a custom element (contains a hyphen).
+ * A child is a node with a `tag` under `"jsx": "react-jsx"`, and under
+ * `"jsx": "precompile"` the markup of its elements, which counts only when
+ * it holds exactly one top-level element.
+ */
 function customTagName(child: unknown): string | undefined {
-  const tag = typeof child === "object" && child !== null
+  const roots = templateRootTags(child);
+  const tag = roots
+    ? roots.length === 1 ? roots[0] : undefined
+    : typeof child === "object" && child !== null
     ? (child as { tag?: unknown }).tag
     : undefined;
-  return typeof tag === "string" && tag.includes("-") ? tag : undefined;
+  return typeof tag === "string" && tag.includes("-")
+    ? tag.toLowerCase()
+    : undefined;
 }
 
 /**
@@ -276,36 +194,48 @@ function customTagName(child: unknown): string | undefined {
  * `onDisconnect` when it is removed, and its `abortController` aborts on
  * removal so listeners can clean up.
  *
- * Prefer custom tags (`<note-entry>`): their tag is defined by name, so it
- * works wherever the element or its trigger is moved. Other tags get a proxy
- * sibling, which relies on the element staying next to its trigger.
+ * Prefer custom tags (`<note-entry>`): the tag is declared ahead of the
+ * markup (a `<meta name="tt-define">` in a full page's head, a `<tt-define>`
+ * element in streamed or partial content) and the inline head runtime
+ * defines it before the markup is parsed or inserted, so the element
+ * upgrades in document order wherever it is placed, moved or cloned, and
+ * nothing is rendered beside it. Other tags (an `<input>`, say, which cannot
+ * have lifecycle callbacks of its own) get an `<upgrade-preceding>` sibling
+ * rendered after them: a lifecycle element that forwards its `load` and
+ * `suspend` to the element before it, so it relies on the two staying
+ * together.
  */
 export async function UpgradeCustomElement(
   props: PropsWithChildren,
 ): Promise<HtmlEscapedString> {
-  const { fn } = await tiny.imports(upgradePrecedingTools);
+  // Precompiled markup with async content arrives as a promise of the markup.
+  const children = await Promise.all(childList(props.children));
+  const tags = children.map(customTagName);
+  for (const tag of new Set(tags)) {
+    if (tag) recordLifecycleTag(tag);
+  }
+  if (tags.every(Boolean)) return <>{children}</>;
+  recordLifecycleTag(PROXY_TAG);
+  const { fn } = await tiny.imports(lifecycleHandlers);
   return (
     <>
-      {childList(props.children).map((child) => (
-        <>
-          {child}
-          <link
-            rel="modulepreload"
-            href={preloadHref(
-              upgradePrecedingTools,
-              "upgradePrecedingCustomElement",
-            )}
-            data-define={customTagName(child)}
-            onLoad={fn.upgradePrecedingCustomElement}
-          />
-        </>
+      {children.map((child, index) => (
+        tags[index] ? child : (
+          <>
+            {child}
+            <upgrade-preceding
+              onLoad={fn.forwardLoad}
+              onDisconnect={fn.forwardSuspend}
+            >
+            </upgrade-preceding>
+          </>
+        )
       ))}
     </>
   );
 }
 
 // Framework wrappers render into the caller's component scope.
-transparent(ActivateOnLoadHandler);
-transparent(ActivateLifecycleHandlers);
+transparent(ActivateParsedHandler);
 transparent(BuildFromTemplateElement);
 transparent(UpgradeCustomElement);

@@ -117,8 +117,9 @@ export type BundleSource = {
   prelude?: string;
   /**
    * Handlers imported from other bundles. Keys are `name` (reachable as
-   * `fn.name`, and as a bare identifier when valid) or `signal:name`
-   * (reachable as `signal.name`).
+   * `fn.name`, and as a bare identifier when valid), `signal:name`
+   * (reachable as `signal.name`) or `template:name` (reachable as
+   * `template.name`).
    */
   dependencies: ReadonlyMap<string, { path: string; exportName: string }>;
   /** Binding name for module-private state, or false for stateless bundles. */
@@ -132,6 +133,20 @@ export type BundleSource = {
   register?: string;
 };
 
+/** The namespaces a dependency key may belong to, by its prefix. */
+type DependencyNamespace = "fn" | "signal" | "template";
+
+function namespaceOf(key: string): DependencyNamespace {
+  if (key.startsWith("signal:")) return "signal";
+  if (key.startsWith("template:")) return "template";
+  return "fn";
+}
+
+/** A dependency key without its namespace prefix. */
+function nameOf(key: string): string {
+  return key.replace(/^(signal|template):/, "");
+}
+
 /**
  * Compile a bundle of handlers into one ES module. Returns the code and the
  * dependency keys that survive tree-shaking.
@@ -144,10 +159,16 @@ export async function compileHandlerBundle(
   if (stored && !isBindingName(stored)) {
     throw new TypeError("Store state must use a simple parameter name.");
   }
-  const hasSignals = [...dependencies.keys()].some((key) =>
-    key.startsWith("signal:")
+  const namespaces = new Set(
+    [...dependencies.keys()].map((key) => namespaceOf(key)),
   );
-  const reserved = new Set(["fn", "signal", ...(stored ? [stored] : [])]);
+  const reserved = new Set([
+    "fn",
+    "signal",
+    "template",
+    "constants",
+    ...(stored ? [stored] : []),
+  ]);
   const bareNames = [...dependencies.keys()].filter((key) =>
     isBindingName(key) && !reserved.has(key) && !functions.has(key)
   );
@@ -207,21 +228,20 @@ export async function compileHandlerBundle(
   const plugin: Plugin = {
     name: "tiny-handler-bundle",
     setup(build) {
-      build.onResolve({ filter: /^tiny:(fn|signal)$/ }, (args) => ({
+      build.onResolve({ filter: /^tiny:(fn|signal|template)$/ }, (args) => ({
         path: args.path.slice(5),
         namespace: "tiny-handlers",
       }));
       build.onLoad(
-        { filter: /^(fn|signal)$/, namespace: "tiny-handlers" },
+        { filter: /^(fn|signal|template)$/, namespace: "tiny-handlers" },
         (args) => ({
           contents: [...dependencies].filter(([key]) =>
-            key.startsWith("signal:") === (args.path === "signal")
-          ).map(([key, { exportName: name }]) => {
-            const exported = args.path === "signal" ? key.slice(7) : key;
-            return `export { ${exportName(name)} as ${
-              exportName(exported)
-            } } from ${JSON.stringify(syntheticPaths.get(key))};`;
-          }).join("\n"),
+            namespaceOf(key) === args.path
+          ).map(([key, { exportName: name }]) =>
+            `export { ${exportName(name)} as ${
+              exportName(nameOf(key))
+            } } from ${JSON.stringify(syntheticPaths.get(key))};`
+          ).join("\n"),
           loader: "js",
         }),
       );
@@ -238,7 +258,12 @@ export async function compileHandlerBundle(
     stdin: {
       contents: [
         'import * as fn from "tiny:fn";',
-        hasSignals ? 'import * as signal from "tiny:signal";' : "",
+        namespaces.has("signal")
+          ? 'import * as signal from "tiny:signal";'
+          : "",
+        namespaces.has("template")
+          ? 'import * as template from "tiny:template";'
+          : "",
         bareNames.length
           ? `import { ${bareNames.join(", ")} } from "tiny:fn";`
           : "",
@@ -274,7 +299,7 @@ export async function compileHandlerBundle(
   for (const [key, { exportName: name }] of live) {
     let binding = key;
     if (!bareNames.includes(key)) {
-      const unprefixed = key.replace(/^signal:/, "");
+      const unprefixed = nameOf(key);
       const base = isBindingName(name)
         ? name
         : isBindingName(unprefixed)
@@ -303,15 +328,13 @@ export async function compileHandlerBundle(
   const importLines = [...importsByPath].map(([path, specifiers]) =>
     `import { ${specifiers.join(", ")} } from ${JSON.stringify(path)};`
   );
-  const namespace = (signals: boolean) =>
-    live.filter(([key]) => key.startsWith("signal:") === signals).map((
-      [key],
-    ) => {
-      const name = signals ? key.slice(7) : key;
+  const namespace = (kind: DependencyNamespace) =>
+    live.filter(([key]) => namespaceOf(key) === kind).map(([key]) => {
+      const name = nameOf(key);
       const binding = bindings.get(key)!;
       // Signal accessors are exposed as the signal itself, resolved lazily so
       // module evaluation order between bundles does not matter.
-      if (signals) {
+      if (kind === "signal") {
         const property = /^[$A-Z_a-z][$\w]*$/.test(name)
           ? name
           : `[${JSON.stringify(name)}]`;
@@ -330,8 +353,9 @@ export async function compileHandlerBundle(
       ).join(", ")
     } };`
     : "";
-  const fnMembers = namespace(false);
-  const signalMembers = namespace(true);
+  const fnMembers = namespace("fn");
+  const signalMembers = namespace("signal");
+  const templateMembers = namespace("template");
   const transformed = await Promise.all(
     pieces.map(async (piece) =>
       (await esbuild.transform(piece, { loader: "ts", target: "esnext" })).code
@@ -345,6 +369,9 @@ export async function compileHandlerBundle(
       : "",
     signalMembers && sourceIdentifiers.has("signal")
       ? `const signal = { ${signalMembers} };`
+      : "",
+    templateMembers && sourceIdentifiers.has("template")
+      ? `const template = { ${templateMembers} };`
       : "",
     stored && sourceIdentifiers.has(stored) ? storedLine : "",
     ...transformed,

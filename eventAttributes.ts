@@ -142,6 +142,7 @@ export function createSignalReferences<TSignals>(
       const reference = Object.freeze(Object.defineProperties({}, {
         value: { get: unavailable, set: unavailable },
         subscribe: { get: unavailable },
+        unsubscribe: { get: unavailable },
       }));
       referenceDetails.set(reference, { name, resolved });
       return reference;

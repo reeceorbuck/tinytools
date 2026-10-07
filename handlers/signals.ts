@@ -5,6 +5,8 @@ type EffectFn = () => void;
 /** The event a `tiny.Signals` signal dispatches to its subscribers. */
 export interface SignalEvent extends Event {
   signal: Signal<SignalValue>;
+  /** True for the event delivered when the element subscribed on load. */
+  initial?: boolean;
 }
 
 /** An upgraded custom element (see `UpgradeCustomElement`) receiving signal events. */

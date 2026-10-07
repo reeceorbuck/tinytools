@@ -58,6 +58,7 @@ Deno.test("imports events track only accessed assets without context", async () 
   const tracker = {
     accessedHandlerFiles: new Set<string>(),
     accessedStyleFiles: new Set<string>(),
+    accessedLifecycleTags: new Set<string>(),
   };
   await withNoContextToolUsageTracker(tracker, async () => {
     const { events, fn: references } = await imports(handlers, styles);

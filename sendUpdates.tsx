@@ -1,5 +1,6 @@
 import { renderToReadableStream } from "hono/jsx/streaming";
 import { AssetTags, NewPartial } from "./components/mod.ts";
+import { LifecycleTags } from "./components/AssetTags.tsx";
 import {
   createNoContextToolUsageTracker,
   withNoContextToolUsageTracker,
@@ -54,6 +55,7 @@ export async function sendUpdateStream(
   const { fn } = await tiny.imports(headHandler);
   const update = (
     <update update-paths={paths?.length ? JSON.stringify(paths) : undefined}>
+      <LifecycleTags tags={toolUsageTracker.accessedLifecycleTags} />
       <NewPartial onLoad={fn.importIntoHead}>
         <AssetTags
           accessedHandlerFiles={toolUsageTracker.accessedHandlerFiles}

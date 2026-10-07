@@ -1,32 +1,109 @@
-import { assertEquals, assertMatch } from "@std/assert";
-import { tiny } from "../honoFactory.tsx";
-import { Signals } from "../clientTools.ts";
-import type { ClientFunctionImpl } from "../clientFunctions.ts";
-import { UpgradeCustomElement } from "../components/ActivateOnLoadHandler.tsx";
+import { assertEquals, assertMatch, assertStringIncludes } from "@std/assert";
+import { runHandlerScript, tiny } from "../honoFactory.tsx";
+import { Signals, Templates } from "../clientTools.ts";
+import {
+  bundleByFilename,
+  type ClientFunctionImpl,
+} from "../clientFunctions.ts";
+import {
+  ActivateParsedHandler,
+  UpgradeCustomElement,
+} from "../components/ActivateOnLoadHandler.tsx";
 import type { HandlerProp } from "../eventAttributes.ts";
+import { jsxTemplate } from "../jsx-runtime.ts";
 
-Deno.test("UpgradeCustomElement preloads the bundle holding its own handler", async () => {
+/** The lifecycle tags a full page declares in its head, in order. */
+function declaredInHead(html: string): string[] {
+  const head = /<head>([\s\S]*?)<\/head>/.exec(html)?.[1] ?? "";
+  return [...head.matchAll(/<meta name="tt-define" content="([\w-]+)"\/>/g)]
+    .map(([, tag]) => tag);
+}
+
+Deno.test("UpgradeCustomElement declares each custom tag once, ahead of the head script", async () => {
   const app = new tiny.Hono({ tools: "core" });
   app.get("/", (context) =>
     context.render(
       <UpgradeCustomElement>
         <x-panel>One</x-panel>
         <x-panel>Two</x-panel>
+        <y-panel>Three</y-panel>
       </UpgradeCustomElement>,
     ));
   const html = await (await app.request("/")).text();
-  const links = [
-    ...html.matchAll(
-      /<link rel="modulepreload" href="\/handlers\/([\w]+)\.js"[^>]*tt-handler-load="(\w+)\.upgradePrecedingCustomElement"/g,
-    ),
-  ];
-  assertEquals(links.length, 2);
-  for (const [, preloaded, bundle] of links) {
-    assertEquals(preloaded, bundle);
-  }
+  assertEquals(declaredInHead(html), ["x-panel", "y-panel"]);
+  // The declarations precede the inline runtime that defines them, and the
+  // runtime precedes the body, so the elements upgrade as they are parsed.
+  const metaAt = html.indexOf('<meta name="tt-define"');
+  const scriptAt = html.indexOf("defineLifecycleTags();");
+  const bodyAt = html.indexOf("<body>");
+  assertEquals(metaAt < scriptAt && scriptAt < bodyAt, true);
+  // Nothing is rendered beside the elements, and no define bundle is loaded.
+  assertEquals(html.includes("modulepreload"), false);
+  assertEquals(html.includes("?define="), false);
+  assertStringIncludes(html, "<x-panel>One</x-panel><x-panel>Two</x-panel>");
 });
 
-Deno.test("UpgradeCustomElement names custom tags so they upgrade wherever they move", async () => {
+Deno.test("the inline head script carries the lifecycle runtime", () => {
+  assertStringIncludes(runHandlerScript, "function runHandler(");
+  assertStringIncludes(runHandlerScript, "function defineLifecycleElement(");
+  assertStringIncludes(runHandlerScript, "customElements.define(");
+  assertStringIncludes(runHandlerScript, 'new Event("load")');
+  assertStringIncludes(runHandlerScript, "this.abortController.abort()");
+  // Declarations: the `<tt-define>` element and the head metas.
+  assertStringIncludes(runHandlerScript, '"tt-define"');
+  assertStringIncludes(runHandlerScript, 'meta[name="tt-define"]');
+  assertStringIncludes(
+    runHandlerScript,
+    "const tiny = {runHandler, defineLifecycleElement};",
+  );
+});
+
+Deno.test("partial updates declare tags at the top level, before the templates", async () => {
+  const app = new tiny.Hono({ tools: "core" });
+  app.get("/", (context) =>
+    context.render(
+      <UpgradeCustomElement>
+        <x-panel>One</x-panel>
+      </UpgradeCustomElement>,
+    ));
+  const html = await (await app.request("/", {
+    headers: { "source-url": "http://localhost/previous" },
+  })).text();
+  assertMatch(
+    html,
+    /<update[^>]*><tt-define tag="x-panel"><\/tt-define><template/,
+  );
+  assertEquals(html.includes("tt-define") && !html.includes("<meta"), true);
+});
+
+Deno.test("UpgradeCustomElement recognises custom tags in precompiled markup", async () => {
+  // What `"jsx": "precompile"` emits for `<x-panel>One</x-panel>` and for
+  // `<section>{promise}</section>`: rendered markup, possibly a promise of it.
+  const strings = (...parts: string[]) =>
+    Object.assign(parts, { raw: parts }) as unknown as TemplateStringsArray;
+  const app = new tiny.Hono({ tools: "core" });
+  app.get("/", (context) =>
+    context.render(
+      <UpgradeCustomElement>
+        {jsxTemplate(strings("<x-panel>One</x-panel>"))}
+        {jsxTemplate(
+          strings("<x-panel>", "</x-panel>"),
+          Promise.resolve("Two"),
+        )}
+        {jsxTemplate(strings("<section>Three</section>"))}
+        {jsxTemplate(strings("<x-panel>Four</x-panel><x-panel>Five</x-panel>"))}
+      </UpgradeCustomElement>,
+    ));
+  const html = await (await app.request("/")).text();
+  assertEquals(declaredInHead(html), ["x-panel", "upgrade-preceding"]);
+  assertStringIncludes(html, "<x-panel>One</x-panel><x-panel>Two</x-panel>");
+  // The plain element and the two-root markup still get a proxy sibling.
+  assertEquals([...html.matchAll(/<upgrade-preceding /g)].length, 2);
+  assertMatch(html, /<section>Three<\/section><upgrade-preceding /);
+  assertMatch(html, /<x-panel>Five<\/x-panel><upgrade-preceding /);
+});
+
+Deno.test("UpgradeCustomElement gives plain tags a proxy sibling", async () => {
   const app = new tiny.Hono({ tools: "core" });
   app.get("/", (context) =>
     context.render(
@@ -36,11 +113,74 @@ Deno.test("UpgradeCustomElement names custom tags so they upgrade wherever they 
       </UpgradeCustomElement>,
     ));
   const html = await (await app.request("/")).text();
-  const defined = [...html.matchAll(/<link rel="modulepreload"[^>]*>/g)].map((
-    [link],
-  ) => /data-define="([^"]+)"/.exec(link)?.[1] ?? null);
-  // Custom tags are defined by name; plain tags fall back to a proxy sibling.
-  assertEquals(defined, ["x-panel", null]);
+  // The proxy's own tag is declared like any other lifecycle tag.
+  assertEquals(declaredInHead(html), ["x-panel", "upgrade-preceding"]);
+  // Only the plain tag gets a proxy, which forwards load and suspend to it.
+  assertMatch(
+    html,
+    /<section>Two<\/section><upgrade-preceding onload="tiny\.runHandler\(this,event\)" tt-handler-load="(\w+)\.forwardLoad" ondisconnect="tiny\.runHandler\(this,event\)" tt-handler-disconnect="\1\.forwardSuspend"><\/upgrade-preceding>/,
+  );
+  assertEquals([...html.matchAll(/<upgrade-preceding /g)].length, 1);
+  assertEquals(html.includes("<link"), false);
+});
+
+Deno.test("template bundles define the lifecycle tags their markup upgrades", async () => {
+  const rows = new Templates(import.meta.url, {
+    row: () => (
+      <UpgradeCustomElement>
+        <x-row>Row</x-row>
+      </UpgradeCustomElement>
+    ),
+  });
+  await rows.ensureBuilt();
+  const rendered = rows.rendered("row")!;
+  assertEquals(rendered.lifecycleTags, ["x-row"]);
+  assertEquals(rendered.handlerFiles, []);
+  assertEquals(rendered.markup, "<x-row>Row</x-row>");
+  const code = await rows._handlerDefinitions.get("row")!.bundle.buildCode();
+  assertStringIncludes(code, 'tiny.defineLifecycleElement("x-row");');
+  assertEquals(code.includes("import {"), false);
+
+  // Rendering the template on the server declares the tag for the page.
+  const app = new tiny.Hono({ tools: "core" });
+  app.get("/", async (context) => {
+    const { template } = await tiny.imports(rows);
+    return context.render(<div>{template.row()}</div>);
+  });
+  const html = await (await app.request("/")).text();
+  assertEquals(declaredInHead(html), ["x-row"]);
+  assertStringIncludes(html, "<div><x-row>Row</x-row></div>");
+});
+
+const parsedHandlers = new tiny.Handlers(import.meta.url, {
+  build: function (this: HTMLElement) {
+    this.dataset.built = "true";
+  },
+});
+
+Deno.test("ActivateParsedHandler runs onParsed once through a trigger after the child", async () => {
+  const app = new tiny.Hono({ tools: "core" });
+  app.get("/", async (context) => {
+    const { fn } = await tiny.imports(parsedHandlers);
+    return context.render(
+      <ActivateParsedHandler>
+        <template onParsed={fn.build}>Content</template>
+      </ActivateParsedHandler>,
+    );
+  });
+  const html = await (await app.request("/")).text();
+  // The element binds `parsed`; the link trigger after it fires on load and
+  // preloads the bundle holding its own handler.
+  assertMatch(
+    html,
+    /<template onparsed="tiny\.runHandler\(this,event\)" tt-handler-parsed="\w+\.build">Content<\/template><link rel="modulepreload" href="\/handlers\/(\w+)\.js" tt-handler-load="\1\.referParsed" onLoad="tiny\.runHandler\(this,event\)"\/>/,
+  );
+  // `parsed` is not a DOM event, so the trigger dispatches it via runHandler.
+  const code = await bundleByFilename(
+    /tt-handler-load="(\w+)\.referParsed"/.exec(html)![1],
+  )!.buildCode();
+  assertStringIncludes(code, 'tiny.runHandler(target, new Event("parsed"))');
+  assertStringIncludes(code, "this.remove()");
 });
 
 Deno.test("Signals collections share one runtime bundle", async () => {

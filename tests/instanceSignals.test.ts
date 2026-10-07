@@ -88,7 +88,7 @@ Deno.test("per-instance signals resolve to the enclosing instance root", () => {
   }
 });
 
-Deno.test("`.all` aggregates every instance in document order", async () => {
+Deno.test("`.all` aggregates every resolved instance in document order", () => {
   const byId = installDocument(`
     <div id="list">
       <fieldset id="one" ${root}><select id="a"></select></fieldset>
@@ -101,30 +101,87 @@ Deno.test("`.all` aggregates every instance in document order", async () => {
     target.addEventListener("signal", () => updates.push(summary.value));
     summary.subscribe(target);
 
-    // Roots already in the document count before anything touches them.
-    assertEquals(summary.value, "bulk A3; bulk A3");
+    // Nothing scans the document: a root counts once something inside it
+    // resolves a signal, as its onLoad / onChange references do.
+    assertEquals(summary.value, "");
+    shade.for(byId("b")).value = "B1";
+    assertEquals(summary.value, "bulk B1");
+    material.for(byId("a"));
+    assertEquals(summary.value, "bulk A3; bulk B1");
     assertEquals(material.all.value, ["bulk", "bulk"]);
 
-    shade.for(byId("b")).value = "B1";
-    assertEquals(summary.value, "bulk A3; bulk B1");
-
-    // Added roots join in document order, wherever they are inserted.
-    const list = byId("list");
-    list.insertAdjacentHTML(
+    // Later roots join in document order, wherever they are inserted.
+    byId("list").insertAdjacentHTML(
       "afterbegin",
       `<fieldset id="zero" ${root}><select id="z"></select></fieldset>`,
     );
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    assertEquals(summary.value, "bulk A3; bulk A3; bulk B1");
-
     material.for(byId("z")).value = "flow";
     assertEquals(summary.value, "flow A3; bulk A3; bulk B1");
 
-    // Removed roots drop out.
+    // An upgraded root (one with an abortController) leaves when it aborts.
+    const controller = new AbortController();
+    const upgraded = byId("list").ownerDocument.createElement("fieldset");
+    upgraded.setAttribute("tt-instance", key);
+    upgraded.innerHTML = `<select id="u"></select>`;
+    Object.assign(upgraded, { abortController: controller });
+    byId("list").append(upgraded);
+    material.for(byId("u")).value = "glass";
+    assertEquals(summary.value, "flow A3; bulk A3; bulk B1; glass A3");
+    upgraded.remove();
+    controller.abort();
+    assertEquals(summary.value, "flow A3; bulk A3; bulk B1");
+    assertEquals(updates.at(-1), "flow A3; bulk A3; bulk B1");
+
+    // Without an abort, a removed root is left out of values but not dropped.
     byId("one").remove();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    assertEquals(summary.value, "flow A3; bulk B1");
-    assertEquals(updates.at(-1), "flow A3; bulk B1");
+    assertEquals(summary.value, "flow A3; bulk A3; bulk B1");
+    shade.for(byId("z")).value = "A2";
+    assertEquals(summary.value, "flow A2; bulk B1");
+  } finally {
+    uninstallDocument();
+  }
+});
+
+Deno.test("an aborted root re-inserted later resumes its instance", () => {
+  const byId = installDocument(`<div id="list"></div>`);
+  try {
+    const { shade, material, summary } = layerGraph();
+    const document = byId("list").ownerDocument;
+    const upgrade = (id: string) => {
+      const root = document.createElement("fieldset");
+      root.setAttribute("tt-instance", key);
+      root.innerHTML = `<select id="${id}"></select>`;
+      // As a lifecycle element: a new controller on every connection.
+      return Object.assign(root, { abortController: new AbortController() });
+    };
+    const first = upgrade("a");
+    const second = upgrade("b");
+    byId("list").append(first, second);
+    shade.for(byId("a")).value = "B1";
+    material.for(byId("b")).value = "flow";
+    assertEquals(summary.value, "bulk B1; flow A3");
+
+    // Removing the root parks its instance: it leaves `.all` at once.
+    first.remove();
+    first.abortController.abort();
+    assertEquals(summary.value, "flow A3");
+
+    // The same element back in the document is the same instance.
+    first.abortController = new AbortController();
+    byId("list").prepend(first);
+    assertEquals(shade.for(byId("a")).value, "B1");
+    assertEquals(summary.value, "bulk B1; flow A3");
+
+    // It parks again under its new controller.
+    first.remove();
+    first.abortController.abort();
+    assertEquals(summary.value, "flow A3");
+
+    // A fresh element with the same markup is a new instance.
+    const third = upgrade("a");
+    byId("list").prepend(third);
+    assertEquals(shade.for(byId("a")).value, "A3");
+    assertEquals(summary.value, "bulk A3; flow A3");
   } finally {
     uninstallDocument();
   }
@@ -191,7 +248,7 @@ function noteGraph() {
   });
 }
 
-Deno.test("nested perInstance scopes each level and `.all` to its parent", async () => {
+Deno.test("nested perInstance scopes each level and `.all` to its parent", () => {
   const layerRoot = `tt-instance="${key}-layer"`;
   const byId = installDocument(`
     <form id="noteA" ${root}>
@@ -210,6 +267,8 @@ Deno.test("nested perInstance scopes each level and `.all` to its parent", async
     const { isolation, material, label, summary } = noteGraph();
     const sumA = byId("sumA");
     const sumB = byId("sumB");
+    // Layers count once resolved, as their onLoad references do.
+    for (const id of ["a1", "b1", "b2"]) material.for(byId(id));
     assertEquals(summary.for(sumA).value, "bulk (cheekguard)");
     assertEquals(
       summary.for(sumB).value,
@@ -231,7 +290,7 @@ Deno.test("nested perInstance scopes each level and `.all` to its parent", async
       "beforeend",
       `<fieldset ${layerRoot}><select id="a2"></select></fieldset>`,
     );
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    material.for(byId("a2"));
     assertEquals(summary.for(sumA).value, "bulk (rdam); bulk (rdam)");
     assertEquals(
       summary.for(sumB).value,

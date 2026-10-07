@@ -230,6 +230,12 @@ interface GlobalOverrides {
   // Common events
   onCommand?: ClientEventHandler<CommandEvent>;
 
+  /**
+   * Fired once by `ActivateParsedHandler` when the element and its content
+   * have been parsed; unlike `onLoad` it never repeats on reconnection.
+   */
+  onParsed?: ClientEventHandler<Event>;
+
   // Window / document / navigation events
   onNavigate?: ClientEventHandler<NavigateEvent>;
   onNavigateSuccess?: ClientEventHandler<Event>;

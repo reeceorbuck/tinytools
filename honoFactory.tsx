@@ -11,6 +11,7 @@ import { contextStorage } from "hono/context-storage";
 import { jsxRenderer } from "hono/jsx-renderer";
 
 import {
+  Constants,
   Handlers,
   imports,
   memoryAssets,
@@ -21,15 +22,31 @@ import {
   Signals,
   Store,
   Styles,
+  Templates,
 } from "./clientTools.ts";
 import { getContextTitle } from "./titled.ts";
 import { css } from "./scopedStyles.ts";
-import { AssetTags } from "./components/AssetTags.tsx";
+import { AssetTags, LifecycleTags } from "./components/AssetTags.tsx";
+import {
+  defineLifecycleElement,
+  defineLifecycleTags,
+} from "./lifecycleElement.ts";
 import { NewPartial } from "./components/NewPartial.tsx";
 import { CSP_ENABLED_KEY, eventHandlerBody } from "./eventAttributes.ts";
 
 const ROUTE_LAYOUT_APPLIED_KEY = "tinyToolsRouteLayoutApplied";
-const runHandlerScript = `${runHandler.toString()}; const tiny = {runHandler};`;
+/**
+ * The inline head script: the handler dispatcher and the lifecycle element
+ * runtime, which defines the tags declared by `<meta name="tt-define">`
+ * before the body is parsed. Exported for tests that check the CSP hash.
+ */
+export const runHandlerScript = [
+  runHandler.toString(),
+  defineLifecycleElement.toString(),
+  defineLifecycleTags.toString(),
+  "defineLifecycleTags();",
+  "const tiny = {runHandler, defineLifecycleElement};",
+].join("\n");
 
 export type RouteLayoutProps = { children: Child };
 /** A layout callback; it may return the children unchanged. */
@@ -249,6 +266,7 @@ function createCoreMiddleware(
     async (context, next) => {
       context.set("accessedHandlerFiles", new Set<string>());
       context.set("accessedStyleFiles", new Set<string>());
+      context.set("accessedLifecycleTags", new Set<string>());
       await next();
     },
     // deno-lint-ignore no-explicit-any
@@ -280,13 +298,21 @@ function createCoreMiddleware(
       const accessedStyleFiles = context.get("accessedStyleFiles") as Set<
         string
       >;
+      const accessedLifecycleTags = context.get("accessedLifecycleTags") as Set<
+        string
+      >;
       const handlerFiles = Array.from(accessedHandlerFiles);
       const styleFiles = Array.from(accessedStyleFiles);
+      const lifecycleTags = Array.from(accessedLifecycleTags);
       accessedHandlerFiles.clear();
       accessedStyleFiles.clear();
+      accessedLifecycleTags.clear();
       if (context.req.header("source-url")) {
+        // Tag declarations sit at the top level, so they connect (and define)
+        // in the same append as the templates, before any trigger fires.
         return (
           <update>
+            <LifecycleTags tags={lifecycleTags} />
             <NewPartial onLoad={fn.importIntoHead}>
               {title !== undefined && <title>{title}</title>}
               <AssetTags
@@ -312,6 +338,8 @@ function createCoreMiddleware(
             <AssetTags
               accessedHandlerFiles={handlerFiles}
               accessedStyleFiles={styleFiles}
+              accessedLifecycleTags={lifecycleTags}
+              defineWith="meta"
             />
             <script>{raw(runHandlerScript)}</script>
           </head>
@@ -358,19 +386,21 @@ class TinyHono<E extends Env = BlankEnv> extends HonoBase<E> {
  * Loaded bundles register themselves on `globalThis.handlers`, so their
  * handlers run synchronously during dispatch (needed for `preventDefault()`,
  * `NavigateEvent.intercept()` and the like). A bundle that has not loaded yet
- * is imported, and its handler runs once it has.
+ * is imported, and its handler runs once it has. Handlers run in the order
+ * listed: once one waits for its bundle, the ones after it wait too.
  */
 export function runHandler(
   el: HTMLElement | typeof globalThis,
   e: Event,
 ) {
   const element = el === globalThis ? document.body : el as HTMLElement;
-  const registry = (globalThis as {
-    handlers?: Record<
-      string,
-      Record<string, (this: unknown, event: Event) => unknown>
-    >;
-  }).handlers;
+  type Bundle = Record<string, (this: unknown, event: Event) => unknown>;
+  const registered = (name: string): Bundle | undefined =>
+    (globalThis as { handlers?: Record<string, Bundle> }).handlers?.[name];
+
+  // Set once a handler has to wait for its bundle; later handlers in the
+  // list queue behind it, so they run in the attribute's order.
+  let pending: Promise<unknown> | undefined;
 
   // Each reference is `<bundle>.<handler>`.
   for (
@@ -381,33 +411,37 @@ export function runHandler(
     if (dot < 1) continue;
     const name = reference.slice(0, dot);
     const handler = reference.slice(dot + 1);
-    const run = (
-      bundle: Record<string, (this: unknown, event: Event) => unknown>,
-    ) => {
+    const run = (bundle: Bundle) => {
       if (typeof bundle[handler] !== "function") {
         console.error(`Handler ${reference} not found in its bundle.`);
         return;
       }
       bundle[handler].call(el, e);
     };
-    if (registry?.[name]) run(registry[name]);
-    else {
-      import(`/handlers/${name}.js`).then(
-        run,
-        (error) =>
-          console.error(`Failed to load handler bundle ${name}:`, error),
-      );
+    const bundle = registered(name);
+    if (bundle && !pending) {
+      run(bundle);
+      continue;
     }
+    // Re-checked at run time: an earlier link may have loaded this bundle.
+    const load = () => registered(name) ?? import(`/handlers/${name}.js`);
+    pending = (pending ? pending.then(load) : Promise.resolve(load()))
+      .then(run)
+      .catch((error) => console.error(`Handler ${reference} failed:`, error));
   }
 }
 
 export type TinyApi = {
   readonly Hono: typeof TinyHono;
   readonly Handlers: typeof Handlers;
+  readonly Constants: typeof Constants;
   /** @deprecated Use tiny.Signals instead. Retained for compatibility. */
   readonly Store: typeof Store;
   readonly Signals: typeof Signals;
+  readonly Templates: typeof Templates;
   readonly runHandler: typeof runHandler;
+  /** Defines a custom tag as a lifecycle element; in the browser, the inline head runtime. */
+  readonly defineLifecycleElement: typeof defineLifecycleElement;
   readonly Styles: typeof Styles;
   readonly css: typeof css;
   readonly imports: typeof imports;
@@ -429,14 +463,17 @@ export type TinyApi = {
 export const tiny: TinyApi = {
   Hono: TinyHono,
   Handlers,
+  Constants,
   Store,
   Signals,
+  Templates,
   Styles,
   css,
   imports,
   component,
   transparent,
   runHandler,
+  defineLifecycleElement,
   middleware: {
     core: createCoreMiddleware,
     csp: createCspMiddleware,

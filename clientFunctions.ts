@@ -32,23 +32,60 @@ export const handlerBundles: Set<HandlerBundle> = new Set();
 const bundlesByFilename = new Map<string, HandlerBundle>();
 
 /**
+ * The bundle filename of a recorded handler file: `<bundle>.js`, or the bare
+ * filename, with any query (such as the lifecycle runtime's `?define=`)
+ * removed.
+ */
+function bundleName(file: string): string {
+  return file.replace(/\?.*$/, "").replace(/\.js$/, "");
+}
+
+/**
  * Handler files (`<bundle>.js`) that the given files import, directly or
  * transitively, and that are not in the given list themselves. Rendering them
  * as `modulepreload` lets the browser fetch the whole graph in parallel
  * instead of discovering one level of imports per round trip.
  */
 export function handlerFileDependencies(files: Iterable<string>): string[] {
-  const requested = new Set(files);
+  const requested = new Set([...files].map(bundleName));
   const dependencies = new Set<string>();
-  for (const file of requested) {
-    const bundle = bundlesByFilename.get(file.replace(/\.js$/, ""));
+  for (const name of requested) {
+    const bundle = bundlesByFilename.get(name);
     if (!bundle) continue;
     for (const filename of bundle.reachableFilenames) {
-      const dependency = `${filename}.js`;
-      if (!requested.has(dependency)) dependencies.add(dependency);
+      if (!requested.has(filename)) dependencies.add(`${filename}.js`);
     }
   }
   return [...dependencies];
+}
+
+/**
+ * Stylesheets (`<bundle>.css`) that the markup of templates reachable from
+ * the given handler files needs, and that are not in `styleFiles` already. A
+ * page that loads a handler importing a `tiny.Templates` collection gets the
+ * template's stylesheets from the server this way, before any clone is made.
+ */
+export function styleFileDependencies(
+  handlerFiles: Iterable<string>,
+  styleFiles: Iterable<string>,
+): string[] {
+  const present = new Set(styleFiles);
+  const dependencies = new Set<string>();
+  for (const file of handlerFiles) {
+    const bundle = bundlesByFilename.get(bundleName(file));
+    if (!bundle) continue;
+    for (const reachable of bundle.reachable()) {
+      for (const styleFile of reachable.styleFiles) {
+        if (!present.has(styleFile)) dependencies.add(styleFile);
+      }
+    }
+  }
+  return [...dependencies];
+}
+
+/** The bundle a handler file (`<bundle>.js`, or the bare filename) was handed out for. */
+export function bundleByFilename(file: string): HandlerBundle | undefined {
+  return bundlesByFilename.get(bundleName(file));
 }
 
 /**
@@ -152,6 +189,8 @@ export type HandlerBundleOptions = {
   /** Explicit `tiny.imports()` dependencies; absent for object-form bundles. */
   dependencies?: ReadonlyMap<string, ClientFunctionImpl>;
   prelude?: string;
+  /** Stylesheets (`<bundle>.css`) the markup this bundle carries needs. */
+  styleFiles?: Iterable<string>;
 };
 
 /**
@@ -168,6 +207,8 @@ export class HandlerBundle {
   readonly stateful: boolean;
   readonly storedBinding: string;
   readonly prelude: string;
+  /** Stylesheets the markup this bundle carries needs (see `styleFileDependencies`). */
+  readonly styleFiles: ReadonlySet<string>;
   #explicitDependencies?: Map<string, ClientFunctionImpl>;
   #filename: string | undefined;
   /** Last filename written to disk, starting from the persisted cache entry. */
@@ -179,6 +220,7 @@ export class HandlerBundle {
     this.stateful = options.stateful;
     this.storedBinding = options.storedBinding;
     this.prelude = options.prelude ?? "";
+    this.styleFiles = new Set(options.styleFiles);
     this.#explicitDependencies = options.dependencies &&
       new Map(options.dependencies);
     handlerBundles.add(this);
@@ -261,7 +303,7 @@ export class HandlerBundle {
 
   /** Filenames of this bundle and every bundle it transitively imports. */
   get reachableFilenames(): string[] {
-    return [...this.#reachable()].map((bundle) => bundle.filename);
+    return [...this.reachable()].map((bundle) => bundle.filename);
   }
 
   /** Drop the memoised filename so the next access rehashes the import graph. */
@@ -270,7 +312,7 @@ export class HandlerBundle {
   }
 
   /** This bundle and every bundle it transitively imports. */
-  #reachable(): Set<HandlerBundle> {
+  reachable(): Set<HandlerBundle> {
     const reachable = new Set<HandlerBundle>([this]);
     for (const bundle of reachable) {
       for (const impl of bundle.dependencies.values()) {
@@ -281,7 +323,7 @@ export class HandlerBundle {
   }
 
   #computeFilename(): string {
-    const reachable = this.#reachable();
+    const reachable = this.reachable();
     // This bundle's own identity comes first so bundles that import each
     // other (and so share a reachable set) still get distinct names.
     const parts = [...reachable].map((bundle) =>
@@ -348,7 +390,7 @@ export class HandlerBundle {
     options: { fresh?: boolean } = {},
   ): Promise<boolean> {
     if (cache.isHandlerProcessedThisPass(this)) return false;
-    const pending = [...this.#reachable()].filter((bundle) =>
+    const pending = [...this.reachable()].filter((bundle) =>
       !cache.isHandlerProcessedThisPass(bundle)
     );
     // Filenames depend on the whole graph, so refresh them all before any

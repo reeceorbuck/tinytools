@@ -48,6 +48,7 @@
       "esbuildInit.ts",
       "handlerNamespace.ts",
       "signals.ts",
+      "lifecycleElement.ts",
       "clientFunctions.ts",
       "clientTools.ts",
       "eventAttributes.ts",

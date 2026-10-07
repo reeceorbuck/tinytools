@@ -1,6 +1,10 @@
 import { tryGetContext } from "hono/context-storage";
 import { transparent } from "../componentScope.ts";
-import { handlerFileDependencies } from "../clientFunctions.ts";
+import {
+  handlerFileDependencies,
+  styleFileDependencies,
+} from "../clientFunctions.ts";
+import { LIFECYCLE_TAG_DECLARATION } from "../lifecycleElement.ts";
 import type { JSX } from "../jsx-runtime.ts";
 
 type AssetTagsProps = {
@@ -8,45 +12,87 @@ type AssetTagsProps = {
   accessedHandlerFiles?: Iterable<string>;
   /** Stylesheet files (`<name>.css`) to load; defaults to the request's accessed styles. */
   accessedStyleFiles?: Iterable<string>;
+  /** Custom tags to define as lifecycle elements; defaults to the request's accessed tags. */
+  accessedLifecycleTags?: Iterable<string>;
+  /**
+   * How lifecycle tags are declared: `meta` inside a full page's `<head>`,
+   * where the inline head script defines them as it runs; `element` (the
+   * default) anywhere else, as `<tt-define>` elements that define their tag
+   * the moment they connect. The head cannot hold custom elements.
+   */
+  defineWith?: "meta" | "element";
 };
 
 type AssetContext = {
   var?: {
     accessedHandlerFiles?: Set<string>;
     accessedStyleFiles?: Set<string>;
+    accessedLifecycleTags?: Set<string>;
   };
 };
 
 /**
- * Renders the script, modulepreload and stylesheet tags for the handler
- * bundles and style bundles a render accessed. Without explicit props the
- * request's tracked sets are used and then cleared, so later renders in the
- * same request (such as streamed Suspense content) only emit new assets.
+ * Declares custom tags for the inline head runtime to define as lifecycle
+ * elements (see `lifecycleElement.ts`). Rendered ahead of the markup that
+ * uses the tags, so they are defined before that markup is parsed or inserted.
+ */
+export function LifecycleTags(
+  { tags, defineWith = "element" }: {
+    tags: Iterable<string>;
+    defineWith?: "meta" | "element";
+  },
+): JSX.Element {
+  const unique = [...new Set(tags)];
+  return (
+    <>
+      {unique.map((tag) =>
+        defineWith === "meta"
+          ? <meta key={tag} name={LIFECYCLE_TAG_DECLARATION} content={tag} />
+          : <tt-define key={tag} tag={tag}></tt-define>
+      )}
+    </>
+  );
+}
+
+/**
+ * Renders the lifecycle tag declarations, script, modulepreload and
+ * stylesheet tags for the assets a render accessed. Without explicit props
+ * the request's tracked sets are used and then cleared, so later renders in
+ * the same request (such as streamed Suspense content) only emit new assets.
  */
 export function AssetTags({
   accessedHandlerFiles: explicitHandlerFiles,
   accessedStyleFiles: explicitStyleFiles,
+  accessedLifecycleTags: explicitLifecycleTags,
+  defineWith,
 }: AssetTagsProps): JSX.Element {
   let handlerFiles: string[];
   let styleFiles: string[];
+  let lifecycleTags: string[];
 
-  if (explicitHandlerFiles || explicitStyleFiles) {
+  if (explicitHandlerFiles || explicitStyleFiles || explicitLifecycleTags) {
     handlerFiles = Array.from(explicitHandlerFiles ?? []);
     styleFiles = Array.from(explicitStyleFiles ?? []);
+    lifecycleTags = Array.from(explicitLifecycleTags ?? []);
   } else {
     // Set by tiny.middleware.core() for every request.
     const context = tryGetContext() as AssetContext | undefined;
     const accessedStyleFiles = context?.var?.accessedStyleFiles ?? new Set();
     const accessedHandlerFiles = context?.var?.accessedHandlerFiles ??
       new Set();
+    const accessedLifecycleTags = context?.var?.accessedLifecycleTags ??
+      new Set();
     styleFiles = Array.from(accessedStyleFiles);
     accessedStyleFiles.clear();
     handlerFiles = Array.from(accessedHandlerFiles);
     accessedHandlerFiles.clear();
+    lifecycleTags = Array.from(accessedLifecycleTags);
+    accessedLifecycleTags.clear();
   }
 
   return (
     <>
+      <LifecycleTags tags={lifecycleTags} defineWith={defineWith} />
       {handlerFiles.map((file) => (
         <script src={`/handlers/${file}`} type="module" />
       ))}
@@ -57,9 +103,14 @@ export function AssetTags({
       {styleFiles.map((file) => (
         <link rel="stylesheet" href={`/styles/${file}`} />
       ))}
+      {/* Stylesheets for the markup of templates those handlers clone. */}
+      {styleFileDependencies(handlerFiles, styleFiles).map((file) => (
+        <link rel="stylesheet" href={`/styles/${file}`} />
+      ))}
     </>
   );
 }
 
 // Framework wrappers render into the caller's component scope.
+transparent(LifecycleTags);
 transparent(AssetTags);

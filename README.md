@@ -20,6 +20,7 @@ Published as `@tinytools/hono-tools` on JSR (Deno) and
 - [Handler collections](#handler-collections)
 - [Signals](#signals)
 - [Styles](#styles)
+- [Templates](#templates)
 - [Components](#components)
 - [Client-side navigation](#client-side-navigation)
 - [Partial cache](#partial-cache)
@@ -355,7 +356,8 @@ Rules for factory code, which is emitted as a browser module:
 
 - Keep the outer binding named `fn` (or destructure the original names, such as
   `const { queryParamChanges } = fn`). Renamed bindings and arbitrary captured
-  values are not serialised.
+  values are not serialised; import plain values as [constants](#constants)
+  instead.
 - Static `fn.name()` references are tree-shaken by esbuild, so unused
   dependencies are not loaded. Dynamic `fn[name]` access retains them all.
 - Forward a receiver explicitly: `fn.other.call(this, event)`.
@@ -398,23 +400,37 @@ const viewerSignals = new tiny.Signals(
   import.meta.url,
   ({ Signal, Computed }) => {
     const setContrast = new Signal(0);
-    const contrast = new Computed(() => 10 ** Number(setContrast.value), [
-      setContrast,
-    ]);
+    const contrast = new Computed(() => 10 ** setContrast.value);
     contrast.name = "contrast-adjust";
     return { setContrast, contrast };
   },
 );
 ```
 
-- Initial values are string, number, boolean or `null` (the default). Values
-  written from input events are strings, so convert in computed callbacks.
-- `Computed` is read-only and updates synchronously when its listed dependencies
-  change. Equal values do not notify.
+- Initial values are string, number, boolean, `null` (the default) or an array
+  of strings. A control writes its value in the shape of the signal's current
+  value: a numeric signal reads a number, a boolean signal a checkbox's state,
+  and an array signal the checked values of a checkbox group or the selected
+  options of a `<select multiple>`; anything else is a string.
+- A signal may also hold an element, or an array of elements, so elements find
+  each other through the signal network rather than by id or selector: a handler
+  publishes `signal.target.value = this` and a subscriber reads
+  `signal.target.value`. Elements exist only in the browser, so declare such a
+  signal as `new Signal<Element | null>()`; it starts as `null`, and
+  `evaluateUsingInitialValues` reports `null` for it. A held element is not
+  released when it leaves the document, so a handler on an upgraded custom
+  element should clear the signal when its `abortController` aborts.
+- `Computed` is read-only and updates synchronously when a signal its callback
+  read changes. Dependencies are tracked on every run, so a read behind a
+  condition counts only while that branch is taken. An optional second argument
+  lists extra signals to follow. Equal values (arrays by item) do not notify.
 - The factory runs on the server to validate the definitions and again in the
-  browser. Keep it pure: no outer captures, imports, async work or
-  `tiny.imports()`. Read and write `.value` only in computed callbacks or
-  handlers.
+  browser. Keep it pure: no imports or async work. Handlers and values from
+  module scope come in through an
+  [async definition](#importing-handlers-and-constants); the server evaluates
+  the factory from its source with only `fn` and `constants` in scope, so any
+  other outer reference fails at definition time instead of in the browser. Read
+  and write `.value` only in computed callbacks or handlers.
 - Every collection shares one signal runtime module; each collection is one
   bundle whose state is shared by all consumers on the page.
 
@@ -430,11 +446,16 @@ const { fn, signal } = await tiny.imports(viewerSignals, signalTools);
 
 - On `input` / `change` the signal takes the target's value and, if the input
   has a `name` (or `data-bind-name`), that name.
-- On `load` the element subscribes to the signal and receives `signal` events
-  (`event.signal.value`) whenever it changes. Subscriptions use the element's
-  `abortController` when present (see `UpgradeCustomElement`), so they end when
-  the element is removed.
+- On `load` the element subscribes to the signal and receives a `signal` event
+  (`event.signal.value`) with the current value at once, then one whenever it
+  changes; `event.initial` is true for the first. Subscriptions use the
+  element's `abortController` when present (see `UpgradeCustomElement`), so they
+  end when the element is removed.
+- On any other event (`onClick={signal.requests}`) a numeric signal adds one, so
+  subscribers run on each click and a `Computed` can count them. No handler is
+  needed to turn a click into a signal, and a non-numeric signal throws.
 - While rendering, a reference exposes no `.value`; reading it throws.
+- `unsubscribe(target)` ends a subscription early.
 - `value={signal.x}` is not a binding. Render the initial value yourself.
 
 To render initial markup with the same computations, evaluate the collection on
@@ -453,6 +474,85 @@ const { contrast } = viewerSignals.evaluateUsingInitialValues({
 Each call builds a fresh graph, so nothing is shared between requests. Signals
 left out keep their initial values, computed signals cannot be passed as inputs,
 and a computed callback that needs browser globals throws when evaluated.
+
+### Importing handlers and constants
+
+To use handlers or module-scope values, pass an async definition that imports
+them with [`tiny.imports()`](#tinyimports) and returns the factory, as in the
+[factory form](#factory-form) of handler collections. Plain values are wrapped
+in `tiny.Constants`:
+
+```ts
+const defaults = new tiny.Constants<{ contrast: number; shade: string }>({
+  contrast: 0.5,
+  shade: "B1",
+});
+
+const helpers = new tiny.Handlers(import.meta.url, {
+  describe(shade: string) {/* ... */},
+});
+
+const viewerSignals = new tiny.Signals(import.meta.url, async () => {
+  const { fn, constants } = await tiny.imports(helpers, defaults);
+  return ({ Computed, signalsFrom }) => {
+    const signals = signalsFrom(constants);
+    return {
+      ...signals,
+      label: new Computed(() => fn.describe(signals.shade.value)),
+    };
+  };
+});
+
+const values = await viewerSignals.evaluateUsingInitialValues();
+```
+
+- `signalsFrom(values)` makes one writable signal per entry, typed from it, so
+  an object of defaults becomes the collection's signals in one call. Give the
+  `tiny.Constants` an explicit type when a default is one of several options, as
+  above, or each signal is typed as the literal it starts from.
+- Only the returned factory ships to the browser. Each `fn.name` it uses becomes
+  an import of that handler's bundle; on the server it calls the handler
+  directly. Only handler collections can be imported, not other signal
+  collections. A handler cannot reach this collection's signal classes, so pass
+  in what it needs, such as `Signal`.
+- `constants` merges every imported `tiny.Constants`; a key defined twice is an
+  error. The bundle declares it as a module-level `const constants = {...}` and
+  the server evaluates with the same copy, so both see identical data.
+- The factory may reference `fn` and `constants`, named exactly that, and
+  nothing else from the definition. A free `fn` or `constants` elsewhere in the
+  module makes the transpiler rename local bindings of that name, so avoid one.
+- `evaluateUsingInitialValues` resolves the definition first, so it returns a
+  promise.
+
+### Constants
+
+`new tiny.Constants(values)` takes a plain object whose values survive a JSON
+round trip: strings, numbers, booleans, `null`, and arrays or plain objects of
+those. `undefined` and functions fail type checking, and the constructor keeps a
+JSON copy, so later changes to the object passed in have no effect.
+
+Import it alongside other tools. Outside a definition, `constants` is just the
+merged values. Inside a [Handlers factory](#factory-form) or a
+[Signals definition](#importing-handlers-and-constants), the collection's bundle
+declares `constants` for the code that ships to the browser:
+
+```ts
+const limits = new tiny.Constants({ maxLength: 280 });
+
+const formHandlers = new tiny.Handlers(import.meta.url, async () => {
+  const { constants } = await tiny.imports(limits);
+  return {
+    checkLength(this: HTMLTextAreaElement) {
+      this.toggleAttribute(
+        "data-too-long",
+        this.value.length > constants.maxLength,
+      );
+    },
+  };
+});
+```
+
+Changing a value changes the bundle filename, like any edit to the code.
 
 The `signalTools` collection from `tinytools/handlers` provides `effect`,
 `setTextContent`, `setValue` and `setCssProperty` (which writes
@@ -474,16 +574,12 @@ const layerSignals = new tiny.Signals(
       const shade = new Signal<string>("A2");
       const description = new Computed(
         () => `${material.value} ${shade.value}`,
-        [material, shade],
       );
       return { material, shade, description };
     });
     return {
       ...layer,
-      summary: new Computed(
-        () => layer.description.all.value.join("; "),
-        [layer.description.all],
-      ),
+      summary: new Computed(() => layer.description.all.value.join("; ")),
     };
   },
 );
@@ -503,12 +599,22 @@ const layerSignals = new tiny.Signals(
 - In handlers, `signal.material.for(this)` is the signal of the instance
   enclosing `this`. A per-instance signal has no single `.value`.
 - `signal.x.all` is a read-only signal of every instance's value in document
-  order. It updates when any instance changes and when roots are added or
-  removed, so a `Computed` depending on it is the net result of all instances.
+  order, so a `Computed` depending on it is the net result of all instances. An
+  instance joins when something inside its root first resolves a signal (an
+  `onLoad` or `onChange` reference), so give each root a reference that runs on
+  load. It leaves `.all` when the root's `abortController` aborts, which
+  `UpgradeCustomElement` provides for a custom-tag root (`<note-entry>`), but
+  its values are kept for as long as that element exists: the same element
+  re-inserted later (moved, or restored from a route cache) resumes them, while
+  a removed element is collected with them. A clone or re-parsed copy is a new
+  instance. Nothing observes the document.
 - Signals outside `perInstance` stay page-wide, and collections without it work
   as before.
 - `evaluateUsingInitialValues` reports a fresh instance's value for per-instance
   signals, sees no instances for `.all`, and does not accept them as inputs.
+  `signal.x.initialValue` is that fresh value, so a computed over `.all` can
+  fall back to it (`all.value.length ? ... : x.initialValue`) and render the
+  same text on the server as the first instance will show.
 
 #### Nested instances
 
@@ -527,19 +633,13 @@ const noteSignals = new tiny.Signals(
         const material = new Signal<string>("composite");
         return {
           material,
-          label: new Computed(() => `${material.value} (${isolation.value})`, [
-            material,
-            isolation,
-          ]),
+          label: new Computed(() => `${material.value} (${isolation.value})`),
         };
       });
       return {
         isolation,
         ...layer,
-        summary: new Computed(
-          () => layer.label.all.value.join("; "),
-          [layer.label.all],
-        ),
+        summary: new Computed(() => layer.label.all.value.join("; ")),
       };
     });
     return { ...note };
@@ -619,6 +719,50 @@ Keep `Styles` collections beside the components that use them. Generated bundle
 names keep the source module name, so emitted assets are easy to inspect, and a
 style file is only loaded on pages that access one of its classes.
 
+## Templates
+
+`tiny.Templates` renders markup once on the server and ships it in a bundle for
+handlers to clone, so what interaction adds to a page need not sit in it as an
+inert `<template>`:
+
+```tsx
+const rowTemplates = new tiny.Templates(import.meta.url, {
+  row: async () => {
+    const { fn, styled } = await tiny.imports(rowHandlers, rowStyles);
+    return <li class={styled.row} onClick={fn.pick}>$[label]</li>;
+  },
+});
+
+const listHandlers = new tiny.Handlers(import.meta.url, async () => {
+  const { template } = await tiny.imports(rowTemplates);
+  return {
+    addRow(this: HTMLElement) {
+      this.append(template.row({ label: "New row" }));
+    },
+  };
+});
+```
+
+- Each entry renders when the collection is first needed, outside any request,
+  so `tiny.imports()` inside it gives real references and the markup is the same
+  whichever page needed it first. The markup and the handler bundles and
+  stylesheets it used become the collection's bundle; a change to any of them is
+  a new filename.
+- In a handler, `template.name(params?)` returns a `DocumentFragment` to insert.
+  `params` fill `$[name]` placeholders in the markup, as client routes do.
+- While rendering, `template.name()` returns the same markup as raw HTML, so a
+  page shows the first instance of what handlers add later from one source. It
+  records the markup's assets as if the page had rendered them.
+- A page that loads a handler importing the collection gets the stylesheets the
+  markup needs from the server, through the handler's dependencies. A template
+  bundle that reaches a page another way adds them to the head itself when it
+  evaluates.
+- Handlers the markup binds to must live in a different collection from the
+  handlers that clone it. Otherwise each depends on the other, which is a
+  circular definition error.
+- On the server, `collection.run` handlers and `template.name()` return the
+  markup.
+
 ## Components
 
 Import from `tinytools/components`.
@@ -697,15 +841,26 @@ lifecycle events:
   `onLoad` runs whenever it connects (including after cached restoration), whose
   `onDisconnect` runs when it is removed, and whose `abortController` aborts on
   removal so handlers can register listeners that clean themselves up. Prefer
-  this with a hyphenated tag (`<load-more>`): the tag is defined by name, so it
-  keeps working however the element is moved, substituted or cloned. Since
-  `onLoad` can run more than once, guard one-time setup. Elements without a
-  hyphenated tag get a proxy sibling instead, which must stay next to them.
-- `<ActivateOnLoadHandler>` runs each child's `onLoad` once, via a trigger
-  placed right after it. The trigger acts on its previous sibling, so content
-  that moves the element away from it (such as a partial substituting it in a
-  list) can fire the handler on the wrong element. Prefer `UpgradeCustomElement`
-  with a custom tag.
+  this with a hyphenated tag (`<load-more>`): the tag is declared ahead of the
+  markup, as `<meta name="tt-define" content="load-more">` in a full page's head
+  or a `<tt-define tag="load-more">` element in streamed and partial content,
+  and the lifecycle runtime that ships in the inline head script defines it
+  before that markup is parsed or inserted. Elements therefore upgrade in
+  document order, a parent's `onLoad` always precedes a child's `onParsed`,
+  nothing is rendered beside the element and it keeps working however it is
+  moved, substituted or cloned. A `tiny.Templates` bundle whose markup holds
+  such elements defines their tags itself. Since `onLoad` can run more than
+  once, guard one-time setup. Elements without a hyphenated tag get an
+  `<upgrade-preceding>` sibling rendered after them, a lifecycle element that
+  forwards its `load` and `suspend` to the element before it, so the two must
+  stay together.
+- `<ActivateParsedHandler>` runs each child's `onParsed` exactly once, via a
+  trigger placed right after it that fires once the child and its content have
+  been parsed. Use it for one-time work such as building an element's content
+  from a template; unlike `onLoad` it never repeats when the element is moved or
+  restored. The trigger acts on its previous sibling, so content that moves the
+  element away from it before it fires can run the handler on the wrong element.
+  For repeating lifecycle events use `UpgradeCustomElement`.
 - `<BuildFromTemplateElement templateId="...">` clones a page `<template>` into
   the element and fills its named `<slot>`s from the children.
 

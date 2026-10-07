@@ -28,10 +28,14 @@ import {
 import { tryGetContext } from "hono/context-storage";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Context } from "hono";
+import { raw } from "hono/html";
+import type { HtmlEscapedString } from "hono/utils/html";
 import {
   type InstanceLevels,
   type SignalAccessors,
   signalClasses,
+  type SignalConstant,
+  type SignalConstants,
   type SignalDefinitions,
   type SignalInputs,
   type SignalTools,
@@ -48,6 +52,7 @@ import {
 
 // Import shared registries from registry modules
 import {
+  bundleByFilename,
   changedHandlerKeys,
   type ClientFunctionImpl,
   filesWithChangedHandlers,
@@ -112,6 +117,8 @@ export const memoryAssets = new Map<string, string>();
 export type NoContextToolUsageTracker = {
   readonly accessedHandlerFiles: Set<string>;
   readonly accessedStyleFiles: Set<string>;
+  /** Custom tags rendered with lifecycle handlers, for `AssetTags` to declare. */
+  readonly accessedLifecycleTags: Set<string>;
 };
 
 export interface ToolResolutionTarget {
@@ -129,6 +136,7 @@ export function createNoContextToolUsageTracker(): NoContextToolUsageTracker {
   return {
     accessedHandlerFiles: new Set<string>(),
     accessedStyleFiles: new Set<string>(),
+    accessedLifecycleTags: new Set<string>(),
   };
 }
 
@@ -142,6 +150,44 @@ function recordNoContextUsage(
     return;
   }
   activeNoContextToolUsageTracker.accessedStyleFiles.add(`${filename}.css`);
+}
+
+/**
+ * Records a handler file (`<bundle>.js`, possibly with a query) as one the
+ * current render needs, for the request when one is active and otherwise for
+ * the no-context tracker, so `AssetTags` emits a module script for it.
+ */
+export function recordHandlerFile(file: string): void {
+  const context = tryGetContext<{
+    Variables: { accessedHandlerFiles: Set<string> };
+  }>();
+  if (context) {
+    context.get("accessedHandlerFiles")?.add(file);
+    return;
+  }
+  activeNoContextToolUsageTracker?.accessedHandlerFiles.add(file);
+}
+
+/**
+ * Records that the current render has a `<tagName>` element with lifecycle
+ * handlers, for the request when one is active and otherwise for the
+ * no-context tracker, so `AssetTags` declares the tag ahead of the markup
+ * and the inline head runtime defines it (see `lifecycleElement.ts`).
+ */
+export function recordLifecycleTag(tagName: string): void {
+  if (!/^[a-z][.0-9_a-z-]*-[.0-9_a-z-]*$/.test(tagName)) {
+    throw new TypeError(
+      `"${tagName}" is not a valid custom element name; it needs a hyphen and lower-case letters.`,
+    );
+  }
+  const context = tryGetContext<{
+    Variables: { accessedLifecycleTags: Set<string> };
+  }>();
+  if (context) {
+    context.get("accessedLifecycleTags")?.add(tagName);
+    return;
+  }
+  activeNoContextToolUsageTracker?.accessedLifecycleTags.add(tagName);
 }
 
 export function resolveToolAccessFromChain(
@@ -796,14 +842,19 @@ type Empty = Record<never, never>;
 // Type Definitions
 // ============================================================================
 
+/** Collections whose handler slot holds something other than handlers. */
+type NotHandlers =
+  | { readonly _isSignals: true }
+  | { readonly _isTemplates: true };
+
 /** Extract functions type from a ClientTools instance */
-type ExtractFunctions<T> = T extends { readonly _isSignals: true } ? Empty
+type ExtractFunctions<T> = T extends NotHandlers ? Empty
   // deno-lint-ignore no-explicit-any
   : T extends ClientToolsClass<infer F, any, any> ? F
   : Empty;
 
 /** Extract styles type from a ClientTools instance (excludes global styles) */
-type ExtractStyles<T> = T extends { readonly _isSignals: true } ? Empty
+type ExtractStyles<T> = T extends NotHandlers ? Empty
   // deno-lint-ignore no-explicit-any
   : T extends ClientToolsClass<any, infer S, any> ? S
   : Empty;
@@ -817,10 +868,29 @@ type ForbidReservedStyledKeys<T extends Record<string, ScopedStyleInput>> =
   };
 
 /** Resolved handlers, styles, and the current request context. */
-export type ImportedTools<TFunctions, TStyles, TSignals = Empty> = {
+export type ImportedTools<
+  TFunctions,
+  TStyles,
+  TSignals = Empty,
+  TConstants = Empty,
+  TTemplates = Empty,
+> = {
+  /**
+   * The values of every imported `tiny.Constants`, merged. Inside a Handlers
+   * or Signals definition, code that ships to the browser reads them as
+   * `constants` (named exactly that): the bundle declares a copy.
+   */
+  readonly constants: TConstants;
   readonly events: Events<TFunctions>;
   readonly fn: HandlerReferences<TFunctions>;
   readonly signal: SignalReferences<TSignals>;
+  /**
+   * The clones of every imported `tiny.Templates` collection. In a handler,
+   * `template.name()` is a `DocumentFragment` to insert; while rendering it
+   * is the same markup as raw HTML, so a page can show the first instance of
+   * what handlers add later.
+   */
+  readonly template: TTemplates;
   readonly handlers: ActivateClientFunctions<TFunctions>;
   readonly styled: ActivateScopedStyles<TStyles>;
   readonly c: Context;
@@ -834,6 +904,19 @@ type ExtractSignals<T> = T extends { readonly _isSignals: true }
   ? T extends ClientToolsClass<infer Functions, any, any> ? Functions : Empty
   : Empty;
 
+/** The values of a `tiny.Constants` import; nothing for other tools. */
+type ExtractConstants<T> = T extends ConstantsClass<infer Values> ? Values
+  : Empty;
+
+/** The clones of a `tiny.Templates` import; nothing for other tools. */
+type ExtractTemplates<T> = T extends { readonly _isTemplates: true }
+  // deno-lint-ignore no-explicit-any
+  ? T extends ClientToolsClass<infer Clones, any, any> ? Clones : Empty
+  : Empty;
+
+/** Anything `tiny.imports()` accepts. */
+type Importable = AnyClientToolsInstance | ConstantsClass<SignalConstants>;
+
 type HandlerFactory<T extends Record<string, AnyFunction>> = () =>
   | T
   | Promise<T>;
@@ -841,14 +924,81 @@ type HandlerFactory<T extends Record<string, AnyFunction>> = () =>
 type HandlerDefinitionScope = {
   owner: AnyClientToolsInstance;
   dependencies: Map<string, ClientFunctionImpl>;
+  /** Merged `tiny.Constants` values; absent until the definition imports one. */
+  constants?: Record<string, SignalConstant>;
   active: boolean;
+  /**
+   * Set while `owner` renders template markup: `tiny.imports()` behaves as
+   * outside a definition, but the owner still counts as the caller for
+   * circular definition checks.
+   */
+  rendering?: boolean;
 };
 
 const handlerDefinitionScope = new AsyncLocalStorage<HandlerDefinitionScope>();
 
+/**
+ * The async context of module load, before any request: templates render in
+ * it so a collection first needed during a request still renders as if
+ * outside one, recording its assets for itself rather than for that page.
+ */
+const requestFreeContext = AsyncLocalStorage.snapshot();
+
 // deno-lint-ignore no-explicit-any
 type UnionToIntersection<U> = (U extends any ? (arg: U) => void : never) extends
   ((arg: infer I) => void) ? I : never;
+
+// ============================================================================
+// Constants
+// ============================================================================
+
+/**
+ * Plain values for `tiny.imports()`. Code that ships to the browser cannot
+ * close over module values, so a Handlers or Signals definition imports them
+ * and reads them as `constants`: the bundle declares a JSON copy, and the
+ * server uses the same copy, so both sides see identical data.
+ */
+class ConstantsClass<Values extends SignalConstants> {
+  /** A JSON copy of the values passed in. */
+  readonly values: Values;
+
+  constructor(values: Values) {
+    if (!values || typeof values !== "object" || Array.isArray(values)) {
+      throw new TypeError("tiny.Constants takes a plain object of values.");
+    }
+    for (const [name, value] of Object.entries(values)) {
+      if (JSON.stringify(value) === undefined) {
+        throw new TypeError(
+          `Constant '${name}' must be a JSON value, not ${typeof value}.`,
+        );
+      }
+    }
+    this.values = JSON.parse(JSON.stringify(values));
+  }
+}
+
+/** Merges `sets` into `target`, rejecting a key that is defined twice. */
+function mergeConstants(
+  target: Record<string, SignalConstant>,
+  sets: readonly ConstantsClass<SignalConstants>[],
+): Record<string, SignalConstant> {
+  for (const set of sets) {
+    for (const [name, value] of Object.entries(set.values)) {
+      if (Object.hasOwn(target, name)) {
+        throw new Error(`Duplicate imported constant '${name}'.`);
+      }
+      target[name] = value;
+    }
+  }
+  return target;
+}
+
+/** The module-level declaration a bundle needs for `constants`, if any. */
+function constantsDeclaration(
+  constants: Record<string, SignalConstant> | undefined,
+): string {
+  return constants ? `const constants = ${JSON.stringify(constants)};\n` : "";
+}
 
 // ============================================================================
 // ClientTools Factory Class
@@ -986,31 +1136,62 @@ interface StoreConstructor extends HandlersConstructor {
   ): ClientToolsClass<TFunctions, Record<never, never>, Record<never, never>>;
 }
 
+/** A `tiny.Signals` collection; `Deferred` marks the async definition form. */
+type SignalsCollection<
+  Definitions extends SignalDefinitions,
+  Deferred extends boolean,
+> = ClientToolsClass<SignalAccessors<Definitions>, Empty, Empty> & {
+  readonly _isSignals: true;
+  /**
+   * Marks an instance root for this collection's `perInstance` signals:
+   * `<fieldset tt-instance={collection.instanceKey}>`. Per-instance signals
+   * bound anywhere inside it resolve to that instance. One element can root
+   * several collections by listing their keys separated by spaces.
+   */
+  readonly instanceKey: string;
+  /** The root marker for the signals of `perInstance(name, ...)`. */
+  instanceKeyFor(name: InstanceLevels<Definitions>): string;
+  /**
+   * Runs the factory on the server with `inputs` written to its writable
+   * signals and returns every signal's value, so initial markup can be
+   * rendered by the same computations the browser runs. Each call builds a
+   * fresh graph; nothing is shared between calls. A collection with an async
+   * definition resolves it first, so the result is a promise.
+   */
+  evaluateUsingInitialValues(
+    inputs?: SignalInputs<Definitions>,
+  ): Deferred extends true ? Promise<SignalValues<Definitions>>
+    : SignalValues<Definitions>;
+};
+
+/**
+ * Both overloads take `(tools) => ...` so a factory's parameters get the same
+ * contextual type whichever overload TypeScript tries first; an async
+ * definition simply ignores the parameter.
+ */
 interface SignalsConstructor {
+  /**
+   * An async definition that imports handlers and constants, then returns
+   * the factory: `async () => { const { fn, constants } = await
+   * tiny.imports(helpers, defaults); return ({ Signal }) => ({ ... }); }`.
+   * Only the factory ships to the browser, where `fn.helper` becomes an
+   * import of that handler and `constants` a copy of the imported values; on
+   * the server `fn.helper` calls the handler directly. The factory may
+   * reference `fn` and `constants` (named exactly that), nothing else from
+   * the definition, so any other capture fails at definition time instead
+   * of in the browser.
+   */
+  new <Definitions extends SignalDefinitions>(
+    sourceFileUrl: string | URL,
+    definition: (
+      tools: SignalTools,
+    ) => Promise<(tools: SignalTools) => Definitions>,
+  ): SignalsCollection<Definitions, true>;
+  /** A factory that needs nothing from module scope. */
   new <Definitions extends SignalDefinitions>(
     sourceFileUrl: string | URL,
     factory: (tools: SignalTools) => Definitions,
-  ): ClientToolsClass<SignalAccessors<Definitions>, Empty, Empty> & {
-    readonly _isSignals: true;
-    /**
-     * Marks an instance root for this collection's `perInstance` signals:
-     * `<fieldset tt-instance={collection.instanceKey}>`. Per-instance signals
-     * bound anywhere inside it resolve to that instance. One element can root
-     * several collections by listing their keys separated by spaces.
-     */
-    readonly instanceKey: string;
-    /** The root marker for the signals of `perInstance(name, ...)`. */
-    instanceKeyFor(name: InstanceLevels<Definitions>): string;
-    /**
-     * Runs the factory on the server with `inputs` written to its writable
-     * signals and returns every signal's value, so initial markup can be
-     * rendered by the same computations the browser runs. Each call builds a
-     * fresh graph; nothing is shared between calls.
-     */
-    evaluateUsingInitialValues(
-      inputs?: SignalInputs<Definitions>,
-    ): SignalValues<Definitions>;
-  };
+  ): SignalsCollection<Definitions, false>;
 }
 
 interface StylesConstructor {
@@ -1120,9 +1301,17 @@ class ClientToolsClass<
     return false;
   }
 
+  /** Declares the `constants` a factory definition imported. */
+  private _constantsPrelude = "";
+
   /** Module-level code emitted ahead of this instance's handlers. */
   protected get bundlePrelude(): string {
-    return "";
+    return this._constantsPrelude;
+  }
+
+  /** Stylesheets the markup this instance's bundle carries needs. */
+  protected get bundleStyleFiles(): Iterable<string> {
+    return [];
   }
 
   private _waitsFor(
@@ -1140,7 +1329,9 @@ class ClientToolsClass<
   async ensureDefined(): Promise<void> {
     if (this._definitionReady) return;
     const context = handlerDefinitionScope.getStore();
-    const caller = context?.active ? context.owner : undefined;
+    const caller = context && (context.active || context.rendering)
+      ? context.owner
+      : undefined;
     if (caller && this._waitsFor(caller)) {
       throw new Error(
         `Circular handler definition dependency: ${caller.sourceFileUrl} -> ${this.sourceFileUrl}`,
@@ -1192,8 +1383,7 @@ class ClientToolsClass<
         );
       }
     }
-    this._definitionReady = false;
-    this._definitionInitializer = async (scope) => {
+    this.defineDeferred(async (scope) => {
       const functions = await factory(Object.create(null));
       if (
         !functions || typeof functions !== "object" ||
@@ -1203,10 +1393,19 @@ class ClientToolsClass<
           "Handlers factory must return an object of handler functions.",
         );
       }
+      this._constantsPrelude = constantsDeclaration(scope.constants);
       this._processFunctions(functions, scope.dependencies, storedBinding);
       await this._bundle?.pruneDependencies();
       this._refreshHandlerFilenames();
-    };
+    });
+  }
+
+  /** Defers this instance's handlers to `initializer`, run by `ensureDefined`. */
+  protected defineDeferred(
+    initializer: (scope: HandlerDefinitionScope) => Promise<void>,
+  ): void {
+    this._definitionReady = false;
+    this._definitionInitializer = initializer;
   }
 
   private _refreshHandlerFilenames(): void {
@@ -1276,7 +1475,7 @@ class ClientToolsClass<
   }
 
   /** Internal helper to process function definitions */
-  private _processFunctions<T extends Record<string, AnyFunction>>(
+  protected _processFunctions<T extends Record<string, AnyFunction>>(
     fns: T,
     dependencies?: ReadonlyMap<string, ClientFunctionImpl>,
     storedBinding = "stored",
@@ -1304,6 +1503,7 @@ class ClientToolsClass<
         storedBinding,
         dependencies,
         prelude: this.bundlePrelude,
+        styleFiles: this.bundleStyleFiles,
       });
       const instance = this._bundle.add(fnName, fn);
       registry.set(fnName, instance);
@@ -1870,7 +2070,33 @@ class StoreClass extends HandlersClass {
   }
 }
 
+// ============================================================================
+// Lifecycle elements
+// ============================================================================
+
+/**
+ * Module-level code defining `tags` through the inline head runtime, for a
+ * template bundle whose markup holds upgraded elements: a clone may land on
+ * a page that never declared them. Skipped where no document exists.
+ */
+function lifecycleDefinitionsPrelude(tags: Iterable<string>): string {
+  const unique = [...new Set(tags)];
+  if (!unique.length) return "";
+  return `if (typeof document !== "undefined") {
+${
+    unique.map((tag) =>
+      `  tiny.defineLifecycleElement(${JSON.stringify(tag)});`
+    ).join("\n")
+  }
+}`;
+}
+
 type SignalFactory = (tools: SignalTools) => SignalDefinitions;
+
+/** The async form: imports handlers, then resolves to the factory. */
+type SignalDefinition = () => Promise<SignalFactory>;
+
+const AsyncFunction = (async () => {}).constructor;
 
 /**
  * Builds a handler from source text. Handlers ship to the browser as source,
@@ -1927,10 +2153,79 @@ type InternalSignalTools = SignalTools & {
   InstanceSignal: new (...args: any[]) => { readonly initialValue: unknown };
 };
 
+/** Module-level names every Signals bundle may use. */
+const SIGNAL_BUNDLE_RESERVED = [
+  "fn",
+  "signal",
+  "stored",
+  "signalClasses",
+  "constants",
+];
+
+/**
+ * Rebuilds the factory from its source with only what the browser bundle
+ * declares in scope: `fn` and `constants` when the definition imported them.
+ * A module-scope capture is then a ReferenceError here instead of a bundle
+ * that fails to load in the browser.
+ */
+function compileSignalFactory(
+  factory: SignalFactory,
+  scope: {
+    references?: Record<string, AnyFunction>;
+    constants?: Record<string, SignalConstant>;
+  } = {},
+): SignalFactory {
+  const names: string[] = [];
+  const values: unknown[] = [];
+  if (scope.references) {
+    names.push("fn");
+    values.push(scope.references);
+  }
+  if (scope.constants) {
+    names.push("constants");
+    values.push(JSON.parse(JSON.stringify(scope.constants)));
+  }
+  try {
+    return new Function(...names, `"use strict";\nreturn (${factory});`)(
+      ...values,
+    ) as SignalFactory;
+  } catch (error) {
+    throw new TypeError(
+      `Signals factory must be an arrow function or function expression: ${
+        (error as Error).message
+      }`,
+    );
+  }
+}
+
+/** Calls a compiled factory, explaining a module-scope capture. */
+function runSignalFactory(
+  factory: SignalFactory,
+  tools: SignalTools,
+): SignalDefinitions {
+  try {
+    return factory(tools);
+  } catch (error) {
+    const name = error instanceof ReferenceError &&
+      /^(.+) is not defined$/.exec(error.message)?.[1];
+    if (!name) throw error;
+    if (name === "fn" || name === "constants") {
+      throw new TypeError(
+        `Signals factory references '${name}', which only an async definition that imports it provides: ` +
+          "new tiny.Signals(import.meta.url, async () => { const { fn, constants } = await tiny.imports(helpers, values); return ({ Signal }) => ({ ... }); }).",
+      );
+    }
+    throw new TypeError(
+      `Signals factory references '${name}', which does not exist in the browser bundle. ` +
+        "Import module-scope values as constants: const { constants } = await tiny.imports(new tiny.Constants({ ... })).",
+    );
+  }
+}
+
 /** Runs the factory server-side (values inert) to validate it and list its signals. */
 function signalNames(factory: SignalFactory): string[] {
   const tools = signalClasses(false) as InternalSignalTools;
-  const definitions = factory(tools);
+  const definitions = runSignalFactory(factory, tools);
   if (
     !definitions || typeof definitions !== "object" ||
     definitions instanceof Promise ||
@@ -1947,13 +2242,39 @@ function signalNames(factory: SignalFactory): string[] {
 }
 
 /**
- * One bundle per instance: the prelude runs the factory once against the
- * shared signal runtime (signals.ts), and each signal is exported as an
- * accessor that can be referenced like any handler.
+ * The `fn` an async definition's factory sees on the server: each imported
+ * handler called directly. Signals collections cannot be imported, since
+ * their graphs live in the browser.
+ */
+function serverReferences(
+  dependencies: ReadonlyMap<string, ClientFunctionImpl>,
+): Record<string, AnyFunction> {
+  const references: Record<string, AnyFunction> = Object.create(null);
+  for (const [key, instance] of dependencies) {
+    if (key.startsWith("signal:")) {
+      throw new TypeError(
+        `A Signals definition can import handlers only; '${
+          key.slice(7)
+        }' is a signal of another collection.`,
+      );
+    }
+    references[key] = function (this: unknown, ...args: unknown[]) {
+      return Reflect.apply(instance.fn, this, args);
+    };
+  }
+  return references;
+}
+
+/**
+ * One bundle per instance: the prelude declares the constants, runs the
+ * factory once against the shared signal runtime (signals.ts), and each
+ * signal is exported as an accessor that can be referenced like any handler.
  */
 class SignalsClass extends StoreClass {
   #prelude: { code: string };
-  #factory: SignalFactory;
+  /** The compiled factory; set once an async definition has resolved. */
+  #compiled: { factory?: SignalFactory };
+  #deferred: boolean;
 
   /** The one browser module holding the signal classes, shared by every collection. */
   static #runtime: InstanceType<typeof HandlersClass> | undefined;
@@ -1965,20 +2286,49 @@ class SignalsClass extends StoreClass {
     );
   }
 
-  constructor(sourceFileUrl: string | URL, factory: SignalFactory) {
+  constructor(
+    sourceFileUrl: string | URL,
+    factoryOrDefinition: SignalFactory | SignalDefinition,
+    ...rest: unknown[]
+  ) {
+    if (rest.length > 0) {
+      throw new TypeError(
+        "tiny.Signals no longer takes constants as a third argument: import a tiny.Constants in an async definition.",
+      );
+    }
+    const deferred = factoryOrDefinition instanceof AsyncFunction;
+    if (deferred && factoryOrDefinition.length > 0) {
+      throw new TypeError(
+        "An async Signals definition takes no parameters: it imports handlers and returns the factory.",
+      );
+    }
+    const compiled: { factory?: SignalFactory } = deferred ? {} : {
+      factory: compileSignalFactory(factoryOrDefinition as SignalFactory),
+    };
     const prelude = { code: "" };
     const owner: { collection?: SignalsClass } = {};
     super(sourceFileUrl, async () => {
-      const names = signalNames(factory);
+      const scope = handlerDefinitionScope.getStore()!;
+      let factory = factoryOrDefinition as SignalFactory;
+      if (deferred) {
+        factory = await (factoryOrDefinition as SignalDefinition)();
+        if (
+          typeof factory !== "function" || factory instanceof AsyncFunction
+        ) {
+          throw new TypeError(
+            "An async Signals definition must resolve to a synchronous factory: return ({ Signal }) => ({ ... }).",
+          );
+        }
+        compiled.factory = compileSignalFactory(factory, {
+          references: serverReferences(scope.dependencies),
+          constants: scope.constants,
+        });
+      }
+      const names = signalNames(compiled.factory!);
+      const declarations = constantsDeclaration(scope.constants);
       await imports(SignalsClass.runtime);
       // Module-level names in the bundle must not collide with signal exports.
-      const taken = new Set([
-        ...names,
-        "fn",
-        "signal",
-        "stored",
-        "signalClasses",
-      ]);
+      const taken = new Set([...names, ...SIGNAL_BUNDLE_RESERVED]);
       const free = (base: string) => {
         let name = base;
         for (let index = 2; taken.has(name); index++) name = `${base}${index}`;
@@ -1999,13 +2349,13 @@ class SignalsClass extends StoreClass {
       if (split && !parameterNames.some((name) => taken.has(name))) {
         parameterNames.forEach((name) => taken.add(name));
         graph = free("signals");
-        prelude.code =
+        prelude.code = declarations +
           (split.parameter ? `const ${split.parameter} = ${tools};\n` : "") +
           `const ${graph} = (${split.body})();`;
       } else {
         const define = free("defineSignals");
         graph = free("signals");
-        prelude.code = `const ${define} = ${factory};\n` +
+        prelude.code = declarations + `const ${define} = ${factory};\n` +
           `const ${graph} = ${define}(${tools});`;
       }
       return Object.fromEntries(names.map((name) => {
@@ -2022,7 +2372,8 @@ class SignalsClass extends StoreClass {
     });
     this.#prelude = prelude;
     owner.collection = this;
-    this.#factory = factory;
+    this.#compiled = compiled;
+    this.#deferred = deferred;
   }
 
   /**
@@ -2045,9 +2396,16 @@ class SignalsClass extends StoreClass {
 
   evaluateUsingInitialValues(
     inputs: Record<string, unknown> = {},
-  ): Record<string, unknown> {
+  ): Record<string, unknown> | Promise<Record<string, unknown>> {
+    if (this.#deferred) {
+      return this.ensureDefined().then(() => this.#evaluate(inputs));
+    }
+    return this.#evaluate(inputs);
+  }
+
+  #evaluate(inputs: Record<string, unknown>): Record<string, unknown> {
     const tools = signalClasses(true) as InternalSignalTools;
-    const graph = this.#factory(tools);
+    const graph = runSignalFactory(this.#compiled.factory!, tools);
     for (const [name, value] of Object.entries(inputs)) {
       if (!Object.hasOwn(graph, name)) {
         throw new TypeError(
@@ -2126,6 +2484,216 @@ class StylesClass extends ClientToolsClass<Empty, Empty, Empty> {
   }
 }
 
+// ============================================================================
+// Templates
+// ============================================================================
+
+/** What a `tiny.Templates` entry renders: a JSX element, possibly async. */
+type TemplateDefinitions = Record<string, () => unknown>;
+
+/** Values for the `$[name]` placeholders of a template's markup. */
+export type TemplateParams = Readonly<Record<string, string | undefined>>;
+
+/**
+ * A clone of a template. In the browser it is a `DocumentFragment` to
+ * insert; on the server it is the markup as raw HTML to render. The type
+ * covers both so one handler definition serves both sides.
+ */
+export type TemplateFragment = DocumentFragment & HtmlEscapedString;
+
+/** One clone function per template, under the entry's name. */
+export type TemplateClones<Definitions> = {
+  readonly [Name in keyof Definitions]: (
+    params?: TemplateParams,
+  ) => TemplateFragment;
+};
+
+/** A template's markup and the assets it was rendered with. */
+export type RenderedTemplate = {
+  readonly markup: string;
+  /** Handler bundle files (`<bundle>.js`) the markup binds to. */
+  readonly handlerFiles: readonly string[];
+  /** Style bundle files (`<bundle>.css`) the markup's classes come from. */
+  readonly styleFiles: readonly string[];
+  /** Custom tags in the markup that `UpgradeCustomElement` gave lifecycle handlers. */
+  readonly lifecycleTags: readonly string[];
+};
+
+/** A `tiny.Templates` collection. */
+type TemplatesCollection<Definitions extends TemplateDefinitions> =
+  & ClientToolsClass<TemplateClones<Definitions>, Empty, Empty>
+  & {
+    readonly _isTemplates: true;
+    /** The rendered template of `name`, once the collection is defined. */
+    rendered(name: keyof Definitions & string): RenderedTemplate | undefined;
+  };
+
+interface TemplatesConstructor {
+  /**
+   * Markup rendered once on the server and shipped in a bundle, for handlers
+   * to clone: `new tiny.Templates(import.meta.url, { row: () => <Row /> })`.
+   * Each entry renders when the collection is first needed, with every
+   * handler and stylesheet its markup used recorded, so a page loading a
+   * handler that imports the collection also gets those stylesheets.
+   */
+  new <Definitions extends TemplateDefinitions>(
+    sourceFileUrl: string | URL,
+    templates: Definitions,
+  ): TemplatesCollection<Definitions>;
+}
+
+/** Renders a JSX result to its markup, as the core renderer does. */
+async function renderToMarkup(child: unknown): Promise<string> {
+  try {
+    const resolved = await child;
+    return resolved == null || typeof resolved === "boolean"
+      ? ""
+      : String(await (resolved as { toString(): unknown }).toString());
+  } catch (error) {
+    if (error instanceof Promise) {
+      await error;
+      return renderToMarkup(child);
+    }
+    throw error;
+  }
+}
+
+/**
+ * The browser source of one clone function. `markup` is spliced in as a
+ * string literal, so the function has no free variables and runs unchanged
+ * on the server, where it returns the markup.
+ */
+function templateCloneSource(markup: string): string {
+  return `function (params) {
+  let markup = ${JSON.stringify(markup)};
+  if (params) {
+    markup = markup.replace(
+      /\\$\\[([^\\]]+)\\]/g,
+      (_placeholder, key) =>
+        Object.hasOwn(params, key) ? params[key] ?? "" : "",
+    );
+  }
+  if (typeof document === "undefined") return markup;
+  const template = document.createElement("template");
+  template.innerHTML = markup;
+  return template.content.cloneNode(true);
+}`;
+}
+
+/**
+ * Module-level code adding the stylesheets the templates need to the head,
+ * for a template bundle that reaches a page the server did not prepare for
+ * it. Links the server already emitted are left alone.
+ */
+function templateStylesPrelude(styleFiles: Iterable<string>): string {
+  const hrefs = [...new Set(styleFiles)].map((file) => `/styles/${file}`);
+  if (!hrefs.length) return "";
+  return `const templateStyles = ${JSON.stringify(hrefs)};
+if (typeof document !== "undefined") {
+  for (const href of templateStyles) {
+    if (document.head.querySelector(\`link[rel="stylesheet"][href="\${href}"]\`)) {
+      continue;
+    }
+    document.head.append(
+      Object.assign(document.createElement("link"), { rel: "stylesheet", href }),
+    );
+  }
+}
+`;
+}
+
+/** Strips the extension `tiny.imports()` adds when recording asset usage. */
+function assetName(file: string): string {
+  return file.replace(/\.(js|css)$/, "");
+}
+
+class TemplatesClass extends ClientToolsClass<Empty, Empty, Empty> {
+  readonly _isTemplates = true as const;
+  #rendered = new Map<string, RenderedTemplate>();
+  #prelude = "";
+  #styleFiles = new Set<string>();
+
+  constructor(sourceFileUrl: string | URL, templates: TemplateDefinitions) {
+    if (
+      !(typeof sourceFileUrl === "string" || sourceFileUrl instanceof URL) ||
+      !normalizeSourceFileUrl(sourceFileUrl)
+    ) {
+      throw new TypeError(
+        "tiny.Templates requires a valid source file URL. Pass import.meta.url.",
+      );
+    }
+    if (
+      !templates || typeof templates !== "object" ||
+      Object.values(templates).some((entry) => typeof entry !== "function")
+    ) {
+      throw new TypeError(
+        "tiny.Templates takes an object of functions returning JSX.",
+      );
+    }
+    super(sourceFileUrl);
+    this.defineDeferred(async (scope) => {
+      const functions: Record<string, AnyFunction> = {};
+      const dependencies = new Map<string, ClientFunctionImpl>();
+      const lifecycleTags = new Set<string>();
+      for (const [name, define] of Object.entries(templates)) {
+        const tracker = createNoContextToolUsageTracker();
+        // Rendered outside any request, so `tiny.imports()` gives real
+        // references and records the assets they resolve to here; the owner
+        // still counts as the caller for circular definition checks.
+        const markup = await withNoContextToolUsageTracker(
+          tracker,
+          () =>
+            requestFreeContext(() =>
+              handlerDefinitionScope.run(
+                { ...scope, active: false, rendering: true },
+                () => renderToMarkup(define()),
+              )
+            ),
+        );
+        const rendered: RenderedTemplate = {
+          markup,
+          handlerFiles: [...tracker.accessedHandlerFiles],
+          styleFiles: [...tracker.accessedStyleFiles],
+          lifecycleTags: [...tracker.accessedLifecycleTags],
+        };
+        this.#rendered.set(name, rendered);
+        for (const file of rendered.styleFiles) this.#styleFiles.add(file);
+        // Upgraded elements in the markup need their tags defined wherever a
+        // clone lands, so this bundle defines them itself when it loads.
+        for (const tag of rendered.lifecycleTags) lifecycleTags.add(tag);
+        // The bundles the markup binds to are dependencies of this one: its
+        // filename follows theirs, and a page preloads them alongside it.
+        for (const file of rendered.handlerFiles) {
+          const impl = bundleByFilename(file)?.functions.values().next().value;
+          if (impl) dependencies.set(`markup:${assetName(file)}`, impl);
+        }
+        functions[name] = handlerFromSource(templateCloneSource(markup));
+      }
+      this.#prelude = [
+        templateStylesPrelude(this.#styleFiles),
+        lifecycleDefinitionsPrelude(lifecycleTags),
+      ].filter(Boolean).join("\n");
+      this._processFunctions(functions, dependencies);
+    });
+  }
+
+  protected override get bundlePrelude(): string {
+    return this.#prelude;
+  }
+
+  protected override get bundleStyleFiles(): Iterable<string> {
+    return this.#styleFiles;
+  }
+
+  /** The rendered template of `name`, once defined. */
+  rendered(name: string): RenderedTemplate | undefined {
+    return this.#rendered.get(name);
+  }
+}
+
+export const Templates: TemplatesConstructor =
+  TemplatesClass as unknown as TemplatesConstructor;
+
 export const Handlers: HandlersConstructor =
   HandlersClass as unknown as HandlersConstructor;
 
@@ -2139,35 +2707,59 @@ export const Signals: SignalsConstructor =
 export const Styles: StylesConstructor =
   StylesClass as unknown as StylesConstructor;
 
+/** Values for `tiny.imports()`, read as `constants`. See {@link ConstantsClass}. */
+export const Constants: new <Values extends SignalConstants>(
+  values: Values,
+) => ConstantsClass<Values> = ConstantsClass;
+
 export async function imports(): Promise<ImportedTools<Empty, Empty>>;
 export async function imports<
-  const TTools extends [AnyClientToolsInstance, ...AnyClientToolsInstance[]],
+  const TTools extends [Importable, ...Importable[]],
 >(
   ...tools: TTools
 ): Promise<
   ImportedTools<
     UnionToIntersection<ExtractFunctions<TTools[number]>>,
     UnionToIntersection<ExtractStyles<TTools[number]>>,
-    UnionToIntersection<ExtractSignals<TTools[number]>>
+    UnionToIntersection<ExtractSignals<TTools[number]>>,
+    UnionToIntersection<ExtractConstants<TTools[number]>>,
+    UnionToIntersection<ExtractTemplates<TTools[number]>>
   >
 >;
 export async function imports(
-  ...tools: AnyClientToolsInstance[]
-): Promise<ImportedTools<unknown, unknown, unknown>> {
+  ...imported: Importable[]
+): Promise<ImportedTools<unknown, unknown, unknown, unknown, unknown>> {
+  const constantSets = imported.filter((item) =>
+    item instanceof ConstantsClass
+  );
+  const tools = imported.filter((item): item is AnyClientToolsInstance =>
+    !(item instanceof ConstantsClass)
+  );
   const definition = handlerDefinitionScope.getStore();
   if (definition?.active) {
-    if (tools.length === 0) {
+    if (imported.length === 0) {
       throw new Error(
         "Handler definitions require explicit tools in tiny.imports().",
       );
     }
+    if (constantSets.length > 0) {
+      mergeConstants(definition.constants ??= {}, constantSets);
+    }
     await Promise.all(tools.map((tool) => tool.ensureDefined()));
     const references: Record<string, AnyFunction> = Object.create(null);
     const signalReferences: Record<string, unknown> = Object.create(null);
+    const templateReferences: Record<string, AnyFunction> = Object.create(
+      null,
+    );
     for (const tool of tools) {
       for (const [name, instance] of tool._handlerDefinitions) {
         const isSignal = tool instanceof SignalsClass;
-        const dependencyName = isSignal ? `signal:${name}` : name;
+        const isTemplate = tool instanceof TemplatesClass;
+        const dependencyName = isSignal
+          ? `signal:${name}`
+          : isTemplate
+          ? `template:${name}`
+          : name;
         if (definition.dependencies.has(dependencyName)) {
           throw new Error(
             `Duplicate imported handler '${name}' in handler definition.`,
@@ -2178,6 +2770,14 @@ export async function imports(
           new Error(
             `Handler '${name}' cannot be called during server-side definition. Call it inside a returned handler.`,
           );
+        if (isTemplate) {
+          // On the server a clone is the markup; `raw` keeps it unescaped.
+          templateReferences[name] = function (params?: TemplateParams) {
+            if (definition.active) throw unavailable();
+            return raw(instance.fn(params));
+          };
+          continue;
+        }
         if (isSignal) {
           Object.defineProperty(signalReferences, name, {
             enumerable: true,
@@ -2200,7 +2800,9 @@ export async function imports(
       );
     };
     return {
+      constants: JSON.parse(JSON.stringify(definition.constants ?? {})),
       signal: signalReferences as SignalReferences<unknown>,
+      template: templateReferences,
       fn: new Proxy(references, {
         get(target, property) {
           if (
@@ -2235,7 +2837,7 @@ export async function imports(
       accessedStyleFiles: Set<string>;
     };
   }>();
-  if (!context && tools.length === 0) {
+  if (!context && imported.length === 0) {
     throw new Error(
       "tiny.imports() requires at least one TinyTools instance when no Hono request context is active.",
     );
@@ -2255,18 +2857,43 @@ export async function imports(
   const handlers = new Proxy({}, {
     get: (_target, property) =>
       resolveToolAccessFromChain(
-        tools.filter((tool) => !(tool instanceof SignalsClass)),
+        tools.filter((tool) =>
+          !(tool instanceof SignalsClass) && !(tool instanceof TemplatesClass)
+        ),
         "function",
         property,
         recordUsage,
       ),
   });
   const signals = tools.filter((tool) => tool instanceof SignalsClass);
+  const templates = tools.filter((tool) => tool instanceof TemplatesClass);
+  // Rendering a template puts its markup on the page, so the page needs the
+  // assets the markup was rendered with, as if it had rendered them itself.
+  const template = new Proxy({}, {
+    get: (_target, property) => {
+      if (typeof property !== "string") return undefined;
+      for (let i = templates.length - 1; i >= 0; i--) {
+        const rendered = templates[i].rendered(property);
+        const instance = templates[i]._handlerDefinitions.get(property);
+        if (!rendered || !instance) continue;
+        return (params?: TemplateParams) => {
+          for (const file of rendered.handlerFiles) recordHandlerFile(file);
+          for (const file of rendered.styleFiles) {
+            recordUsage("style", assetName(file));
+          }
+          for (const tag of rendered.lifecycleTags) recordLifecycleTag(tag);
+          return raw(instance.fn(params));
+        };
+      }
+      return undefined;
+    },
+  });
   const styled = new Proxy({}, {
     get: (_target, property) =>
       resolveToolAccessFromChain(tools, "style", property, recordUsage),
   });
   return {
+    constants: mergeConstants({}, constantSets),
     signal: createSignalReferences((name) =>
       resolveToolAccessFromChain(signals, "function", name, recordUsage)
     ),
@@ -2274,6 +2901,7 @@ export async function imports(
       (handlers as Record<string, unknown>)[name]
     ),
     events: createEvents((name) => (handlers as Record<string, unknown>)[name]),
+    template,
     handlers: handlers as ActivateClientFunctions<unknown>,
     styled: styled as ActivateScopedStyles<unknown>,
     get c(): Context {

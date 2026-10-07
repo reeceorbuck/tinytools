@@ -2,10 +2,11 @@ import { assertEquals, assertMatch, assertStringIncludes } from "@std/assert";
 import { Hono } from "hono";
 import { Handlers, Styles } from "../clientTools.ts";
 import { tiny } from "../mod.ts";
+import { runHandlerScript } from "../honoFactory.tsx";
 import { eventHandlerBody } from "../eventAttributes.ts";
 import { jsx, jsxAttr, jsxs } from "../jsx-runtime.ts";
 import { jsxDEV } from "../jsx-dev-runtime.ts";
-import { ActivateLifecycleHandlers } from "../components/ActivateOnLoadHandler.tsx";
+import { ActivateParsedHandler } from "../components/ActivateOnLoadHandler.tsx";
 
 const handlers = new Handlers(import.meta.url, {
   click(this: HTMLButtonElement, event: MouseEvent) {
@@ -54,7 +55,7 @@ Deno.test("package lifecycle components transform references with the package JS
   const app = new tiny.Hono({ tools: "core" });
   app.get("/", async (context) =>
     context.html(
-      await ActivateLifecycleHandlers({ children: jsx("template", {}) }),
+      await ActivateParsedHandler({ children: jsx("template", {}) }),
     ));
   const response = await app.request("/");
   const html = await response.text();
@@ -62,11 +63,7 @@ Deno.test("package lifecycle components transform references with the package JS
   assertEquals(html.includes("[object Object]"), false);
   assertMatch(
     html,
-    /tt-handler-load="ActivateOnLoadHandler_\w+\.referOnConnect"/,
-  );
-  assertMatch(
-    html,
-    /tt-handler-suspend="ActivateOnLoadHandler_\w+\.referOnSuspend"/,
+    /<template><\/template><link rel="modulepreload" href="\/handlers\/ActivateOnLoadHandler_\w+\.js" tt-handler-load="ActivateOnLoadHandler_\w+\.referParsed"/,
   );
   assertStringIncludes(html, eventHandlerBody);
 });
@@ -76,7 +73,7 @@ for (const mode of ["core"] as const) {
     Deno.test(`CSP defaults on and supports opt-out: ${mode}, constructor=${constructor}`, async () => {
       const [scriptHash, eventHash] = await Promise.all(
         [
-          `${tiny.runHandler.toString()}; const tiny = {runHandler};`,
+          runHandlerScript,
           eventHandlerBody,
         ].map(async (source) => {
           const digest = await crypto.subtle.digest(
@@ -113,10 +110,10 @@ Deno.test("CSP hash matches the inline runHandler script in rendered pages", asy
   const html = await response.text();
   assertEquals(response.status, 200, html);
   const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
-  assertEquals(
-    script,
-    `${tiny.runHandler.toString()}; const tiny = {runHandler};`,
-  );
+  assertEquals(script, runHandlerScript);
+  // The runtime defining lifecycle tags ships in the same hashed script.
+  assertStringIncludes(script!, "function defineLifecycleElement(");
+  assertStringIncludes(script!, "defineLifecycleTags();");
   const digest = await crypto.subtle.digest(
     "SHA-256",
     new TextEncoder().encode(script),

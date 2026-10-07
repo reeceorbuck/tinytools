@@ -95,13 +95,11 @@ if (!Deno.args.includes("--none")) {
         );
         const html = pages[0];
         assertStringIncludes(html, "<button");
-        const preloadPath = html.match(
-          /rel="modulepreload" href="(\/handlers\/[^"]+\.js)"/,
-        )?.[1];
-        assertEquals(typeof preloadPath, "string");
-        const preload = await app.request(preloadPath!);
-        assertEquals(preload.status, 200);
-        await preload.text();
+        // The custom tag is declared in the head for the inline runtime to define.
+        assertStringIncludes(
+          html,
+          '<meta name="tt-define" content="store-test-output"/>',
+        );
         const filename = handlers._handlerFilenames.get("click")!;
         const dependencyFilename = dependencies._handlerFilenames.get(
           "increment",
@@ -133,9 +131,10 @@ if (!Deno.args.includes("--none")) {
         );
         assertStringIncludes(await stylesheet.text(), "color: red");
         assertEquals(html.includes("/_tinytools/"), false);
+        assertStringIncludes(html, tiny.runHandler.toString());
         assertStringIncludes(
           html,
-          `${tiny.runHandler.toString()}; const tiny = {runHandler};`,
+          "const tiny = {runHandler, defineLifecycleElement};",
         );
         assertEquals(
           memoryAssets.has(

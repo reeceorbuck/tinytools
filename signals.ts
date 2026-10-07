@@ -1,4 +1,22 @@
-export type SignalValue = string | number | boolean | null;
+/**
+ * What a signal may hold. Besides plain values, a signal can carry an element
+ * (or a list of them) so the elements of a page reach each other through the
+ * signal network instead of id or selector lookups: an element publishes
+ * itself from a handler (`signal.target.value = this`) and a subscriber reads
+ * it. Elements exist only in the browser, so such a signal starts as `null`,
+ * which is also what `evaluateUsingInitialValues` reports for it on the
+ * server. A held element outlives its removal from the document: when the
+ * holder is an upgraded custom element, clear the signal when its
+ * `abortController` aborts.
+ */
+export type SignalValue =
+  | string
+  | number
+  | boolean
+  | null
+  | readonly string[]
+  | Element
+  | readonly Element[];
 
 export interface ReadonlySignal<Value = SignalValue> {
   readonly value: Value;
@@ -9,6 +27,8 @@ export interface ReadonlySignal<Value = SignalValue> {
    */
   name?: string;
   subscribe(target: EventTarget): void;
+  /** Ends a subscription made with `subscribe`. */
+  unsubscribe(target: EventTarget): void;
 }
 
 /** Type-only marker telling writable signals apart from computed ones. */
@@ -26,8 +46,9 @@ declare const instanceLevel: unique symbol;
  * A signal defined inside `perInstance`: every instance root (an element
  * whose `tt-instance` attribute holds the collection's `instanceKey`) gets
  * its own copy.
- * Bound in JSX (`onChange={signal.name}`, `onLoad={signal.name}`) it resolves
- * to the instance enclosing the element, so markup needs nothing extra.
+ * Bound in JSX (`onChange={signal.name}`, `onLoad={signal.name}`,
+ * `onClick={signal.name}`) it resolves to the instance enclosing the
+ * element, so markup needs nothing extra.
  * `Level` is the name given to `perInstance(name, ...)`, or `never` for an
  * unnamed one.
  */
@@ -41,23 +62,34 @@ export interface InstanceSignal<
   for(element: Element): Instance;
   /**
    * Every instance's value in document order. It updates when any instance
-   * changes and when instance roots are added or removed, so a `Computed`
-   * depending on it reflects the net result of all instances.
+   * changes, when an instance is first resolved (something inside its root
+   * runs an `onLoad` or `onChange` reference) and when a root's
+   * `abortController` aborts, so a `Computed` depending on it reflects the
+   * net result of all instances.
    */
   readonly all: ReadonlySignal<Value[]>;
+  /**
+   * The value of a fresh instance, as the server renders it: the fallback
+   * for a computed read of `.all` while no instance has resolved yet.
+   */
+  readonly initialValue: Value;
   /** Subscribes `target` to the instance enclosing it. */
   subscribe(target: Element): void;
+  /** Ends `target`'s subscription to the instance enclosing it. */
+  unsubscribe(target: Element): void;
   readonly [instanceLevel]?: Level;
 }
+
+// deno-lint-ignore no-explicit-any
+type AnyInstanceSignal = InstanceSignal<any, any, any>;
 
 /**
  * The per-instance handles `perInstance` returns, one per signal it defines.
  * Nested per-instance signals keep their own level.
  */
 export type InstanceSignals<Definitions, Level extends string = never> = {
-  // deno-lint-ignore no-explicit-any
-  [Name in keyof Definitions]: Definitions[Name] extends
-    InstanceSignal<any, any, any> ? Definitions[Name]
+  [Name in keyof Definitions]: Definitions[Name] extends AnyInstanceSignal
+    ? Definitions[Name]
     : Definitions[Name] extends Signal<infer Value>
       ? InstanceSignal<Value, Definitions[Name], Level>
     : Definitions[Name] extends ReadonlySignal<infer Value>
@@ -94,10 +126,25 @@ export interface SignalTools {
       ...args: null extends Value ? [] : [initialValue: Value]
     ): Signal<Value>;
   };
+  /**
+   * A read-only signal recomputed whenever a signal its callback read
+   * changes. Dependencies are tracked on every run, so reads behind
+   * conditions count only while taken. `dependencies` may list extra signals
+   * to follow (for example ones read only inside an untracked helper).
+   */
   Computed: new <Value>(
     compute: () => Value,
-    dependencies: readonly ReadonlySignal<unknown>[],
+    dependencies?: readonly ReadonlySignal<unknown>[],
   ) => ReadonlySignal<Value>;
+  /**
+   * One writable signal per entry of `initialValues`, under the same key and
+   * typed from its value, so an object of defaults (usually from `constants`)
+   * becomes a set of signals in one call. Spread the result into the
+   * collection, or keep it and read `signals.name.value`.
+   */
+  signalsFrom<Values extends Record<string, SignalValue>>(
+    initialValues: Values,
+  ): { [Key in keyof Values]: Signal<Values[Key]> };
   perInstance: {
     /**
      * Defines signals that every instance root gets its own copy of. `define`
@@ -125,6 +172,26 @@ export type SignalDefinitions = Record<
   | ReadonlySignal<unknown>
   | InstanceSignal<unknown, ReadonlySignal<unknown>, string>
 >;
+
+/**
+ * A value `tiny.Signals` can embed in its browser bundle as a constant:
+ * anything that survives a JSON round trip unchanged. `undefined`, functions,
+ * dates, maps and sets are excluded because the server would see the original
+ * while the browser sees the JSON copy.
+ */
+export type SignalConstant =
+  | string
+  | number
+  | boolean
+  | null
+  | readonly SignalConstant[]
+  | { readonly [key: string]: SignalConstant };
+
+/**
+ * Module-scope values a Signals factory may reference, keyed by the binding
+ * name the factory uses for each one.
+ */
+export type SignalConstants = { readonly [name: string]: SignalConstant };
 
 export type SignalAccessors<Definitions extends SignalDefinitions> = {
   [Name in keyof Definitions]: (
@@ -160,6 +227,88 @@ export function signalClasses(
   runtime = true,
   instanceKey?: string,
 ): SignalTools {
+  /** Signals read while a computed callback runs, so it can follow them. */
+  let tracking: Set<SignalInstance<unknown>> | null = null;
+
+  function track<Value>(
+    compute: () => Value,
+  ): { value: Value; reads: Set<SignalInstance<unknown>> } {
+    const previous = tracking;
+    const reads = new Set<SignalInstance<unknown>>();
+    tracking = reads;
+    try {
+      return { value: compute(), reads };
+    } finally {
+      tracking = previous;
+    }
+  }
+
+  function untracked<Value>(read: () => Value): Value {
+    const previous = tracking;
+    tracking = null;
+    try {
+      return read();
+    } finally {
+      tracking = previous;
+    }
+  }
+
+  /** Equal values do not notify; arrays compare by their items. */
+  function sameValue(a: unknown, b: unknown): boolean {
+    if (Object.is(a, b)) return true;
+    return Array.isArray(a) && Array.isArray(b) && a.length === b.length &&
+      a.every((item, index) => Object.is(item, b[index]));
+  }
+
+  /** The parts of a form control the runtime reads. */
+  type Control = {
+    type?: string;
+    name?: string;
+    value: string;
+    checked?: boolean;
+    multiple?: boolean;
+    selectedOptions?: ArrayLike<{ value: string }>;
+    dataset?: { bindName?: string };
+  };
+
+  /**
+   * A control's value in the shape of the signal's current value: checkboxes
+   * write `checked` to a boolean signal and otherwise the checked values of
+   * their group, a multiple select its selected values, and a numeric signal
+   * reads a number.
+   */
+  function readControl(
+    control: Control,
+    current: unknown,
+    group: () => Control[],
+  ): unknown {
+    if (control.type === "checkbox") {
+      if (typeof current === "boolean") return !!control.checked;
+      return group().filter((input) => input.checked).map((input) =>
+        input.value
+      );
+    }
+    if (control.multiple && control.selectedOptions) {
+      return Array.from(control.selectedOptions, (option) => option.value);
+    }
+    if (typeof current === "number") {
+      return control.value === "" ? NaN : Number(control.value);
+    }
+    return control.value;
+  }
+
+  /** The other inputs of a checkbox group: those sharing its form and name. */
+  function namedGroup(control: Control): Control[] {
+    const form = (control as { form?: HTMLFormElement }).form;
+    const named = control.name ? form?.elements.namedItem(control.name) : null;
+    if (
+      typeof RadioNodeList !== "undefined" && named instanceof RadioNodeList
+    ) {
+      return Array.from(named) as unknown as Control[];
+    }
+    return [control];
+  }
+
   class SignalInstance<Value = SignalValue> extends EventTarget
     implements Signal<Value> {
     #name?: string;
@@ -184,6 +333,7 @@ export function signalClasses(
       if (!runtime) {
         throw new Error("Signal values are only available in client handlers.");
       }
+      tracking?.add(this as SignalInstance<unknown>);
       return this.#value;
     }
 
@@ -191,34 +341,39 @@ export function signalClasses(
       if (!runtime) {
         throw new Error("Signal values are only available in client handlers.");
       }
-      if (Object.is(this.#value, value)) return;
+      if (sameValue(this.#value, value)) return;
       this.#value = value;
       this.dispatchEvent(this.createEvent());
     }
 
-    createEvent(): Event {
+    /** `initial` marks the event delivered when a target subscribes on load. */
+    createEvent(initial = false): Event {
       return Object.assign(new Event("signal"), {
         signal: this,
+        initial,
       });
     }
 
-    subscribe(target: EventTarget): void {
+    /** Returns whether a new subscription was made. */
+    subscribe(target: EventTarget): boolean {
       if (!runtime) {
         throw new Error("Signals can only be subscribed in client handlers.");
       }
-      if (this.#subscriptions.has(target)) return;
+      if (this.#subscriptions.has(target)) return false;
       const element = target as EventTarget & {
         abortController?: AbortController;
       };
       const abortSignal = element.abortController?.signal;
-      if (abortSignal?.aborted) return;
+      if (abortSignal?.aborted) return false;
       const listener = (event: Event) => {
         if (
           typeof HTMLElement !== "undefined" && target instanceof HTMLElement
         ) {
           tiny.runHandler(target, event);
         } else {
-          target.dispatchEvent(this.createEvent());
+          target.dispatchEvent(
+            this.createEvent((event as { initial?: boolean }).initial),
+          );
         }
       };
       this.#subscriptions.set(target, listener);
@@ -228,16 +383,48 @@ export function signalClasses(
         () => this.#subscriptions.delete(target),
         { once: true },
       );
+      return true;
+    }
+
+    /** Sends the current value to a subscribed target as an initial event. */
+    deliver(target: EventTarget): void {
+      this.#subscriptions.get(target)?.(this.createEvent(true));
+    }
+
+    unsubscribe(target: EventTarget): void {
+      const listener = this.#subscriptions.get(target);
+      if (!listener) return;
+      this.#subscriptions.delete(target);
+      this.removeEventListener("signal", listener);
+    }
+
+    /** Takes the value of the control that fired `event`. */
+    read(control: Control): void {
+      this.value = readControl(
+        control,
+        this.#value,
+        () => namedGroup(control),
+      ) as Value;
+      const name = control.dataset?.bindName || control.name;
+      if (name) this.name = name;
     }
 
     handleEvent(target: unknown, event?: Event | null): this {
       if (event?.type === "input" || event?.type === "change") {
-        this.value = (event.target as HTMLInputElement).value as Value;
-        const elName = (event.target as HTMLInputElement).dataset.bindName ||
-          (event.target as HTMLInputElement).name;
-        if (elName) this.name = elName;
+        this.read(event.target as unknown as Control);
       } else if (event?.type === "load" && target instanceof EventTarget) {
-        this.subscribe(target);
+        // A new subscriber sees the current value at once, so a handler
+        // bound to `onSignal` needs no separate load path.
+        if (this.subscribe(target)) this.deliver(target);
+      } else if (event) {
+        // Any other event (a click, say) is counted, so subscribers run on
+        // each one and the value stays a change to notify about.
+        if (typeof this.#value !== "number") {
+          throw new TypeError(
+            `A signal bound to a ${event.type} event counts those events, so it must hold a number.`,
+          );
+        }
+        this.value = (this.#value + 1) as Value;
       }
       return this;
     }
@@ -246,25 +433,49 @@ export function signalClasses(
   class ComputedInstance<Value> extends SignalInstance<Value>
     implements ReadonlySignal<Value> {
     #compute: () => Value;
+    #explicit: Set<ReadonlySignal<unknown>>;
+    #dependencies = new Set<ReadonlySignal<unknown>>();
+    #target = new EventTarget();
 
     constructor(
       compute: () => Value,
-      dependencies: readonly ReadonlySignal<unknown>[],
+      dependencies: readonly ReadonlySignal<unknown>[] = [],
     ) {
-      super(runtime ? compute() : undefined as Value);
+      const initial = runtime ? track(compute) : undefined;
+      super(initial ? initial.value : undefined as Value);
       this.#compute = compute;
-      if (runtime) {
-        const target = new EventTarget();
-        target.addEventListener("signal", () => this.refresh());
-        for (const dependency of new Set(dependencies)) {
-          dependency.subscribe(target);
-        }
+      this.#explicit = new Set(dependencies);
+      if (initial) {
+        this.#target.addEventListener("signal", () => this.refresh());
+        this.#follow(initial.reads);
+      }
+    }
+
+    /** Subscribes to the signals the last run read, dropping the rest. */
+    #follow(reads: Set<SignalInstance<unknown>>): void {
+      const wanted = new Set<ReadonlySignal<unknown>>([
+        ...this.#explicit,
+        ...reads,
+      ]);
+      wanted.delete(this);
+      for (const dependency of this.#dependencies) {
+        if (wanted.has(dependency)) continue;
+        dependency.unsubscribe(this.#target);
+        this.#dependencies.delete(dependency);
+      }
+      for (const dependency of wanted) {
+        if (this.#dependencies.has(dependency)) continue;
+        dependency.subscribe(this.#target);
+        this.#dependencies.add(dependency);
       }
     }
 
     /** Recomputes the value, notifying subscribers if it changed. */
     refresh(): void {
-      if (runtime) super.value = this.#compute();
+      if (!runtime) return;
+      const { value, reads } = track(this.#compute);
+      this.#follow(reads);
+      super.value = value;
     }
 
     override get value(): Value {
@@ -301,9 +512,14 @@ export function signalClasses(
 
   /**
    * One `perInstance` call: a copy of its graph per instance root, created
-   * the first time something inside the root touches one of its signals (or
-   * when an `.all` aggregate finds the root). A nested call makes one group
-   * per instance of its parent, holding only the roots inside that instance.
+   * the first time something inside the root resolves one of its signals
+   * (an `onLoad` or `onChange` reference). A nested call makes one group per
+   * instance of its parent, holding only the roots inside that instance.
+   * An instance is parked when its root's `abortController` aborts, which
+   * `UpgradeCustomElement` provides for custom-tag roots: it leaves `.all`
+   * and is held only as long as the root element itself lives, so the same
+   * element re-inserted later resumes its values while a removed one is
+   * collected with its graph. Nothing observes the document.
    */
   class InstanceGroup {
     #define: () => Graph;
@@ -311,8 +527,9 @@ export function signalClasses(
     #selector: string;
     #scope: Element | null | undefined;
     #instances = new Map<Element, Graph>();
+    /** Graphs of roots whose controller aborted, kept while the element lives. */
+    #parked = new WeakMap<Element, Graph>();
     #aggregates = new Map<string, ComputedInstance<unknown[]>>();
-    #observer?: MutationObserver;
     /** A detached copy listing the signal names and server-side values. */
     readonly template: Graph;
 
@@ -335,15 +552,36 @@ export function signalClasses(
       }
       let graph = this.#instances.get(root);
       if (!graph) {
-        graph = this.#create(root);
+        const parked = this.#parked.get(root);
+        if (parked) {
+          // The same element is back: resume its values under its new controller.
+          this.#parked.delete(root);
+          this.#activate(root, parked);
+          graph = parked;
+        } else {
+          graph = this.#create(root);
+        }
         this.#refreshAggregates();
       }
       return graph;
     }
 
+    /** Lists the graph as live and parks it when the root's controller aborts. */
+    #activate(root: Element, graph: Graph): void {
+      this.#instances.set(root, graph);
+      const abortSignal = (root as { abortController?: AbortController })
+        .abortController
+        ?.signal;
+      abortSignal?.addEventListener("abort", () => {
+        this.#instances.delete(root);
+        this.#parked.set(root, graph);
+        this.#refreshAggregates();
+      }, { once: true });
+    }
+
     #create(root: Element): Graph {
       const graph = withScope(root, this.#define);
-      this.#instances.set(root, graph);
+      this.#activate(root, graph);
       for (const [name, signal] of Object.entries(graph)) {
         // Nested per-instance signals are aggregated by their own group.
         if (!(signal instanceof SignalInstance)) continue;
@@ -365,8 +603,11 @@ export function signalClasses(
       }
       let aggregate = this.#aggregates.get(name);
       if (!aggregate) {
-        this.#observe();
-        aggregate = new ComputedInstance(() => this.#values(name), []);
+        // Instances notify the aggregate themselves (see `#create`), so its
+        // reads are not tracked: removed instances must not keep it alive.
+        aggregate = new ComputedInstance(() =>
+          untracked(() => this.#values(name))
+        );
         this.#aggregates.set(name, aggregate);
       }
       return aggregate;
@@ -383,42 +624,6 @@ export function signalClasses(
         .map((root) =>
           (this.#instances.get(root)![name] as SignalInstance<unknown>).value
         );
-    }
-
-    /** Matches instances to the roots in scope; true if they changed. */
-    #sync(): boolean {
-      let changed = false;
-      const scope = this.#scope ?? document;
-      for (const root of scope.querySelectorAll(this.#selector)) {
-        if (!this.#instances.has(root)) {
-          this.#create(root);
-          changed = true;
-        }
-      }
-      for (const root of [...this.#instances.keys()]) {
-        if (!root.isConnected) {
-          this.#instances.delete(root);
-          changed = true;
-        }
-      }
-      return changed;
-    }
-
-    /** Keeps the instances in step with the DOM once aggregates exist. */
-    #observe(): void {
-      if (
-        !runtime || this.#observer || this.#scope === null ||
-        typeof document === "undefined" ||
-        typeof MutationObserver === "undefined"
-      ) return;
-      this.#sync();
-      this.#observer = new MutationObserver(() => {
-        if (this.#sync()) this.#refreshAggregates();
-      });
-      this.#observer.observe(this.#scope ?? document, {
-        childList: true,
-        subtree: true,
-      });
     }
 
     #refreshAggregates(): void {
@@ -473,6 +678,10 @@ export function signalClasses(
       this.for(target).subscribe(target);
     }
 
+    unsubscribe(target: Element): void {
+      this.for(target).unsubscribe(target);
+    }
+
     /**
      * As a handler, acts on the instance enclosing the element. Read from a
      * handler (no event) it returns itself so `.for()` and `.all` are reachable.
@@ -513,10 +722,21 @@ export function signalClasses(
     );
   }
 
+  function signalsFrom(
+    initialValues: Record<string, SignalValue>,
+  ): Record<string, SignalInstance<SignalValue>> {
+    return Object.fromEntries(
+      Object.entries(initialValues).map((
+        [key, value],
+      ) => [key, new SignalInstance(value)]),
+    );
+  }
+
   return Object.assign(
     {
       Signal: SignalInstance,
       Computed: ComputedInstance,
+      signalsFrom: signalsFrom as SignalTools["signalsFrom"],
       perInstance: perInstance as unknown as SignalTools["perInstance"],
     },
     // Not part of SignalTools: lets the server validate a factory's result.

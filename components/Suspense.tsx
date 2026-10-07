@@ -16,7 +16,7 @@ import { partialInsertHandlers } from "../handlers/partialInsertHandlers.ts";
 import { headHandler, tiny } from "../honoFactory.tsx";
 import { NewPartial } from "./NewPartial.tsx";
 import { renderToReadableStream } from "hono/jsx/dom/server";
-import { AssetTags } from "./AssetTags.tsx";
+import { AssetTags, LifecycleTags } from "./AssetTags.tsx";
 import { transparent } from "../componentScope.ts";
 
 export type PartialInsertHandler = Parameters<typeof NewPartial>[0]["onLoad"];
@@ -110,9 +110,11 @@ export async function CustomSuspense({
     Variables: {
       accessedHandlerFiles?: Set<string>;
       accessedStyleFiles?: Set<string>;
+      accessedLifecycleTags?: Set<string>;
     };
   }>();
-  const { accessedHandlerFiles, accessedStyleFiles } = c.var;
+  const { accessedHandlerFiles, accessedStyleFiles, accessedLifecycleTags } =
+    c.var;
   const sourceUrl = c.req.header("source-url");
 
   let resArray: HtmlEscapedString[] | Promise<HtmlEscapedString[]>[] = [];
@@ -170,6 +172,8 @@ export async function CustomSuspense({
             const { fn } = await tiny.imports(headHandler);
             let html = buffer ? "" : await renderToReadableStream(
               <>
+                {/* Declared ahead of the content so its tags are defined as it is parsed or inserted. */}
+                <LifecycleTags tags={accessedLifecycleTags ?? []} />
                 {((accessedHandlerFiles?.size || 0) +
                       (accessedStyleFiles?.size || 0)) > 0 &&
                   (

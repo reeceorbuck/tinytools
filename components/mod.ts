@@ -9,7 +9,7 @@
 export { AssetTags } from "./AssetTags.tsx";
 export { ClientRoutes } from "./ClientRoutes.tsx";
 export {
-  ActivateOnLoadHandler,
+  ActivateParsedHandler,
   BuildFromTemplateElement,
   UpgradeCustomElement,
 } from "./ActivateOnLoadHandler.tsx";

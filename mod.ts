@@ -46,16 +46,23 @@ export {
   type TinyHonoOptions,
 } from "./honoFactory.tsx";
 export type { PartialAbortableHTMLElement } from "./components/ActivateOnLoadHandler.tsx";
+export type { LifecycleElement } from "./lifecycleElement.ts";
 
 // Handlers & Styles exports
 export {
+  Constants,
   Handlers,
   type HandlersOptions,
   type ImportedTools,
   imports,
+  type RenderedTemplate,
   Signals,
   Store,
   Styles,
+  type TemplateClones,
+  type TemplateFragment,
+  type TemplateParams,
+  Templates,
 } from "./clientTools.ts";
 export type {
   InstanceDefinitions,
@@ -65,6 +72,8 @@ export type {
   ReadonlySignal,
   Signal,
   SignalAccessors,
+  SignalConstant,
+  SignalConstants,
   SignalDefinitions,
   SignalTools,
   SignalValue,

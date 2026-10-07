@@ -54,6 +54,26 @@ Deno.test("setCssProperty writes the signal's named custom property", async () =
   assertEquals(properties.size, 1);
 });
 
+Deno.test("a signal bound to another event counts it", () => {
+  type Dispatching<Value> = {
+    value: Value;
+    subscribe(target: EventTarget): void;
+    handleEvent(target: unknown, event: Event): unknown;
+  };
+  const { Signal } = signalClasses();
+  const requests = new Signal<number>(0) as unknown as Dispatching<number>;
+  let notifications = 0;
+  const listener = new EventTarget();
+  listener.addEventListener("signal", () => notifications++);
+  requests.subscribe(listener);
+  const click = { type: "click" } as Event;
+  requests.handleEvent({}, click);
+  requests.handleEvent({}, click);
+  assertEquals([requests.value, notifications], [2, 2]);
+  const text = new Signal<string>("a") as unknown as Dispatching<string>;
+  assertThrows(() => text.handleEvent({}, click), TypeError, "counts");
+});
+
 Deno.test("signals take their name from the input that writes them", () => {
   const { Signal } = signalClasses();
   const signal = new Signal<string | null>(null) as unknown as {
@@ -119,4 +139,28 @@ Deno.test("a signal without an initial value must allow null", () => {
   assertEquals(text, "a");
   // @ts-expect-error a string signal needs an initial value
   new Signal<string>();
+});
+
+Deno.test("a load subscription delivers the current value, then changes", () => {
+  const { Signal } = signalClasses();
+  const signal = new Signal<number>(1);
+  const target = new EventTarget();
+  const seen: [unknown, unknown][] = [];
+  target.addEventListener("signal", (event) => {
+    const { signal: source, initial } = event as Event & {
+      signal: { value: unknown };
+      initial?: boolean;
+    };
+    seen.push([source.value, initial]);
+  });
+  const subscriber = signal as unknown as {
+    handleEvent(target: unknown, event: Event): unknown;
+  };
+  subscriber.handleEvent(target, new Event("load"));
+  assertEquals(seen, [[1, true]]);
+  signal.value = 2;
+  assertEquals(seen, [[1, true], [2, false]]);
+  // Equal values still do not notify.
+  signal.value = 2;
+  assertEquals(seen.length, 2);
 });

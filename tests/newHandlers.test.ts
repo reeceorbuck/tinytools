@@ -251,17 +251,20 @@ Deno.test({
       });
       let notifications = 0;
       subscriber.addEventListener("signal", () => notifications++);
+      // A load subscribes once and delivers the current value once.
       textModule.text.call(subscriber, new Event("load"));
       textModule.text.call(subscriber, new Event("load"));
-      textModule.text().value = "first";
       assertEquals(notifications, 1);
+      textModule.text().value = "first";
+      assertEquals(notifications, 2);
       subscriber.abortController.abort();
       textModule.text().value = "second";
-      assertEquals(notifications, 1);
+      assertEquals(notifications, 2);
       subscriber.abortController = new AbortController();
       textModule.text.call(subscriber, new Event("load"));
+      assertEquals(notifications, 3);
       textModule.text().value = "third";
-      assertEquals(notifications, 2);
+      assertEquals(notifications, 4);
       const references = await imports(first);
       assertEquals(typeof references.signal.count, "object");
       assertThrows(
@@ -412,6 +415,9 @@ Deno.test({
         type: "change",
         target: { value: "flow", dataset: {}, name: "" },
       });
+      assertEquals(module.materials().value, "flow");
+      // The second root counts once something inside it resolves a signal.
+      module.material().for(window.document.getElementById("b"));
       assertEquals(module.materials().value, "flow, bulk");
       // Read from a handler, the accessor is the per-instance handle.
       assertEquals(module.material().for(a).value, "flow");

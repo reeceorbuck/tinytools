@@ -266,6 +266,21 @@ export function withTemplateRoots<
   }) as T;
 }
 
+/**
+ * @internal The top-level tag names of a precompiled template (`"jsx":
+ * "precompile"` renders elements to strings at once), or undefined for any
+ * other value.
+ */
+export function templateRootTags(value: unknown): string[] | undefined {
+  if (!value || typeof value !== "object" || !(TEMPLATE_ROOTS in value)) {
+    return undefined;
+  }
+  const text = String(value);
+  return (value as TemplateResult)[TEMPLATE_ROOTS].map((offset) =>
+    /<([a-zA-Z][\w:-]*)$/.exec(text.slice(0, offset))?.[1] ?? ""
+  );
+}
+
 function markTemplateRoots(
   template: TemplateResult,
   name: string,
