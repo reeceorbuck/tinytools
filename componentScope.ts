@@ -28,6 +28,18 @@ const WRAPPED = Symbol.for("tinytools.wrappedComponent");
 const ELEMENT = Symbol.for("tinytools.elementNode");
 const TEMPLATE_ROOTS = Symbol.for("tinytools.templateRoots");
 
+/**
+ * @internal Set on a rendered element (a node, or a precompiled template with
+ * that element at its top level) whose lifecycle handler only fires once an
+ * `<upgrade-preceding>` proxy follows it; the value names the element and
+ * the event. The JSX runtime sets it, `UpgradeCustomElement` clears it, and
+ * placing a value still carrying it inside another element is an error.
+ */
+export const NEEDS_PROXY = Symbol.for("tinytools.needsLifecycleProxy");
+
+/** @internal The element and lifecycle event waiting for a proxy. */
+export type ProxyNeed = { tag: string; event: string };
+
 // deno-lint-ignore no-explicit-any
 type AnyFunction = (...args: any[]) => any;
 
@@ -114,12 +126,35 @@ function markRoots(
 // simply carries unused offsets.
 // ---------------------------------------------------------------------------
 
-type TemplateResult = HtmlEscapedString & { [TEMPLATE_ROOTS]: number[] };
+type TemplateResult = HtmlEscapedString & {
+  [TEMPLATE_ROOTS]: number[];
+  [NEEDS_PROXY]?: ProxyNeed;
+};
 
 type TemplatePlan = {
   strings: string[];
   /** For each value slot: an original value index, or -1 for a sentinel. */
   slots: number[];
+};
+
+/**
+ * @internal Where a value slot of a precompiled template sits. `depth` is
+ * the number of open ancestors in the template: 0 for a top-level element's
+ * attribute or a child beside the top-level content. An attribute slot also
+ * names the open tag it sits in.
+ */
+export type ValueSlot = {
+  depth: number;
+  tag?: string;
+  /** The index of the element among the template's open tags. */
+  element?: number;
+  /** The element's static `is` attribute, when it has one. */
+  is?: string;
+};
+
+type TemplateAnalysis = {
+  plan: TemplatePlan | null;
+  slots: readonly ValueSlot[];
 };
 
 const VOID_ELEMENTS = new Set([
@@ -142,21 +177,40 @@ const VOID_ELEMENTS = new Set([
 // Private-use characters plus a per-process nonce: cannot collide with markup.
 const SENTINEL = `tc${crypto.randomUUID().slice(0, 8)}`;
 const SENTINEL_VALUE = raw(SENTINEL);
-const templatePlans = new WeakMap<readonly string[], TemplatePlan | null>();
+const templateAnalyses = new WeakMap<readonly string[], TemplateAnalysis>();
 
-/** Offsets just after each top-level tag name, as [segment, offset] pairs. */
-function findTopLevelTags(strings: readonly string[]): [number, number][] {
+/**
+ * Scans the static strings once: the offsets just after each top-level tag
+ * name, as [segment, offset] pairs, and for each value slot the open tag it
+ * sits in, if any.
+ */
+function scanTemplate(strings: readonly string[]): {
+  cuts: [number, number][];
+  slots: ValueSlot[];
+} {
   const cuts: [number, number][] = [];
+  const slots: ValueSlot[] = [];
+  /** The static text of each open tag, in order, for its `is` attribute. */
+  const openTags: string[] = [];
   let depth = 0;
   let inTag = false;
+  let tagName = "";
   let tagIsVoid = false;
   let quote = "";
   for (let segment = 0; segment < strings.length; segment++) {
+    if (segment > 0) {
+      slots.push(
+        inTag && !quote
+          ? { tag: tagName, depth, element: openTags.length - 1 }
+          : { depth },
+      );
+    }
     const text = strings[segment];
     let i = 0;
     while (i < text.length) {
       const ch = text[i];
       if (inTag) {
+        openTags[openTags.length - 1] += ch;
         if (quote) {
           if (ch === quote) quote = "";
         } else if (ch === '"' || ch === "'") {
@@ -183,23 +237,38 @@ function findTopLevelTags(strings: readonly string[]): [number, number][] {
         i = end < 0 ? text.length : end + 1;
         continue;
       }
-      const tagName = /^[a-zA-Z][\w:-]*/.exec(text.slice(i + 1))?.[0];
-      if (!tagName) {
+      const name = /^[a-zA-Z][\w:-]*/.exec(text.slice(i + 1))?.[0];
+      if (!name) {
         i++;
         continue;
       }
-      if (depth === 0) cuts.push([segment, i + 1 + tagName.length]);
+      if (depth === 0) cuts.push([segment, i + 1 + name.length]);
       inTag = true;
-      tagIsVoid = VOID_ELEMENTS.has(tagName.toLowerCase());
-      i += 1 + tagName.length;
+      tagName = name;
+      tagIsVoid = VOID_ELEMENTS.has(name.toLowerCase());
+      openTags.push("");
+      i += 1 + name.length;
     }
   }
-  return cuts;
+  // An `is` written statically may sit before or after the slot in its tag.
+  const isAttributes = openTags.map((text) => {
+    const match = /\sis\s*=\s*(?:"([^"]*)"|'([^']*)')/.exec(text);
+    return match ? match[1] ?? match[2] : undefined;
+  });
+  return {
+    cuts,
+    slots: slots.map((slot) =>
+      slot.element !== undefined && isAttributes[slot.element]
+        ? { ...slot, is: isAttributes[slot.element] }
+        : slot
+    ),
+  };
 }
 
-function planTemplate(strings: readonly string[]): TemplatePlan | null {
-  if (templatePlans.has(strings)) return templatePlans.get(strings)!;
-  const cuts = findTopLevelTags(strings);
+function analyseTemplate(strings: readonly string[]): TemplateAnalysis {
+  const known = templateAnalyses.get(strings);
+  if (known) return known;
+  const { cuts, slots } = scanTemplate(strings);
   let plan: TemplatePlan | null = null;
   if (cuts.length > 0) {
     plan = { strings: [], slots: [] };
@@ -222,8 +291,9 @@ function planTemplate(strings: readonly string[]): TemplatePlan | null {
     }
     plan.strings.push(current);
   }
-  templatePlans.set(strings, plan);
-  return plan;
+  const analysis = { plan, slots };
+  templateAnalyses.set(strings, analysis);
+  return analysis;
 }
 
 function stripSentinels(rendered: HtmlEscapedString): TemplateResult {
@@ -248,21 +318,41 @@ function stripSentinels(rendered: HtmlEscapedString): TemplateResult {
 
 /**
  * @internal Wraps Hono's `jsxTemplate` so precompiled templates remember
- * where their top-level elements start.
+ * where their top-level elements start. `inspect` sees each call's values
+ * with the open tag each attribute value sits in, and the proxy need it
+ * returns is recorded on the result (see `NEEDS_PROXY`).
  */
 export function withTemplateRoots<
   T extends (strings: TemplateStringsArray, ...values: unknown[]) => unknown,
->(render: T): T {
+>(
+  render: T,
+  inspect?: (
+    values: unknown[],
+    slots: readonly ValueSlot[],
+  ) => ProxyNeed | undefined,
+): T {
   return ((strings: TemplateStringsArray, ...values: unknown[]) => {
-    const plan = planTemplate(strings);
-    if (!plan) return render(strings, ...values);
-    const rendered = render(
-      plan.strings as unknown as TemplateStringsArray,
-      ...plan.slots.map((slot) => slot < 0 ? SENTINEL_VALUE : values[slot]),
-    ) as HtmlEscapedString | Promise<HtmlEscapedString>;
+    const { plan, slots } = analyseTemplate(strings);
+    const need = inspect?.(values, slots);
+    if (!plan && !need) return render(strings, ...values);
+    const rendered = (plan
+      ? render(
+        plan.strings as unknown as TemplateStringsArray,
+        ...plan.slots.map((slot) => slot < 0 ? SENTINEL_VALUE : values[slot]),
+      )
+      : render(strings, ...values)) as
+        | HtmlEscapedString
+        | Promise<HtmlEscapedString>;
+    const finish = (output: HtmlEscapedString): HtmlEscapedString => {
+      const result = plan ? stripSentinels(output) : output;
+      if (need && typeof result === "object") {
+        (result as TemplateResult)[NEEDS_PROXY] = need;
+      }
+      return result;
+    };
     return rendered instanceof Promise
-      ? rendered.then(stripSentinels)
-      : stripSentinels(rendered);
+      ? rendered.then(finish)
+      : finish(rendered);
   }) as T;
 }
 
@@ -296,7 +386,11 @@ function markTemplateRoots(
     from = at;
   }
   // The new string carries no offsets, so outer components leave it alone.
-  return raw(output + text.slice(from), template.callbacks);
+  const result = raw(output + text.slice(from), template.callbacks) as
+    & HtmlEscapedString
+    & { [NEEDS_PROXY]?: ProxyNeed };
+  if (template[NEEDS_PROXY]) result[NEEDS_PROXY] = template[NEEDS_PROXY];
+  return result;
 }
 
 function cloneNode(node: JSXNode, props: JSXNode["props"]): JSXNode {

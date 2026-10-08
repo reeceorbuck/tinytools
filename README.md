@@ -158,7 +158,7 @@ const { fn, signal, styled, events, handlers, c } = await tiny.imports(
 ```
 
 - `fn.name` is a handler reference for JSX event attributes.
-- `signal.name` is a signal reference, usable on `onLoad` / `onInput`.
+- `signal.name` is a signal reference, usable on `onConnect` / `onInput`.
 - `styled.name` is the generated class string; `styled.mergeClasses(...)` joins
   class strings without duplicates.
 - `events({...})` is an explicit attribute-spread alternative to `fn`.
@@ -290,8 +290,10 @@ unchanged and can forward them to intrinsic elements; type such props with
 ```tsx
 import type { HandlerProp } from "tinytools";
 
-function Panel(props: { onLoad?: HandlerProp<(this: HTMLElement) => void> }) {
-  return <section onLoad={props.onLoad} />;
+function Panel(
+  props: { onConnect?: HandlerProp<(this: HTMLElement) => void> },
+) {
+  return <section is="live-section" onConnect={props.onConnect} />;
 }
 ```
 
@@ -441,7 +443,11 @@ In handlers, import a collection and use `signal.name.value` directly. In JSX,
 const { fn, signal } = await tiny.imports(viewerSignals, signalTools);
 
 <input type="range" onInput={signal.setContrast} />;
-<dialog onLoad={signal.contrast} onSignal={fn.setCssProperty} />;
+<dialog
+  is="themed-dialog"
+  onConnect={signal.contrast}
+  onSignal={fn.setCssProperty}
+/>;
 ```
 
 - On `input` / `change` the signal takes the target's value and, if the input
@@ -449,7 +455,7 @@ const { fn, signal } = await tiny.imports(viewerSignals, signalTools);
 - On `load` the element subscribes to the signal and receives a `signal` event
   (`event.signal.value`) with the current value at once, then one whenever it
   changes; `event.initial` is true for the first. Subscriptions use the
-  element's `abortController` when present (see `UpgradeCustomElement`), so they
+  element's `abortController` when present (see Lifecycle components), so they
   end when the element is removed.
 - On any other event (`onClick={signal.requests}`) a numeric signal adds one, so
   subscribers run on each click and a `Computed` can count them. No handler is
@@ -466,7 +472,11 @@ written to its writable signals and returns every signal's value:
 const { contrast } = viewerSignals.evaluateUsingInitialValues({
   setContrast: 0.5,
 });
-<output onLoad={signal.contrast} onSignal={fn.setTextContent}>
+<output
+  is="live-output"
+  onConnect={signal.contrast}
+  onSignal={fn.setTextContent}
+>
   {contrast}
 </output>;
 ```
@@ -586,12 +596,18 @@ const layerSignals = new tiny.Signals(
 
 <fieldset tt-instance={layerSignals.instanceKey}>
   <select onChange={signal.material}>...</select>
-  <select onLoad={signal.material} onSignal={fn.applyMaterial}>...</select>
+  <select
+    is="live-select"
+    onConnect={signal.material}
+    onSignal={fn.applyMaterial}
+  >
+    ...
+  </select>
 </fieldset>;
 ```
 
 - Set `tt-instance={collection.instanceKey}` on the element wrapping each
-  instance. References inside it (`onChange`, `onLoad`) resolve to that
+  instance. References inside it (`onChange`, `onConnect`) resolve to that
   instance, so consuming elements need no extra attributes. Using one outside a
   root throws.
 - Roots of different collections can nest. One element can root several
@@ -601,13 +617,13 @@ const layerSignals = new tiny.Signals(
 - `signal.x.all` is a read-only signal of every instance's value in document
   order, so a `Computed` depending on it is the net result of all instances. An
   instance joins when something inside its root first resolves a signal (an
-  `onLoad` or `onChange` reference), so give each root a reference that runs on
-  load. It leaves `.all` when the root's `abortController` aborts, which
-  `UpgradeCustomElement` provides for a custom-tag root (`<note-entry>`), but
-  its values are kept for as long as that element exists: the same element
-  re-inserted later (moved, or restored from a route cache) resumes them, while
-  a removed element is collected with them. A clone or re-parsed copy is a new
-  instance. Nothing observes the document.
+  `onConnect` or `onChange` reference), so give each root a reference that runs
+  on load. It leaves `.all` when the root's `abortController` aborts, which a
+  custom-tag root (`<note-entry>`) has once it binds `onConnect`, but its values
+  are kept for as long as that element exists: the same element re-inserted
+  later (moved, or restored from a route cache) resumes them, while a removed
+  element is collected with them. A clone or re-parsed copy is a new instance.
+  Nothing observes the document.
 - Signals outside `perInstance` stay page-wide, and collections without it work
   as before.
 - `evaluateUsingInitialValues` reports a fresh instance's value for per-instance
@@ -651,7 +667,11 @@ const noteSignals = new tiny.Signals(
   <fieldset tt-instance={noteSignals.instanceKeyFor("layer")}>
     <select onChange={signal.material}>...</select>
   </fieldset>
-  <output onLoad={signal.summary} onSignal={fn.setTextContent} />
+  <output
+    is="live-output"
+    onConnect={signal.summary}
+    onSignal={fn.setTextContent}
+  />
 </form>;
 ```
 
@@ -834,33 +854,56 @@ that already place the content inside its target on a full page load.
 
 ### Lifecycle components
 
-Browsers only fire `load` on a few elements. These wrappers give any element
-lifecycle events:
+Browsers only fire `load` on a few elements. Any element with a hyphenated tag
+(`<load-more>`) becomes a custom element with lifecycle events as soon as it
+binds one: its `onConnect` runs whenever it connects (including after cached
+restoration), its `onDisconnect` runs when it is removed, and its
+`abortController` aborts on removal so handlers can register listeners that
+clean themselves up. No wrapper is needed. The JSX runtime declares the tag
+ahead of the markup, as `<meta name="tt-define" content="load-more">` in a full
+page's head or a `<tt-define tag="load-more">` element in streamed and partial
+content, and the lifecycle runtime that ships in the inline head script defines
+it before that markup is parsed or inserted. Elements therefore upgrade in
+document order, a parent's `onConnect` always precedes a child's `onParsed`,
+nothing is rendered beside the element and it keeps working however it is moved,
+substituted or cloned. A `tiny.Templates` bundle whose markup holds such
+elements defines their tags itself. Since `onConnect` can run more than once,
+guard one-time setup. `onLoad` stays with the elements the browser fires `load`
+on (`<body>`, `<img>`, `<link>` and the like); binding it to a lifecycle element
+throws, since that element runs `onConnect` instead.
 
-- `<UpgradeCustomElement>` upgrades each child to a custom element whose
-  `onLoad` runs whenever it connects (including after cached restoration), whose
-  `onDisconnect` runs when it is removed, and whose `abortController` aborts on
-  removal so handlers can register listeners that clean themselves up. Prefer
-  this with a hyphenated tag (`<load-more>`): the tag is declared ahead of the
-  markup, as `<meta name="tt-define" content="load-more">` in a full page's head
-  or a `<tt-define tag="load-more">` element in streamed and partial content,
-  and the lifecycle runtime that ships in the inline head script defines it
-  before that markup is parsed or inserted. Elements therefore upgrade in
-  document order, a parent's `onLoad` always precedes a child's `onParsed`,
-  nothing is rendered beside the element and it keeps working however it is
-  moved, substituted or cloned. A `tiny.Templates` bundle whose markup holds
-  such elements defines their tags itself. Since `onLoad` can run more than
-  once, guard one-time setup. Elements without a hyphenated tag get an
-  `<upgrade-preceding>` sibling rendered after them, a lifecycle element that
-  forwards its `load` and `suspend` to the element before it, so the two must
-  stay together.
+A built-in element keeps its tag and gets the same lifecycle events through a
+hyphenated `is` attribute: `<button is="custom-button" onConnect={fn.ready}>` or
+`<input is="bound-input" onConnect={signal.search} onSignal={fn.apply}>`. The
+runtime declares it as `custom-button:button` and defines a customized built-in
+element extending the button's own class, so the element upgrades as it is
+parsed like a custom tag. Safari has no customized built-ins; there the first
+such declaration starts one document-wide `MutationObserver` that runs `connect`
+and `disconnect` (and manages the `abortController`) on elements carrying a
+declared `is` as they enter and leave the document. The observer runs in a
+microtask after each insertion, so in Safari these handlers run a little later
+than a custom tag's, and a child's `onParsed` may run before the parent's
+`onConnect`.
+
+Elements without a hyphenated tag or `is` (a bare `<input>`, say) cannot
+upgrade. These wrappers give them lifecycle events:
+
+- `<UpgradeCustomElement>` renders an `<upgrade-preceding>` sibling after each
+  child without a hyphenated tag or `is`, a lifecycle element that forwards its
+  `connect` and `disconnect` to the element before it, so the two must stay
+  together. A bare element that binds `onConnect` or `onDisconnect` without this
+  wrapper throws while rendering, so a forgotten wrapper cannot silently never
+  fire. The check runs where the element is placed inside other markup, so an
+  element a component returns on its own is only checked once something places
+  it. Children with a hyphenated tag or `is` pass through unchanged, and a child
+  binding `onLoad` is rejected, since the proxy does not forward `load`.
 - `<ActivateParsedHandler>` runs each child's `onParsed` exactly once, via a
   trigger placed right after it that fires once the child and its content have
   been parsed. Use it for one-time work such as building an element's content
-  from a template; unlike `onLoad` it never repeats when the element is moved or
-  restored. The trigger acts on its previous sibling, so content that moves the
-  element away from it before it fires can run the handler on the wrong element.
-  For repeating lifecycle events use `UpgradeCustomElement`.
+  from a template; unlike `onConnect` it never repeats when the element is moved
+  or restored. The trigger acts on its previous sibling, so content that moves
+  the element away from it before it fires can run the handler on the wrong
+  element. For repeating lifecycle events use `UpgradeCustomElement`.
 - `<BuildFromTemplate template={template.card}>` clones a `tiny.Templates` entry
   in place once its children are parsed, filling the clone's named `<slot>`s
   from children with a matching `slot` attribute and its unnamed `<slot>` from

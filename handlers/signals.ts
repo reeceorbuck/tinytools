@@ -16,7 +16,7 @@ export interface SignalElement extends HTMLElement {
 
 /**
  * Helpers for consuming `tiny.Signals` values in the browser. Bind them to the
- * `onSignal` event of an element subscribed with `onLoad={signal.name}`.
+ * `onSignal` event of an element subscribed with `onConnect={signal.name}`.
  */
 export const signalTools = new tiny.Handlers(import.meta.url, {
   /** Runs `callback` whenever any of `dependencies` changes, until the controller aborts. */

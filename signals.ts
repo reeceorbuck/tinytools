@@ -46,7 +46,7 @@ declare const instanceLevel: unique symbol;
  * A signal defined inside `perInstance`: every instance root (an element
  * whose `tt-instance` attribute holds the collection's `instanceKey`) gets
  * its own copy.
- * Bound in JSX (`onChange={signal.name}`, `onLoad={signal.name}`,
+ * Bound in JSX (`onChange={signal.name}`, `onConnect={signal.name}`,
  * `onClick={signal.name}`) it resolves to the instance enclosing the
  * element, so markup needs nothing extra.
  * `Level` is the name given to `perInstance(name, ...)`, or `never` for an
@@ -63,7 +63,7 @@ export interface InstanceSignal<
   /**
    * Every instance's value in document order. It updates when any instance
    * changes, when an instance is first resolved (something inside its root
-   * runs an `onLoad` or `onChange` reference) and when a root's
+   * runs an `onConnect` or `onChange` reference) and when a root's
    * `abortController` aborts, so a `Computed` depending on it reflects the
    * net result of all instances.
    */
@@ -412,9 +412,13 @@ export function signalClasses(
     handleEvent(target: unknown, event?: Event | null): this {
       if (event?.type === "input" || event?.type === "change") {
         this.read(event.target as unknown as Control);
-      } else if (event?.type === "load" && target instanceof EventTarget) {
+      } else if (
+        (event?.type === "connect" || event?.type === "load") &&
+        target instanceof EventTarget
+      ) {
         // A new subscriber sees the current value at once, so a handler
-        // bound to `onSignal` needs no separate load path.
+        // bound to `onSignal` needs no separate connect path. `load` is for
+        // `<body>` and the other elements the browser fires it on.
         if (this.subscribe(target)) this.deliver(target);
       } else if (event) {
         // Any other event (a click, say) is counted, so subscribers run on
@@ -513,7 +517,7 @@ export function signalClasses(
   /**
    * One `perInstance` call: a copy of its graph per instance root, created
    * the first time something inside the root resolves one of its signals
-   * (an `onLoad` or `onChange` reference). A nested call makes one group per
+   * (an `onConnect` or `onChange` reference). A nested call makes one group per
    * instance of its parent, holding only the roots inside that instance.
    * An instance is parked when its root's `abortController` aborts, which
    * `UpgradeCustomElement` provides for custom-tag roots: it leaves `.all`

@@ -28,8 +28,12 @@ import { getContextTitle } from "./titled.ts";
 import { css } from "./scopedStyles.ts";
 import { AssetTags, LifecycleTags } from "./components/AssetTags.tsx";
 import {
+  connectLifecycle,
   defineLifecycleElement,
   defineLifecycleTags,
+  disconnectLifecycle,
+  observeBuiltinFallback,
+  supportsCustomizedBuiltins,
 } from "./lifecycleElement.ts";
 import { NewPartial } from "./components/NewPartial.tsx";
 import { CSP_ENABLED_KEY, eventHandlerBody } from "./eventAttributes.ts";
@@ -42,8 +46,13 @@ const ROUTE_LAYOUT_APPLIED_KEY = "tinyToolsRouteLayoutApplied";
  */
 export const runHandlerScript = [
   runHandler.toString(),
+  supportsCustomizedBuiltins.toString(),
+  connectLifecycle.toString(),
+  disconnectLifecycle.toString(),
+  observeBuiltinFallback.toString(),
   defineLifecycleElement.toString(),
   defineLifecycleTags.toString(),
+  "const lifecycleState = {fallbacks: new Map()};",
   "defineLifecycleTags();",
   "const tiny = {runHandler, defineLifecycleElement};",
 ].join("\n");

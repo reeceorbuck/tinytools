@@ -175,7 +175,8 @@ export function recordHandlerFile(file: string): void {
  * and the inline head runtime defines it (see `lifecycleElement.ts`).
  */
 export function recordLifecycleTag(tagName: string): void {
-  if (!/^[a-z][.0-9_a-z-]*-[.0-9_a-z-]*$/.test(tagName)) {
+  // A custom tag, or `is` name and extended tag (`custom-button:button`).
+  if (!/^[a-z][.0-9_a-z-]*-[.0-9_a-z-]*(:[a-z][a-z0-9]*)?$/.test(tagName)) {
     throw new TypeError(
       `"${tagName}" is not a valid custom element name; it needs a hyphen and lower-case letters.`,
     );

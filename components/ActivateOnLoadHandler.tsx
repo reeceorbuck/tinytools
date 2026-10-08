@@ -1,10 +1,11 @@
 /**
  * Lifecycle components for @tinytools/hono-tools.
  *
- * Browsers only fire `load` on a handful of elements, so these components
- * emit a tiny trigger (an image or a modulepreload link) whose own `load`
- * event is forwarded to the preceding element. That lets any element bind
- * `onLoad` to run a handler once it is in the document.
+ * Lifecycle elements (a custom tag, or a plain tag with a hyphenated `is`)
+ * run `onConnect` and `onDisconnect` by themselves. These components cover
+ * the rest: a proxy element that forwards those events to a bare plain tag,
+ * and a modulepreload link whose own `load` triggers one-time `onParsed`
+ * work on the element before it.
  *
  * @module
  */
@@ -14,7 +15,15 @@ import type { HtmlEscapedString } from "hono/utils/html";
 import { tiny } from "../mod.ts";
 import { Handlers, recordLifecycleTag } from "../clientTools.ts";
 import { templateRootTags, transparent } from "../componentScope.ts";
-import type { LifecycleElement } from "../lifecycleElement.ts";
+import {
+  claimLifecycleProxy,
+  findUnproxied,
+  unproxiedLifecycleError,
+} from "../lifecycleBindings.ts";
+import {
+  type LifecycleElement,
+  lifecycleTagDeclaration,
+} from "../lifecycleElement.ts";
 import { templateTools } from "../handlers/templateTools.ts";
 
 /** An upgraded custom element: its controller aborts when it disconnects. */
@@ -22,18 +31,18 @@ export type PartialAbortableHTMLElement = LifecycleElement;
 
 /** The trigger of `ActivateParsedHandler` and the forwarding of `<upgrade-preceding>`. */
 const lifecycleHandlers = new Handlers(import.meta.url, {
-  /** Runs the preceding element's `onLoad` handlers; bound to a proxy's `onLoad`. */
-  forwardLoad: function (this: HTMLElement): void {
+  /** Runs the preceding element's `onConnect` handlers; bound to a proxy's `onConnect`. */
+  forwardConnect: function (this: HTMLElement): void {
     const target = this.previousElementSibling;
     if (target instanceof HTMLElement) {
-      tiny.runHandler(target, new Event("load"));
+      tiny.runHandler(target, new Event("connect"));
     }
   },
-  /** Runs the preceding element's `onSuspend` handlers; bound to a proxy's `onDisconnect`. */
-  forwardSuspend: function (this: HTMLElement): void {
+  /** Runs the preceding element's `onDisconnect` handlers; bound to a proxy's `onDisconnect`. */
+  forwardDisconnect: function (this: HTMLElement): void {
     const target = this.previousElementSibling;
     if (target instanceof HTMLElement) {
-      tiny.runHandler(target, new Event("suspend"));
+      tiny.runHandler(target, new Event("disconnect"));
     }
   },
   /**
@@ -139,33 +148,46 @@ function customTagName(child: unknown): string | undefined {
     : typeof child === "object" && child !== null
     ? (child as { tag?: unknown }).tag
     : undefined;
-  return typeof tag === "string" && tag.includes("-")
-    ? tag.toLowerCase()
+  if (typeof tag !== "string") return undefined;
+  if (tag.includes("-")) return tag.toLowerCase();
+  // A customized built-in (`<button is="custom-button">`) upgrades by itself.
+  const is = roots
+    ? /^<[a-zA-Z][\w:-]*\s[^>]*?\sis="([^"]*)"/.exec(String(child))?.[1]
+    : (child as { props?: { is?: unknown } }).props?.is;
+  return typeof is === "string" && is.includes("-")
+    ? lifecycleTagDeclaration(is.toLowerCase(), tag.toLowerCase())
     : undefined;
 }
 
 /**
- * Upgrades each child to a custom element with lifecycle events: `onLoad`
- * runs whenever the element connects (including after cached restoration),
- * `onDisconnect` when it is removed, and its `abortController` aborts on
- * removal so listeners can clean up.
+ * Gives a bare plain tag (an `<input>` without `is`, say) lifecycle events:
+ * `onConnect` runs whenever the element connects (including after cached
+ * restoration), `onDisconnect` when it is removed, and its `abortController`
+ * aborts on removal so listeners can clean up.
  *
- * Prefer custom tags (`<note-entry>`): the tag is declared ahead of the
- * markup (a `<meta name="tt-define">` in a full page's head, a `<tt-define>`
- * element in streamed or partial content) and the inline head runtime
- * defines it before the markup is parsed or inserted, so the element
- * upgrades in document order wherever it is placed, moved or cloned, and
- * nothing is rendered beside it. Other tags (an `<input>`, say, which cannot
- * have lifecycle callbacks of its own) get an `<upgrade-preceding>` sibling
- * rendered after them: a lifecycle element that forwards its `load` and
- * `suspend` to the element before it, so it relies on the two staying
- * together.
+ * A custom tag (`<note-entry>`) or a plain tag with a hyphenated `is`
+ * (`<input is="bound-input">`) needs no wrapper: binding `onConnect` or
+ * `onDisconnect` on it declares the tag by itself, ahead of the markup (a
+ * `<meta name="tt-define">` in a full page's head, a `<tt-define>` element
+ * in streamed or partial content), and the inline head runtime defines it
+ * before the markup is parsed or inserted, so the element upgrades in
+ * document order wherever it is placed, moved or cloned, with nothing
+ * rendered beside it. Such children pass through this wrapper unchanged.
+ * Other children get an `<upgrade-preceding>` sibling rendered after them,
+ * a lifecycle element that forwards its `connect` and `disconnect` to the
+ * element before it, so it relies on the two staying together. A bare
+ * element placed without the wrapper throws while rendering, as does one
+ * binding `onLoad`, which the proxy does not forward.
  */
 export async function UpgradeCustomElement(
   props: PropsWithChildren,
 ): Promise<HtmlEscapedString> {
   // Precompiled markup with async content arrives as a promise of the markup.
   const children = await Promise.all(childList(props.children));
+  // The proxy forwards `connect` and `disconnect`, never `load`.
+  const need = findUnproxied(children);
+  if (need?.event === "load") throw unproxiedLifecycleError(need);
+  claimLifecycleProxy(children);
   const tags = children.map(customTagName);
   for (const tag of new Set(tags)) {
     if (tag) recordLifecycleTag(tag);
@@ -180,8 +202,8 @@ export async function UpgradeCustomElement(
           <>
             {child}
             <upgrade-preceding
-              onLoad={fn.forwardLoad}
-              onDisconnect={fn.forwardSuspend}
+              onConnect={fn.forwardConnect}
+              onDisconnect={fn.forwardDisconnect}
             >
             </upgrade-preceding>
           </>

@@ -5,6 +5,13 @@
  * client functions to be used. This prevents accidentally passing regular
  * functions as event handlers which would fail silently at runtime.
  *
+ * Lifecycle handlers (`onConnect`, `onDisconnect`, and `onLoad` where only the
+ * browser fires it) are bound at render time (see lifecycleBindings.ts): a custom tag
+ * is declared as a lifecycle tag without any wrapper, a plain tag that needs
+ * an `<upgrade-preceding>` proxy is marked, and placing a marked element
+ * inside another element throws, so a forgotten `UpgradeCustomElement`
+ * fails at render time rather than silently never firing.
+ *
  * @module
  */
 
@@ -20,12 +27,67 @@ import {
 } from "./eventAttributes.ts";
 import {
   markElementNode,
+  type ProxyNeed,
+  type ValueSlot,
   withTemplateRoots,
   wrapComponent,
 } from "./componentScope.ts";
+import {
+  findUnproxied,
+  lifecycleAttributeEvent,
+  lifecycleEvent,
+  lifecycleHandlerNeedsProxy,
+  markLifecycleAttribute,
+  markNeedsProxy,
+  unproxiedLifecycleError,
+} from "./lifecycleBindings.ts";
+
+/**
+ * Applies the lifecycle rules to a precompiled template's values: each
+ * attribute value from `jsxAttr` is bound to the open tag it sits in, and a
+ * child value still waiting for a proxy may only sit beside the top-level
+ * content. Returns the proxy need the template as a whole carries, if any.
+ */
+function inspectTemplate(
+  values: unknown[],
+  slots: readonly ValueSlot[],
+): ProxyNeed | undefined {
+  let need: ProxyNeed | undefined;
+  // An `is` bound dynamically is another attribute value of the same tag.
+  const dynamicIs = (slot: ValueSlot): string | undefined => {
+    for (const [index, other] of slots.entries()) {
+      if (other?.element !== slot.element) continue;
+      const match = /^is="([^"]*)"$/.exec(String(values[index]));
+      if (match) return match[1];
+    }
+  };
+  values.forEach((value, index) => {
+    const event = lifecycleAttributeEvent(value);
+    if (event) {
+      const slot = slots[index];
+      if (!slot.tag) return;
+      const is = slot.is ?? dynamicIs(slot);
+      if (!lifecycleHandlerNeedsProxy(slot.tag, event, is)) return;
+      // Nested in the same markup, so no wrapper can ever follow it.
+      if (slot.depth > 0) {
+        throw unproxiedLifecycleError({ tag: slot.tag, event });
+      }
+      need = { tag: slot.tag, event };
+      return;
+    }
+    const nested = findUnproxied(value);
+    if (!nested) return;
+    // Inside an element nothing can proxy it; beside top-level content (a
+    // fragment, say) the template as a whole can still be wrapped.
+    if (slots[index].depth > 0) throw unproxiedLifecycleError(nested);
+    need ??= nested;
+  });
+  return need;
+}
 
 export const jsxTemplate: typeof honoJsxTemplate = withTemplateRoots(
   honoJsxTemplate,
+  inspectTemplate,
 );
 
 export const jsx: typeof honoJsx = (tag, props, key) => {
@@ -34,6 +96,7 @@ export const jsx: typeof honoJsx = (tag, props, key) => {
   }
   if (!props) return markElementNode(honoJsx(tag, props, key));
   let expanded = props;
+  let need: ProxyNeed | undefined;
   for (const [name, value] of Object.entries(props)) {
     const attributes = handlerReferenceAttributes(name, value);
     if (!attributes) continue;
@@ -44,8 +107,17 @@ export const jsx: typeof honoJsx = (tag, props, key) => {
       expanded.onLoad = attributes.onload;
       delete expanded.onload;
     }
+    const event = Object.keys(attributes).length
+      ? lifecycleEvent(name)
+      : undefined;
+    if (event && lifecycleHandlerNeedsProxy(tag, event, props.is)) {
+      need = { tag, event };
+    }
   }
-  return markElementNode(honoJsx(tag, expanded, key));
+  const nested = findUnproxied(props.children);
+  if (nested) throw unproxiedLifecycleError(nested);
+  const node = markElementNode(honoJsx(tag, expanded, key));
+  return need ? markNeedsProxy(node, need) : node;
 };
 
 export const jsxs: typeof honoJsx = jsx;
@@ -63,13 +135,15 @@ export const jsxAttr = (
   }
   const [eventAttribute, handlerAttribute] = Object.entries(attributes);
   if (!eventAttribute) return honoJsxTemplate``;
-  if (!handlerAttribute) {
-    return honoJsxAttr(...eventAttribute as [string, string]);
-  }
-  return honoJsxTemplate`${
-    honoJsxAttr(...eventAttribute as [string, string])
-  } ${honoJsxAttr(...handlerAttribute as [string, string])}`;
+  const rendered = handlerAttribute
+    ? honoJsxTemplate`${honoJsxAttr(...eventAttribute as [string, string])} ${
+      honoJsxAttr(...handlerAttribute as [string, string])
+    }`
+    : honoJsxAttr(...eventAttribute as [string, string]);
+  const event = lifecycleEvent(name);
+  return event ? markLifecycleAttribute(rendered, event) : rendered;
 };
+
 import type { JSX as HonoJSX } from "hono/jsx/jsx-runtime";
 import type { IncomingDataEvent } from "./handlers/processIncomingData.ts";
 
@@ -232,7 +306,7 @@ interface GlobalOverrides {
 
   /**
    * Fired once by `ActivateParsedHandler` when the element and its content
-   * have been parsed; unlike `onLoad` it never repeats on reconnection.
+   * have been parsed; unlike `onConnect` it never repeats on reconnection.
    */
   onParsed?: ClientEventHandler<Event>;
 

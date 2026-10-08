@@ -1,6 +1,5 @@
 import type { PropsWithChildren } from "hono/jsx";
 import type { HtmlEscapedString } from "hono/utils/html";
-import { UpgradeCustomElement } from "./ActivateOnLoadHandler.tsx";
 import { type PartialAbortableHTMLElement, tiny } from "../mod.ts";
 import { Handlers, imports } from "../clientTools.ts";
 import {
@@ -173,21 +172,19 @@ async function renderClientRoutes(
     ? { onIncomingData: fn.updateCachedRoutes }
     : {};
   return (
-    <UpgradeCustomElement>
-      <client-router
-        onLoad={props.cacheOwnerId
-          ? [fn.applyNavigationListener, fn.applyIncomingDataListener]
-          : fn.applyNavigationListener}
-        onNavigate={fn.matchClientRoutes}
-        {...cacheProps}
-        hidden
-        cache-owner-id={props.cacheOwnerId}
-      >
-        <template>
-          {props.children}
-        </template>
-      </client-router>
-    </UpgradeCustomElement>
+    <client-router
+      onConnect={props.cacheOwnerId
+        ? [fn.applyNavigationListener, fn.applyIncomingDataListener]
+        : fn.applyNavigationListener}
+      onNavigate={fn.matchClientRoutes}
+      {...cacheProps}
+      hidden
+      cache-owner-id={props.cacheOwnerId}
+    >
+      <template>
+        {props.children}
+      </template>
+    </client-router>
   );
 }
 

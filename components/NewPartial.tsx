@@ -7,9 +7,9 @@ import { routeCacheTools } from "../handlers/routeCacheTools.ts";
 import type { ActivatedClientFunction, JSX } from "../jsx-runtime.ts";
 import type { HandlerReference } from "../eventAttributes.ts";
 import { PartialCacheRoutes } from "./ClientRoutes.tsx";
-import { UpgradeCustomElement } from "./ActivateOnLoadHandler.tsx";
 import { partialInsertHandlers } from "../handlers/partialInsertHandlers.ts";
 import { transparent } from "../componentScope.ts";
+import { claimLifecycleProxy } from "../lifecycleBindings.ts";
 import { getDisplayedPath } from "../sse.ts";
 
 const partialLogic = new Handlers(import.meta.url, {
@@ -89,37 +89,37 @@ export async function NewPartial(
     <>
       {children}
       {cache && (
-        <UpgradeCustomElement>
-          <cache-collector
-            hidden
-            onLoad={fn.observeRouteCache}
-            cache-partial-id={id}
-          >
-            <template>
-              <client-route
-                path={cachePattern}
-                update-path={cacheUpdatePath}
-                once
-                data-nav-block
-                interpolate="false"
-              >
+        <cache-collector
+          hidden
+          onConnect={fn.observeRouteCache}
+          cache-partial-id={id}
+        >
+          <template>
+            <client-route
+              path={cachePattern}
+              update-path={cacheUpdatePath}
+              once
+              data-nav-block
+              interpolate="false"
+            >
+              {claimLifecycleProxy(
                 <template
                   onLoad={onLoad}
                   for-partial-id={id}
                   group-name={groupName}
                   {...attributes}
                 >
-                </template>
-                <link
-                  rel="modulepreload"
-                  href={passLoadEventHref()}
-                  onLoad={fn.passLoadEvent}
-                />
-              </client-route>
-              <PartialCacheRoutes ownerId={id} />
-            </template>
-          </cache-collector>
-        </UpgradeCustomElement>
+                </template>,
+              )}
+              <link
+                rel="modulepreload"
+                href={passLoadEventHref()}
+                onLoad={fn.passLoadEvent}
+              />
+            </client-route>
+            <PartialCacheRoutes ownerId={id} />
+          </template>
+        </cache-collector>
       )}
     </>
   );
@@ -128,14 +128,16 @@ export async function NewPartial(
 
   return (
     <>
-      <template
-        onLoad={onLoad}
-        group-name={groupName}
-        for-partial-id={id}
-        {...attributes}
-      >
-        {content}
-      </template>
+      {claimLifecycleProxy(
+        <template
+          onLoad={onLoad}
+          group-name={groupName}
+          for-partial-id={id}
+          {...attributes}
+        >
+          {content}
+        </template>,
+      )}
       <link
         rel="modulepreload"
         href={passLoadEventHref()}

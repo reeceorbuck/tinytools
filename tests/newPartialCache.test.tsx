@@ -34,7 +34,7 @@ Deno.test("NewPartial emits cache registration only when opted in", async () => 
   assertStringIncludes(api, 'update-path="/patients/5"');
   assertMatch(
     cached,
-    /tt-handler-load="\w+\.observeRouteCache"/i,
+    /tt-handler-connect="\w+\.observeRouteCache"/i,
   );
   assertEquals((cached.match(/<template\b/g) ?? []).length, 4);
   assertStringIncludes(cached, "<client-router");
@@ -52,7 +52,7 @@ Deno.test("NewPartial emits cache registration only when opted in", async () => 
   assertStringIncludes(scoped, 'cache-owner-id="panel"');
   assertMatch(
     scoped,
-    /<client-router[^>]*tt-handler-load="\w+\.applyNavigationListener \w+\.applyIncomingDataListener"/,
+    /<client-router[^>]*tt-handler-connect="\w+\.applyNavigationListener \w+\.applyIncomingDataListener"/,
   );
   assertMatch(
     scoped,
@@ -113,7 +113,7 @@ Deno.test("NewPartial full page loads render directly and retain cache restorati
   assertStringIncludes(cached, 'group-name="items"');
   assertStringIncludes(cached, 'data-restore="retained"');
   assertMatch(cached, /tt-handler-load="\w+\.partialReplace"/i);
-  assertMatch(cached, /tt-handler-load="\w+\.observeRouteCache"/i);
+  assertMatch(cached, /tt-handler-connect="\w+\.observeRouteCache"/i);
   assertStringIncludes(cached, "<cache-collector");
   assertEquals(cached.includes("[object Object]"), false);
   assertEquals(/fullpageload/i.test(cached), false);

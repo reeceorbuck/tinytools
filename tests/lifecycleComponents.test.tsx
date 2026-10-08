@@ -1,4 +1,10 @@
-import { assertEquals, assertMatch, assertStringIncludes } from "@std/assert";
+import {
+  assertEquals,
+  assertMatch,
+  assertRejects,
+  assertStringIncludes,
+  assertThrows,
+} from "@std/assert";
 import { runHandlerScript, tiny } from "../honoFactory.tsx";
 import { Signals, Templates } from "../clientTools.ts";
 import {
@@ -11,7 +17,7 @@ import {
   UpgradeCustomElement,
 } from "../components/ActivateOnLoadHandler.tsx";
 import type { HandlerProp } from "../eventAttributes.ts";
-import { jsxTemplate } from "../jsx-runtime.ts";
+import { jsxAttr, jsxTemplate } from "../jsx-runtime.ts";
 
 /** The lifecycle tags a full page declares in its head, in order. */
 function declaredInHead(html: string): string[] {
@@ -48,8 +54,19 @@ Deno.test("the inline head script carries the lifecycle runtime", () => {
   assertStringIncludes(runHandlerScript, "function runHandler(");
   assertStringIncludes(runHandlerScript, "function defineLifecycleElement(");
   assertStringIncludes(runHandlerScript, "customElements.define(");
-  assertStringIncludes(runHandlerScript, 'new Event("load")');
-  assertStringIncludes(runHandlerScript, "this.abortController.abort()");
+  assertStringIncludes(runHandlerScript, 'new Event("connect")');
+  assertStringIncludes(runHandlerScript, "abortController?.abort()");
+  // Customized built-ins, with the observer fallback for browsers without them.
+  assertStringIncludes(
+    runHandlerScript,
+    "function supportsCustomizedBuiltins(",
+  );
+  assertStringIncludes(runHandlerScript, "function observeBuiltinFallback(");
+  assertStringIncludes(runHandlerScript, "new MutationObserver(");
+  assertStringIncludes(
+    runHandlerScript,
+    "const lifecycleState = {fallbacks: new Map()};",
+  );
   // Declarations: the `<tt-define>` element and the head metas.
   assertStringIncludes(runHandlerScript, '"tt-define"');
   assertStringIncludes(runHandlerScript, 'meta[name="tt-define"]');
@@ -116,10 +133,10 @@ Deno.test("UpgradeCustomElement gives plain tags a proxy sibling", async () => {
   const html = await (await app.request("/")).text();
   // The proxy's own tag is declared like any other lifecycle tag.
   assertEquals(declaredInHead(html), ["x-panel", "upgrade-preceding"]);
-  // Only the plain tag gets a proxy, which forwards load and suspend to it.
+  // Only the plain tag gets a proxy, which forwards connect and disconnect to it.
   assertMatch(
     html,
-    /<section>Two<\/section><upgrade-preceding onload="tiny\.runHandler\(this,event\)" tt-handler-load="(\w+)\.forwardLoad" ondisconnect="tiny\.runHandler\(this,event\)" tt-handler-disconnect="\1\.forwardSuspend"><\/upgrade-preceding>/,
+    /<section>Two<\/section><upgrade-preceding onconnect="tiny\.runHandler\(this,event\)" tt-handler-connect="(\w+)\.forwardConnect" ondisconnect="tiny\.runHandler\(this,event\)" tt-handler-disconnect="\1\.forwardDisconnect"><\/upgrade-preceding>/,
   );
   assertEquals([...html.matchAll(/<upgrade-preceding /g)].length, 1);
   assertEquals(html.includes("<link"), false);
@@ -269,16 +286,299 @@ const trialHandlers = new tiny.Handlers(import.meta.url, {
 });
 
 /** A component forwarding an imported reference to an element. */
-function Panel(props: { onLoad?: HandlerProp<(this: HTMLElement) => void> }) {
-  return <section onLoad={props.onLoad} />;
+function Panel(
+  props: { onConnect?: HandlerProp<(this: HTMLElement) => void> },
+) {
+  return <section is="live-section" onConnect={props.onConnect} />;
 }
 
 Deno.test("HandlerProp accepts imported references and forwards them", async () => {
   const { fn } = await tiny.imports(trialHandlers);
-  const html = String(<Panel onLoad={fn.mount} />);
-  assertMatch(html, /tt-handler-load="\w+\.mount"/);
+  const html = String(<Panel onConnect={fn.mount} />);
+  assertMatch(html, /tt-handler-connect="\w+\.mount"/);
   // @ts-expect-error A keyboard handler does not satisfy a load handler.
-  void <Panel onLoad={fn.keyboard} />;
+  void <Panel onConnect={fn.keyboard} />;
   // @ts-expect-error Raw functions are not handler references.
-  void <Panel onLoad={function () {}} />;
+  void <Panel onConnect={function () {}} />;
+});
+
+Deno.test("a custom tag binding a lifecycle handler declares itself without a wrapper", async () => {
+  const app = new tiny.Hono({ tools: "core" });
+  app.get("/", async (context) => {
+    const { fn } = await tiny.imports(parsedHandlers);
+    return context.render(
+      <div>
+        <x-panel onConnect={fn.build}>One</x-panel>
+        <y-panel onDisconnect={fn.build}>Two</y-panel>
+      </div>,
+    );
+  });
+  const html = await (await app.request("/")).text();
+  assertEquals(declaredInHead(html), ["x-panel", "y-panel"]);
+  assertEquals(html.includes("upgrade-preceding"), false);
+});
+
+Deno.test("precompiled markup binding a lifecycle handler declares its custom tag", async () => {
+  const strings = (...parts: string[]) =>
+    Object.assign(parts, { raw: parts }) as unknown as TemplateStringsArray;
+  const app = new tiny.Hono({ tools: "core" });
+  app.get("/", async (context) => {
+    const { fn } = await tiny.imports(parsedHandlers);
+    // `<section><x-panel onConnect={fn.build}>One</x-panel></section>`
+    return context.render(
+      jsxTemplate(
+        strings("<section><x-panel ", ">One</x-panel></section>"),
+        jsxAttr("onConnect", fn.build),
+      ),
+    );
+  });
+  const html = await (await app.request("/")).text();
+  assertEquals(declaredInHead(html), ["x-panel"]);
+  assertMatch(
+    html,
+    /<section><x-panel onconnect="[^"]+" tt-handler-connect="\w+\.build">One<\/x-panel><\/section>/,
+  );
+});
+
+Deno.test("a plain tag binding onConnect without the wrapper throws", async () => {
+  const { fn } = await tiny.imports(parsedHandlers);
+  const strings = (...parts: string[]) =>
+    Object.assign(parts, { raw: parts }) as unknown as TemplateStringsArray;
+  const forgotten =
+    /<input> binds onConnect but nothing fires it.*UpgradeCustomElement/;
+  // Nested directly in an element, in a fragment, or in a list of children.
+  assertThrows(
+    () => (
+      <div>
+        <input onConnect={fn.build} />
+      </div>
+    ),
+    TypeError,
+    undefined,
+    "nested",
+  );
+  assertMatch(
+    (assertThrows(() => (
+      <div>
+        <input onConnect={fn.build} />
+      </div>
+    )) as Error).message,
+    forgotten,
+  );
+  const group = (
+    <>
+      <span>Label</span>
+      <input onConnect={fn.build} />
+    </>
+  );
+  assertThrows(() => <div>{group}</div>, TypeError);
+  assertThrows(
+    () => (
+      <div>{["a"].map((key) => <input key={key} onConnect={fn.build} />)}</div>
+    ),
+    TypeError,
+  );
+  // Precompiled: nested in the same markup, or a top-level element placed
+  // as a child of other markup.
+  assertThrows(
+    () =>
+      jsxTemplate(
+        strings("<div><input ", "></div>"),
+        jsxAttr("onConnect", fn.build),
+      ),
+    TypeError,
+  );
+  assertThrows(
+    () =>
+      jsxTemplate(
+        strings("<div>", "</div>"),
+        jsxTemplate(strings("<input ", ">"), jsxAttr("onConnect", fn.build)),
+      ),
+    TypeError,
+  );
+  // Tags with a native load event are left alone.
+  void (
+    <div>
+      <img src="/a.png" onLoad={fn.build} />
+    </div>
+  );
+});
+
+Deno.test("a plain tag binding onConnect inside the wrapper renders with its proxy", async () => {
+  const strings = (...parts: string[]) =>
+    Object.assign(parts, { raw: parts }) as unknown as TemplateStringsArray;
+  const app = new tiny.Hono({ tools: "core" });
+  app.get("/", async (context) => {
+    const { fn } = await tiny.imports(parsedHandlers);
+    return context.render(
+      <div>
+        <UpgradeCustomElement>
+          <input onConnect={fn.build} />
+        </UpgradeCustomElement>
+        <UpgradeCustomElement>
+          {jsxTemplate(
+            strings("<textarea ", "></textarea>"),
+            jsxAttr("onConnect", fn.build),
+          )}
+        </UpgradeCustomElement>
+      </div>,
+    );
+  });
+  const html = await (await app.request("/")).text();
+  assertEquals(declaredInHead(html), ["upgrade-preceding"]);
+  assertMatch(
+    html,
+    /<input onconnect="[^"]+" tt-handler-connect="\w+\.build"\/><upgrade-preceding /,
+  );
+  assertMatch(
+    html,
+    /<textarea onconnect="[^"]+" tt-handler-connect="\w+\.build"><\/textarea><upgrade-preceding /,
+  );
+});
+
+Deno.test("an is attribute makes a plain tag a customized built-in lifecycle element", async () => {
+  const strings = (...parts: string[]) =>
+    Object.assign(parts, { raw: parts }) as unknown as TemplateStringsArray;
+  const app = new tiny.Hono({ tools: "core" });
+  app.get("/", async (context) => {
+    const { fn } = await tiny.imports(parsedHandlers);
+    const kind = "bound-select";
+    return context.render(
+      <div>
+        <button
+          type="button"
+          is="custom-button"
+          onConnect={fn.build}
+          onDisconnect={fn.build}
+        >
+          Go
+        </button>
+        <input is="bound-input" onConnect={fn.build} />
+        <UpgradeCustomElement>
+          <textarea is="bound-text" onConnect={fn.build}></textarea>
+        </UpgradeCustomElement>
+        {/* Precompiled: `is` before the handler, after it, and bound dynamically. */}
+        {jsxTemplate(
+          strings('<p is="bound-p" ', "></p>"),
+          jsxAttr("onConnect", fn.build),
+        )}
+        {jsxTemplate(
+          strings("<section ", ' is="bound-section"></section>'),
+          jsxAttr("onConnect", fn.build),
+        )}
+        {jsxTemplate(
+          strings("<select ", " ", "></select>"),
+          jsxAttr("is", kind),
+          jsxAttr("onConnect", fn.build),
+        )}
+      </div>,
+    );
+  });
+  const html = await (await app.request("/")).text();
+  assertEquals(
+    [...html.matchAll(/<meta name="tt-define" content="([\w:-]+)"\/>/g)]
+      .map(([, tag]) => tag),
+    [
+      "custom-button:button",
+      "bound-input:input",
+      "bound-text:textarea",
+      "bound-p:p",
+      "bound-section:section",
+      "bound-select:select",
+    ],
+  );
+  // Nothing is rendered beside them, not even by the wrapper.
+  assertEquals(html.includes("upgrade-preceding"), false);
+  assertMatch(
+    html,
+    /<button type="button" is="custom-button" onconnect="[^"]+" tt-handler-connect="\w+\.build"/,
+  );
+  // Without a hyphen, `is` does not make a custom element.
+  const { fn } = await tiny.imports(parsedHandlers);
+  assertThrows(
+    () => (
+      <div>
+        <input is="plain" onConnect={fn.build} />
+      </div>
+    ),
+    TypeError,
+    'is="..."',
+  );
+});
+
+Deno.test("a fragment-only template keeps a proxied element wrappable", async () => {
+  // What a component such as `labelled(undefined, control)` returns under
+  // `"jsx": "precompile"`: `<>{control}</>`, with no element of its own.
+  const strings = (...parts: string[]) =>
+    Object.assign(parts, { raw: parts }) as unknown as TemplateStringsArray;
+  const { fn } = await tiny.imports(parsedHandlers);
+  const control = () =>
+    jsxTemplate(
+      strings("<select ", "></select>"),
+      jsxAttr("onConnect", fn.build),
+    );
+  const fragment = jsxTemplate(strings("", ""), control());
+  // Placed inside an element the handler would never fire.
+  assertThrows(
+    () => jsxTemplate(strings("<label>", "</label>"), fragment),
+    TypeError,
+    "<select> binds onConnect",
+  );
+  // Handed to the wrapper, it gets its proxy like any plain element.
+  const app = new tiny.Hono({ tools: "core" });
+  app.get("/", (context) =>
+    context.render(
+      <UpgradeCustomElement>
+        {jsxTemplate(strings("", ""), control())}
+      </UpgradeCustomElement>,
+    ));
+  const html = await (await app.request("/")).text();
+  assertMatch(
+    html,
+    /<select onconnect="[^"]+" tt-handler-connect="\w+\.build"><\/select><upgrade-preceding /,
+  );
+});
+
+Deno.test("onLoad is rejected wherever nothing fires load", async () => {
+  const { fn } = await tiny.imports(parsedHandlers);
+  const strings = (...parts: string[]) =>
+    Object.assign(parts, { raw: parts }) as unknown as TemplateStringsArray;
+  // A lifecycle element runs connect instead.
+  assertThrows(() => <x-panel onLoad={fn.build} />, TypeError, "onConnect");
+  assertThrows(
+    () => <input is="bound-input" onLoad={fn.build} />,
+    TypeError,
+    "never fires load",
+  );
+  assertThrows(
+    () =>
+      jsxTemplate(
+        strings("<x-panel ", "></x-panel>"),
+        jsxAttr("onLoad", fn.build),
+      ),
+    TypeError,
+    "never fires load",
+  );
+  // A bare element placed anywhere; the wrapper rejects it too.
+  assertThrows(
+    () => (
+      <div>
+        <p onLoad={fn.build} />
+      </div>
+    ),
+    TypeError,
+    "Bind onConnect",
+  );
+  await assertRejects(
+    () => UpgradeCustomElement({ children: <p onLoad={fn.build} /> }),
+    TypeError,
+    "<p> binds onLoad",
+  );
+  // The elements the browser fires load on keep it, body included.
+  void <body onLoad={fn.build} />;
+  void (
+    <div>
+      <img src="/a.png" onLoad={fn.build} />
+    </div>
+  );
 });
