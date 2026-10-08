@@ -7,6 +7,7 @@ import {
 } from "../clientFunctions.ts";
 import {
   ActivateParsedHandler,
+  BuildFromTemplate,
   UpgradeCustomElement,
 } from "../components/ActivateOnLoadHandler.tsx";
 import type { HandlerProp } from "../eventAttributes.ts";
@@ -181,6 +182,44 @@ Deno.test("ActivateParsedHandler runs onParsed once through a trigger after the 
   )!.buildCode();
   assertStringIncludes(code, 'tiny.runHandler(target, new Event("parsed"))');
   assertStringIncludes(code, "this.remove()");
+});
+
+Deno.test("BuildFromTemplate names a template clone and loads its bundle", async () => {
+  const cards = new Templates(import.meta.url, {
+    card: () => (
+      <article>
+        <slot name="title"></slot>
+        <slot></slot>
+      </article>
+    ),
+  });
+  const app = new tiny.Hono({ tools: "core" });
+  app.get("/", async (context) => {
+    const { template } = await tiny.imports(cards);
+    return context.render(
+      <BuildFromTemplate template={template.card}>
+        <h2 slot="title">Hi</h2>
+        <p>Body</p>
+      </BuildFromTemplate>,
+    );
+  });
+  const html = await (await app.request("/")).text();
+  await cards.ensureBuilt();
+  const bundle = cards._handlerDefinitions.get("card")!.filename;
+  // The children wait inert in a template that names the clone; the trigger follows.
+  assertMatch(
+    html,
+    new RegExp(
+      `<template data-template="${bundle}\\.card" onparsed="tiny\\.runHandler\\(this,event\\)" tt-handler-parsed="\\w+\\.buildFromTemplate"><h2 slot="title">Hi</h2><p>Body</p></template><link rel="modulepreload"`,
+    ),
+  );
+  // Reading the reference recorded the template bundle for the page.
+  assertStringIncludes(
+    html,
+    `<script src="/handlers/${bundle}.js" type="module">`,
+  );
+  const { template } = await tiny.imports(cards);
+  assertEquals(template.card.reference, `${bundle}.card`);
 });
 
 Deno.test("Signals collections share one runtime bundle", async () => {

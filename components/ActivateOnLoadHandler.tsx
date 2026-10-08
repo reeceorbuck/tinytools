@@ -15,6 +15,7 @@ import { tiny } from "../mod.ts";
 import { Handlers, recordLifecycleTag } from "../clientTools.ts";
 import { templateRootTags, transparent } from "../componentScope.ts";
 import type { LifecycleElement } from "../lifecycleElement.ts";
+import { templateTools } from "../handlers/templateTools.ts";
 
 /** An upgraded custom element: its controller aborts when it disconnects. */
 export type PartialAbortableHTMLElement = LifecycleElement;
@@ -99,74 +100,29 @@ export async function ActivateParsedHandler(
   );
 }
 
-/** Builds a `<template id="...">` into the element, filling its named slots. */
-export const buildTemplateHandlers = new Handlers(import.meta.url, {
-  buildTemplate: function (this: HTMLElement, _e: Event): void {
-    // Runs on every connect; build only once.
-    if (this.hasAttribute("data-built")) return;
-    this.setAttribute("data-built", "");
-    const templateId = this.dataset.template;
-    const template = templateId ? document.getElementById(templateId) : null;
-    if (!(template instanceof HTMLTemplateElement)) {
-      console.error(`buildTemplate: template "${templateId}" not found.`);
-      return;
-    }
-
-    const built = template.content.cloneNode(true) as DocumentFragment;
-    const childTemplate = this.querySelector("template");
-    const insertContent = childTemplate?.content.cloneNode(true) as
-      | DocumentFragment
-      | undefined;
-
-    for (const slotChild of Array.from(insertContent?.children ?? [])) {
-      const slotName = slotChild.getAttribute("slot");
-      if (!slotName) continue;
-      const slotElement = built.querySelector(`slot[name="${slotName}"]`);
-      if (!slotElement) {
-        console.error(`buildTemplate: no slot named "${slotName}".`);
-        continue;
-      }
-      const inputClone = slotChild.cloneNode(true) as HTMLElement;
-      inputClone.removeAttribute("slot");
-      slotElement.insertAdjacentElement("beforebegin", inputClone);
-    }
-    this.appendChild(built);
-    childTemplate?.remove();
-  },
-  /** Replaces the parent element with a textarea carrying its attributes and decoded text. */
-  loadTextArea: function (this: HTMLElement, _e: Event): void {
-    const replaceElement = this.parentElement;
-    if (!replaceElement) {
-      console.error("loadTextArea: no parent element found.");
-      return;
-    }
-    const textarea = document.createElement("textarea");
-    for (const attribute of Array.from(replaceElement.attributes)) {
-      textarea.setAttribute(attribute.name, attribute.value);
-    }
-    textarea.value = new DOMParser().parseFromString(
-      replaceElement.textContent,
-      "text/html",
-    ).body.textContent;
-    replaceElement.setAttribute("replaced", "true");
-    replaceElement.replaceWith(textarea);
-  },
-});
-
 /**
- * Renders the child element and builds the `<template id={templateId}>`
- * into it on load, filling the template's named slots from the children.
+ * Clones a `tiny.Templates` entry in place once the children have been
+ * parsed, filling the clone's named `<slot>`s from children carrying a
+ * matching `slot` attribute and its unnamed `<slot>` from the rest. The
+ * children wait inert in a `<template>`, so nothing inside them runs before
+ * it sits in the finished clone. `template` is a clone from `tiny.imports`,
+ * e.g. `template.card`; the page loads its bundle.
  */
-export async function BuildFromTemplateElement(
-  { children, templateId }: PropsWithChildren<{ templateId: string }>,
+export async function BuildFromTemplate(
+  { template, children }: PropsWithChildren<{
+    template: { readonly reference: string };
+  }>,
 ): Promise<HtmlEscapedString> {
-  const { fn } = await tiny.imports(buildTemplateHandlers);
+  const { fn } = await tiny.imports(templateTools);
   return (
-    <UpgradeCustomElement>
-      <temp-element onLoad={fn.buildTemplate} data-template={templateId}>
-        <template>{children}</template>
-      </temp-element>
-    </UpgradeCustomElement>
+    <ActivateParsedHandler>
+      <template
+        onParsed={fn.buildFromTemplate}
+        data-template={template.reference}
+      >
+        {children}
+      </template>
+    </ActivateParsedHandler>
   );
 }
 
@@ -237,5 +193,5 @@ export async function UpgradeCustomElement(
 
 // Framework wrappers render into the caller's component scope.
 transparent(ActivateParsedHandler);
-transparent(BuildFromTemplateElement);
+transparent(BuildFromTemplate);
 transparent(UpgradeCustomElement);

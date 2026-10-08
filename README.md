@@ -861,8 +861,12 @@ lifecycle events:
   restored. The trigger acts on its previous sibling, so content that moves the
   element away from it before it fires can run the handler on the wrong element.
   For repeating lifecycle events use `UpgradeCustomElement`.
-- `<BuildFromTemplateElement templateId="...">` clones a page `<template>` into
-  the element and fills its named `<slot>`s from the children.
+- `<BuildFromTemplate template={template.card}>` clones a `tiny.Templates` entry
+  in place once its children are parsed, filling the clone's named `<slot>`s
+  from children with a matching `slot` attribute and its unnamed `<slot>` from
+  the rest. The template ships once in its bundle rather than in every page.
+  `templateTools.cloneTemplate(reference, slotted)` does the same from a
+  handler, given a clone's `reference`.
 
 ### `ClientRoutes`
 

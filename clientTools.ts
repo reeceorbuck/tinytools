@@ -2503,9 +2503,17 @@ export type TemplateFragment = DocumentFragment & HtmlEscapedString;
 
 /** One clone function per template, under the entry's name. */
 export type TemplateClones<Definitions> = {
-  readonly [Name in keyof Definitions]: (
-    params?: TemplateParams,
-  ) => TemplateFragment;
+  readonly [Name in keyof Definitions]:
+    & ((params?: TemplateParams) => TemplateFragment)
+    & {
+      /**
+       * `<bundle>.<name>`: names the clone for the browser, as
+       * `BuildFromTemplate`'s `template` prop or a `data-template`
+       * attribute. Reading it while rendering records the bundle for the
+       * page, so the clone is there when the browser asks for it.
+       */
+      readonly reference: string;
+    };
 };
 
 /** A template's markup and the assets it was rendered with. */
@@ -2772,10 +2780,14 @@ export async function imports(
           );
         if (isTemplate) {
           // On the server a clone is the markup; `raw` keeps it unescaped.
-          templateReferences[name] = function (params?: TemplateParams) {
-            if (definition.active) throw unavailable();
-            return raw(instance.fn(params));
-          };
+          templateReferences[name] = Object.defineProperty(
+            function (params?: TemplateParams) {
+              if (definition.active) throw unavailable();
+              return raw(instance.fn(params));
+            },
+            "reference",
+            { get: () => instance.reference },
+          );
           continue;
         }
         if (isSignal) {
@@ -2876,7 +2888,7 @@ export async function imports(
         const rendered = templates[i].rendered(property);
         const instance = templates[i]._handlerDefinitions.get(property);
         if (!rendered || !instance) continue;
-        return (params?: TemplateParams) => {
+        const clone = (params?: TemplateParams) => {
           for (const file of rendered.handlerFiles) recordHandlerFile(file);
           for (const file of rendered.styleFiles) {
             recordUsage("style", assetName(file));
@@ -2884,6 +2896,14 @@ export async function imports(
           for (const tag of rendered.lifecycleTags) recordLifecycleTag(tag);
           return raw(instance.fn(params));
         };
+        // Naming the clone for the browser means the page must load its
+        // bundle, whose own code adds the stylesheets and tags the markup needs.
+        return Object.defineProperty(clone, "reference", {
+          get: () => {
+            recordUsage("handler", instance.filename);
+            return instance.reference;
+          },
+        });
       }
       return undefined;
     },

@@ -10,7 +10,7 @@ export { AssetTags } from "./AssetTags.tsx";
 export { ClientRoutes } from "./ClientRoutes.tsx";
 export {
   ActivateParsedHandler,
-  BuildFromTemplateElement,
+  BuildFromTemplate,
   UpgradeCustomElement,
 } from "./ActivateOnLoadHandler.tsx";
 export { CustomSuspense, Suspense } from "./Suspense.tsx";

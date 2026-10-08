@@ -25,3 +25,4 @@ export {
 } from "./signals.ts";
 export { sseTools } from "./sseTools.ts";
 export { queryParamTools } from "./queryParams.ts";
+export { templateTools } from "./templateTools.ts";
