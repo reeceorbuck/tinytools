@@ -18,6 +18,13 @@ import {
 } from "../components/ActivateOnLoadHandler.tsx";
 import type { HandlerProp } from "../eventAttributes.ts";
 import { jsxAttr, jsxTemplate } from "../jsx-runtime.ts";
+import {
+  lifecycleFallbackPath,
+  lifecycleRuntimeFiles,
+  lifecycleRuntimePath,
+  lifecycleRuntimeScript,
+} from "../lifecycleElement.ts";
+import { parseHTML } from "linkedom";
 
 /** The lifecycle tags a full page declares in its head, in order. */
 function declaredInHead(html: string): string[] {
@@ -50,30 +57,123 @@ Deno.test("UpgradeCustomElement declares each custom tag once, ahead of the head
   assertStringIncludes(html, "<x-panel>One</x-panel><x-panel>Two</x-panel>");
 });
 
-Deno.test("the inline head script carries the lifecycle runtime", () => {
+Deno.test("the core head script is just the dispatcher; the lifecycle runtime is separate", () => {
   assertStringIncludes(runHandlerScript, "function runHandler(");
-  assertStringIncludes(runHandlerScript, "function defineLifecycleElement(");
-  assertStringIncludes(runHandlerScript, "customElements.define(");
-  assertStringIncludes(runHandlerScript, 'new Event("connect")');
-  assertStringIncludes(runHandlerScript, "abortController?.abort()");
-  // Customized built-ins, with the observer fallback for browsers without them.
+  assertStringIncludes(runHandlerScript, "const tiny = {runHandler};");
+  assertEquals(runHandlerScript.includes("customElements"), false);
+  // Inlined source is compacted: no comment lines, no indentation.
+  assertEquals(/^\s|^\/\//m.test(runHandlerScript), false);
+  assertEquals(/^\s|^\/\//m.test(lifecycleRuntimeScript), false);
+  // Both parse as classic scripts.
+  new Function(runHandlerScript);
+  new Function(lifecycleRuntimeScript);
+
   assertStringIncludes(
-    runHandlerScript,
+    lifecycleRuntimeScript,
+    "tiny.defineLifecycleElement || (() => {",
+  );
+  assertStringIncludes(
+    lifecycleRuntimeScript,
+    "function defineLifecycleElement(",
+  );
+  assertStringIncludes(lifecycleRuntimeScript, 'new Event("connect")');
+  assertStringIncludes(lifecycleRuntimeScript, "abortController?.abort()");
+  assertStringIncludes(lifecycleRuntimeScript, '"tt-define"');
+  assertStringIncludes(lifecycleRuntimeScript, 'meta[name="tt-define"]');
+  // Customized built-ins, with the observer fallback imported only where
+  // the browser has none.
+  assertStringIncludes(
+    lifecycleRuntimeScript,
     "function supportsCustomizedBuiltins(",
   );
-  assertStringIncludes(runHandlerScript, "function observeBuiltinFallback(");
-  assertStringIncludes(runHandlerScript, "new MutationObserver(");
   assertStringIncludes(
-    runHandlerScript,
-    "const lifecycleState = {fallbacks: new Map()};",
+    lifecycleRuntimeScript,
+    `const lifecycleState = {fallback: "${lifecycleFallbackPath}"};`,
   );
-  // Declarations: the `<tt-define>` element and the head metas.
-  assertStringIncludes(runHandlerScript, '"tt-define"');
-  assertStringIncludes(runHandlerScript, 'meta[name="tt-define"]');
   assertStringIncludes(
-    runHandlerScript,
-    "const tiny = {runHandler, defineLifecycleElement};",
+    lifecycleRuntimeScript,
+    "import(lifecycleState.fallback)",
   );
+  assertEquals(lifecycleRuntimeScript.includes("MutationObserver"), false);
+  assertStringIncludes(
+    lifecycleRuntimeFiles.get(lifecycleFallbackPath)!,
+    "new MutationObserver(",
+  );
+});
+
+Deno.test("only pages using lifecycle tags carry the lifecycle runtime", async () => {
+  const app = new tiny.Hono({ tools: "core" });
+  app.get("/plain", (context) => context.render(<div>Plain</div>));
+  app.get("/upgraded", (context) =>
+    context.render(
+      <UpgradeCustomElement>
+        <x-panel>One</x-panel>
+      </UpgradeCustomElement>,
+    ));
+  const plain = await (await app.request("/plain")).text();
+  assertEquals(plain.includes(lifecycleRuntimeScript), false);
+  const upgraded = await (await app.request("/upgraded")).text();
+  const coreAt = upgraded.indexOf(`<script>${runHandlerScript}</script>`);
+  const runtimeAt = upgraded.indexOf(
+    `<script>${lifecycleRuntimeScript}</script>`,
+  );
+  assertEquals(0 < coreAt && coreAt < runtimeAt, true);
+  assertEquals(runtimeAt < upgraded.indexOf("<body>"), true);
+});
+
+Deno.test("core middleware serves the lifecycle modules as immutable files", async () => {
+  const app = new tiny.Hono({ tools: "core" });
+  for (const [path, source] of lifecycleRuntimeFiles) {
+    assertMatch(path, /^\/tt-lifecycle(-fallback)?_[0-9a-f]{8}\.js$/);
+    const response = await app.request(path);
+    assertEquals(response.status, 200);
+    assertStringIncludes(
+      response.headers.get("content-type")!,
+      "application/javascript",
+    );
+    assertStringIncludes(response.headers.get("cache-control")!, "immutable");
+    assertEquals(await response.text(), source);
+  }
+  assertEquals(lifecycleRuntimeFiles.has(lifecycleRuntimePath), true);
+});
+
+Deno.test("the observer fallback connects and disconnects elements carrying a declared is", async () => {
+  const { document, HTMLElement, MutationObserver } = parseHTML(
+    '<html><body><button is="x-button">One</button><button>Plain</button></body></html>',
+  );
+  const globals = globalThis as Record<string, unknown>;
+  Object.assign(globals, { document, HTMLElement, MutationObserver });
+  try {
+    const { observeBuiltinFallback } = await import(
+      `data:text/javascript,${
+        encodeURIComponent(lifecycleRuntimeFiles.get(lifecycleFallbackPath)!)
+      }`
+    );
+    const events: string[] = [];
+    const connect = (element: Element) =>
+      events.push(`connect ${element.textContent}`);
+    const disconnect = (element: Element) =>
+      events.push(`disconnect ${element.textContent}`);
+    observeBuiltinFallback("x-button", connect, disconnect);
+    // Declaring a name again is a no-op.
+    observeBuiltinFallback("x-button", connect, disconnect);
+    assertEquals(events, ["connect One"]);
+
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML =
+      '<button is="x-button">Two</button><button>Plain</button>';
+    document.body.append(wrapper);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assertEquals(events, ["connect One", "connect Two"]);
+
+    wrapper.remove();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assertEquals(events, ["connect One", "connect Two", "disconnect Two"]);
+  } finally {
+    for (const name of ["document", "HTMLElement", "MutationObserver"]) {
+      delete globals[name];
+    }
+  }
 });
 
 Deno.test("partial updates declare tags at the top level, before the templates", async () => {
@@ -87,10 +187,12 @@ Deno.test("partial updates declare tags at the top level, before the templates",
   const html = await (await app.request("/", {
     headers: { "source-url": "http://localhost/previous" },
   })).text();
-  assertMatch(
+  // The page may not have the lifecycle runtime yet, so it comes first.
+  assertStringIncludes(
     html,
-    /<update[^>]*><tt-define tag="x-panel"><\/tt-define><template/,
+    `<script>${lifecycleRuntimeScript}</script><tt-define tag="x-panel"></tt-define><template`,
   );
+  assertMatch(html, /^(<!DOCTYPE html>)?<update[^>]*><script>/);
   assertEquals(html.includes("tt-define") && !html.includes("<meta"), true);
 });
 
@@ -157,6 +259,9 @@ Deno.test("template bundles define the lifecycle tags their markup upgrades", as
   assertEquals(rendered.markup, "<x-row>Row</x-row>");
   const code = await rows._handlerDefinitions.get("row")!.bundle.buildCode();
   assertStringIncludes(code, 'tiny.defineLifecycleElement("x-row");');
+  // A page without the runtime gets it before the tag is defined.
+  assertStringIncludes(code, `"${lifecycleRuntimePath}"`);
+  assertMatch(code, /await import\(\w+\)/);
   assertEquals(code.includes("import {"), false);
 
   // Rendering the template on the server declares the tag for the page.

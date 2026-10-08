@@ -4,7 +4,11 @@ import {
   handlerFileDependencies,
   styleFileDependencies,
 } from "../clientFunctions.ts";
-import { LIFECYCLE_TAG_DECLARATION } from "../lifecycleElement.ts";
+import {
+  LIFECYCLE_TAG_DECLARATION,
+  lifecycleRuntimeScript,
+} from "../lifecycleElement.ts";
+import { raw } from "hono/html";
 import type { JSX } from "../jsx-runtime.ts";
 
 type AssetTagsProps = {
@@ -31,20 +35,39 @@ type AssetContext = {
   };
 };
 
+/** Context variable set once a response has carried the lifecycle runtime. */
+export const LIFECYCLE_RUNTIME_SENT_KEY = "tinyToolsLifecycleRuntimeSent";
+
 /**
- * Declares custom tags for the inline head runtime to define as lifecycle
+ * Declares custom tags for the lifecycle runtime to define as lifecycle
  * elements (see `lifecycleElement.ts`). Rendered ahead of the markup that
- * uses the tags, so they are defined before that markup is parsed or inserted.
+ * uses the tags, so they are defined before that markup is parsed or
+ * inserted. `<tt-define>` declarations are preceded by the runtime itself,
+ * inline, unless this response already carried it: the page they land on
+ * may not have it yet, and a copy it already has does nothing. `withRuntime`
+ * overrides that check, for content rendered outside the response it
+ * reaches (pushed updates).
  */
 export function LifecycleTags(
-  { tags, defineWith = "element" }: {
+  { tags, defineWith = "element", withRuntime }: {
     tags: Iterable<string>;
     defineWith?: "meta" | "element";
+    withRuntime?: boolean;
   },
 ): JSX.Element {
   const unique = [...new Set(tags)];
+  let runtime = false;
+  if (unique.length && defineWith === "element") {
+    runtime = withRuntime ?? true;
+    if (withRuntime === undefined) {
+      const context = tryGetContext();
+      if (context?.get(LIFECYCLE_RUNTIME_SENT_KEY as never)) runtime = false;
+      else context?.set(LIFECYCLE_RUNTIME_SENT_KEY as never, true as never);
+    }
+  }
   return (
     <>
+      {runtime && <script>{raw(lifecycleRuntimeScript)}</script>}
       {unique.map((tag) =>
         defineWith === "meta"
           ? <meta key={tag} name={LIFECYCLE_TAG_DECLARATION} content={tag} />

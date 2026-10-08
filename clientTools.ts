@@ -59,6 +59,7 @@ import {
   getImportRegistry,
   HandlerBundle,
 } from "./clientFunctions.ts";
+import { lifecycleRuntimePath } from "./lifecycleElement.ts";
 import {
   mkdirSync,
   readFileSync,
@@ -172,7 +173,7 @@ export function recordHandlerFile(file: string): void {
  * Records that the current render has a `<tagName>` element with lifecycle
  * handlers, for the request when one is active and otherwise for the
  * no-context tracker, so `AssetTags` declares the tag ahead of the markup
- * and the inline head runtime defines it (see `lifecycleElement.ts`).
+ * and the lifecycle runtime defines it (see `lifecycleElement.ts`).
  */
 export function recordLifecycleTag(tagName: string): void {
   // A custom tag, or `is` name and extended tag (`custom-button:button`).
@@ -2076,14 +2077,20 @@ class StoreClass extends HandlersClass {
 // ============================================================================
 
 /**
- * Module-level code defining `tags` through the inline head runtime, for a
+ * Module-level code defining `tags` through the lifecycle runtime, for a
  * template bundle whose markup holds upgraded elements: a clone may land on
- * a page that never declared them. Skipped where no document exists.
+ * a page that never declared them, and so may not have the runtime yet, in
+ * which case the bundle imports it first. Skipped where no document exists.
  */
 function lifecycleDefinitionsPrelude(tags: Iterable<string>): string {
   const unique = [...new Set(tags)];
   if (!unique.length) return "";
   return `if (typeof document !== "undefined") {
+  if (!tiny.defineLifecycleElement) {
+    // Not a literal, so the bundler leaves the import to the browser.
+    const __tiny_lifecycle_runtime = ${JSON.stringify(lifecycleRuntimePath)};
+    await import(__tiny_lifecycle_runtime);
+  }
 ${
     unique.map((tag) =>
       `  tiny.defineLifecycleElement(${JSON.stringify(tag)});`

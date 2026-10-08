@@ -55,7 +55,10 @@ export async function sendUpdateStream(
   const { fn } = await tiny.imports(headHandler);
   const update = (
     <update update-paths={paths?.length ? JSON.stringify(paths) : undefined}>
-      <LifecycleTags tags={toolUsageTracker.accessedLifecycleTags} />
+      <LifecycleTags
+        tags={toolUsageTracker.accessedLifecycleTags}
+        withRuntime
+      />
       <NewPartial onLoad={fn.importIntoHead}>
         <AssetTags
           accessedHandlerFiles={toolUsageTracker.accessedHandlerFiles}

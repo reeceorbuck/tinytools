@@ -131,11 +131,8 @@ if (!Deno.args.includes("--none")) {
         );
         assertStringIncludes(await stylesheet.text(), "color: red");
         assertEquals(html.includes("/_tinytools/"), false);
-        assertStringIncludes(html, tiny.runHandler.toString());
-        assertStringIncludes(
-          html,
-          "const tiny = {runHandler, defineLifecycleElement};",
-        );
+        assertStringIncludes(html, "function runHandler(");
+        assertStringIncludes(html, "const tiny = {runHandler};");
         assertEquals(
           memoryAssets.has(
             `/handlers/${unused._handlerFilenames.get("unused")}.js`,

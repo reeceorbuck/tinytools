@@ -4,6 +4,7 @@ import { Handlers, Styles } from "../clientTools.ts";
 import { tiny } from "../mod.ts";
 import { runHandlerScript } from "../honoFactory.tsx";
 import { eventHandlerBody } from "../eventAttributes.ts";
+import { lifecycleRuntimeScript } from "../lifecycleElement.ts";
 import { jsx, jsxAttr, jsxs } from "../jsx-runtime.ts";
 import { jsxDEV } from "../jsx-dev-runtime.ts";
 import { ActivateParsedHandler } from "../components/ActivateOnLoadHandler.tsx";
@@ -71,9 +72,10 @@ Deno.test("package lifecycle components transform references with the package JS
 for (const mode of ["core"] as const) {
   for (const constructor of [false, true]) {
     Deno.test(`CSP defaults on and supports opt-out: ${mode}, constructor=${constructor}`, async () => {
-      const [scriptHash, eventHash] = await Promise.all(
+      const [scriptHash, lifecycleHash, eventHash] = await Promise.all(
         [
           runHandlerScript,
+          lifecycleRuntimeScript,
           eventHandlerBody,
         ].map(async (source) => {
           const digest = await crypto.subtle.digest(
@@ -84,7 +86,7 @@ for (const mode of ["core"] as const) {
         }),
       );
       const expected =
-        `script-src 'self' 'sha256-${scriptHash}'; script-src-attr 'unsafe-hashes' 'sha256-${eventHash}'`;
+        `script-src 'self' 'sha256-${scriptHash}' 'sha256-${lifecycleHash}'; script-src-attr 'unsafe-hashes' 'sha256-${eventHash}'`;
 
       for (const csp of [undefined, true, false]) {
         const app = constructor
@@ -111,9 +113,9 @@ Deno.test("CSP hash matches the inline runHandler script in rendered pages", asy
   assertEquals(response.status, 200, html);
   const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
   assertEquals(script, runHandlerScript);
-  // The runtime defining lifecycle tags ships in the same hashed script.
-  assertStringIncludes(script!, "function defineLifecycleElement(");
-  assertStringIncludes(script!, "defineLifecycleTags();");
+  // A page without lifecycle tags gets the dispatcher and nothing else.
+  assertEquals(html.match(/<script>/g)?.length, 1);
+  assertEquals(script!.includes("defineLifecycleElement"), false);
   const digest = await crypto.subtle.digest(
     "SHA-256",
     new TextEncoder().encode(script),
@@ -122,7 +124,7 @@ Deno.test("CSP hash matches the inline runHandler script in rendered pages", asy
   const scriptPolicy = response.headers.get("Content-Security-Policy")?.split(
     ";",
   )[0];
-  assertEquals(scriptPolicy, `script-src 'self' 'sha256-${hash}'`);
+  assertStringIncludes(scriptPolicy!, `script-src 'self' 'sha256-${hash}' `);
 });
 
 Deno.test("CSP middleware works standalone and opt-out preserves application policies", async () => {
@@ -131,7 +133,7 @@ Deno.test("CSP middleware works standalone and opt-out preserves application pol
   const response = await standalone.request("/");
   assertMatch(
     response.headers.get("Content-Security-Policy") ?? "",
-    /^script-src 'self' 'sha256-[A-Za-z0-9+/=]+'; script-src-attr 'unsafe-hashes' 'sha256-[A-Za-z0-9+/=]+'$/,
+    /^script-src 'self' 'sha256-[A-Za-z0-9+/=]+' 'sha256-[A-Za-z0-9+/=]+'; script-src-attr 'unsafe-hashes' 'sha256-[A-Za-z0-9+/=]+'$/,
   );
   assertEquals(await response.text(), "OK");
 
