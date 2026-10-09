@@ -12,6 +12,7 @@ import { jsxRenderer } from "hono/jsx-renderer";
 
 import {
   Constants,
+  generateHandlerHash,
   Handlers,
   imports,
   memoryAssets,
@@ -40,9 +41,10 @@ import { CSP_ENABLED_KEY, eventHandlerBody } from "./eventAttributes.ts";
 
 const ROUTE_LAYOUT_APPLIED_KEY = "tinyToolsRouteLayoutApplied";
 /**
- * The inline head script: the handler dispatcher and the lifecycle element
+ * The runtime script: the handler dispatcher and the lifecycle element
  * runtime, which defines the tags declared by `<meta name="tt-define">`
- * before the body is parsed. Exported for tests that check the CSP hash.
+ * before the body is parsed. It is served at `runtimeScriptPath()` and
+ * loaded by a blocking classic `<script>` at the end of every page's head.
  */
 export const runHandlerScript = [
   runHandler.toString(),
@@ -56,6 +58,21 @@ export const runHandlerScript = [
   "defineLifecycleTags();",
   "const tiny = {runHandler, defineLifecycleElement};",
 ].join("\n");
+
+/**
+ * The base name of the runtime script file, `tt-runtime_<hash>`. The hash
+ * is that of the script's content, computed like a handler bundle's, so any
+ * change to the runtime is a new URL: browsers fetch it at once while the
+ * old one may stay cached as an immutable asset.
+ */
+export function runtimeScriptFilename(): string {
+  return `tt-runtime_${generateHandlerHash(runHandlerScript)}`;
+}
+
+/** The URL the runtime script is served at, beside the handler bundles. */
+export function runtimeScriptPath(): string {
+  return `/handlers/${runtimeScriptFilename()}.js`;
+}
 
 export type RouteLayoutProps = { children: Child };
 /** A layout callback; it may return the children unchanged. */
@@ -96,16 +113,14 @@ export type ClientToolsOptions = {
 };
 
 function createCspMiddleware(): MiddlewareHandler {
-  const policy = Promise.all(
-    [runHandlerScript, eventHandlerBody].map(async (source) => {
-      const digest = await crypto.subtle.digest(
-        "SHA-256",
-        new TextEncoder().encode(source),
-      );
-      return btoa(String.fromCharCode(...new Uint8Array(digest)));
-    }),
-  ).then(([scriptHash, eventHash]) => {
-    return `script-src 'self' 'sha256-${scriptHash}'; script-src-attr 'unsafe-hashes' 'sha256-${eventHash}'`;
+  // The runtime script is a same-origin file, so only the event attribute
+  // body needs a hash.
+  const policy = crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(eventHandlerBody),
+  ).then((digest) => {
+    const eventHash = btoa(String.fromCharCode(...new Uint8Array(digest)));
+    return `script-src 'self'; script-src-attr 'unsafe-hashes' 'sha256-${eventHash}'`;
   });
   return async (context, next) => {
     await next();
@@ -235,6 +250,14 @@ function createCoreMiddleware(
     },
     ...(options.csp === false ? [] : [createCspMiddleware()]),
     async (context, next) => {
+      // The runtime script, served from memory in every mode under its
+      // content-hashed name, so it caches like the handler bundles.
+      if (context.req.path !== runtimeScriptPath()) return await next();
+      context.header("Content-Type", "application/javascript; charset=utf-8");
+      context.header("Cache-Control", "public, max-age=31536000, immutable");
+      return context.body(runHandlerScript);
+    },
+    async (context, next) => {
       if (memoryBuild && /^\/(handlers|styles)\//.test(context.req.path)) {
         const content = memoryAssets.get(context.req.path);
         if (content === undefined) return context.notFound();
@@ -350,7 +373,7 @@ function createCoreMiddleware(
               accessedLifecycleTags={lifecycleTags}
               defineWith="meta"
             />
-            <script>{raw(runHandlerScript)}</script>
+            <script src={runtimeScriptPath()}></script>
           </head>
           {routeLayoutApplied ? body : <body>{body}</body>}
         </html>

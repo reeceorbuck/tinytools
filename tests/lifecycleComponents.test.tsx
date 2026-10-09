@@ -41,7 +41,7 @@ Deno.test("UpgradeCustomElement declares each custom tag once, ahead of the head
   // The declarations precede the inline runtime that defines them, and the
   // runtime precedes the body, so the elements upgrade as they are parsed.
   const metaAt = html.indexOf('<meta name="tt-define"');
-  const scriptAt = html.indexOf("defineLifecycleTags();");
+  const scriptAt = html.indexOf('<script src="/handlers/tt-runtime_');
   const bodyAt = html.indexOf("<body>");
   assertEquals(metaAt < scriptAt && scriptAt < bodyAt, true);
   // Nothing is rendered beside the elements, and no define bundle is loaded.
@@ -50,7 +50,7 @@ Deno.test("UpgradeCustomElement declares each custom tag once, ahead of the head
   assertStringIncludes(html, "<x-panel>One</x-panel><x-panel>Two</x-panel>");
 });
 
-Deno.test("the inline head script carries the lifecycle runtime", () => {
+Deno.test("the runtime script carries the lifecycle runtime", () => {
   assertStringIncludes(runHandlerScript, "function runHandler(");
   assertStringIncludes(runHandlerScript, "function defineLifecycleElement(");
   assertStringIncludes(runHandlerScript, "customElements.define(");

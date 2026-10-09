@@ -1,9 +1,9 @@
 /**
  * The browser runtime behind lifecycle elements.
  *
- * It ships inline in every page's head script (see `honoFactory.tsx`), so
- * `tiny.defineLifecycleElement` exists before any body content is parsed.
- * Tags are declared by `AssetTags`: in a full page's head as
+ * It is the runtime script every page loads at the end of its head (see
+ * `honoFactory.tsx`), so `tiny.defineLifecycleElement` exists before any body
+ * content is parsed. Tags are declared by `AssetTags`: in a full page's head as
  * `<meta name="tt-define" content="note-entry">`, which the head script
  * defines as it runs, and elsewhere (streamed content, partial updates) as
  * `<tt-define tag="note-entry">`, a custom element that defines its tag the
@@ -28,7 +28,7 @@
 /** The `tiny` global every page defines in its head. */
 declare const tiny: { runHandler(target: HTMLElement, event: Event): unknown };
 
-/** @internal The runtime state the inline head script declares beside these functions. */
+/** @internal The runtime state the runtime script declares beside these functions. */
 declare const lifecycleState: {
   /** Whether customized built-in elements work here; probed on first use. */
   builtins?: boolean;
@@ -174,10 +174,10 @@ export function defineLifecycleElement(declaration: string): void {
  * Installs the tag declarations: defines `<tt-define tag="...">`, whose
  * connection defines its tag, and defines the tags of the
  * `<meta name="tt-define">` elements already in the head. Runs once, from
- * the inline head script, before the body is parsed.
+ * the runtime script, before the body is parsed.
  */
 export function defineLifecycleTags(): void {
-  // The head script may be evaluated outside a browser (tests do).
+  // The runtime script may be evaluated outside a browser (tests do).
   if (!globalThis.customElements) return;
   customElements.define(
     "tt-define",

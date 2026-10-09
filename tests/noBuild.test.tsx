@@ -131,9 +131,13 @@ if (!Deno.args.includes("--none")) {
         );
         assertStringIncludes(await stylesheet.text(), "color: red");
         assertEquals(html.includes("/_tinytools/"), false);
-        assertStringIncludes(html, tiny.runHandler.toString());
+        // The runtime script is served from memory too, under its hashed name.
+        const runtimePath = html.match(/<script src="([^"]+)"><\/script>/)?.[1];
+        assertStringIncludes(runtimePath!, "/handlers/tt-runtime_");
+        const runtime = await (await app.request(runtimePath!)).text();
+        assertStringIncludes(runtime, tiny.runHandler.toString());
         assertStringIncludes(
-          html,
+          runtime,
           "const tiny = {runHandler, defineLifecycleElement};",
         );
         assertEquals(

@@ -16,7 +16,7 @@ type AssetTagsProps = {
   accessedLifecycleTags?: Iterable<string>;
   /**
    * How lifecycle tags are declared: `meta` inside a full page's `<head>`,
-   * where the inline head script defines them as it runs; `element` (the
+   * where the runtime script defines them as it runs; `element` (the
    * default) anywhere else, as `<tt-define>` elements that define their tag
    * the moment they connect. The head cannot hold custom elements.
    */

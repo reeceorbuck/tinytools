@@ -5,7 +5,7 @@ import {
   assertStringIncludes,
   assertThrows,
 } from "@std/assert";
-import { tiny } from "../honoFactory.tsx";
+import { runtimeScriptPath, tiny } from "../honoFactory.tsx";
 import {
   GENERATED_HANDLER_HASH_LENGTH,
   GENERATED_STYLE_HASH_LENGTH,
@@ -74,7 +74,10 @@ Deno.test("core loads only the dispatcher plus accessed handler and style assets
   const response = await app.request("/");
   const html = await response.text();
   assertEquals(response.status, 200, html);
-  const dispatcher = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+  // The dispatcher ships in the runtime script the head loads.
+  const scriptPath = html.match(/<script src="([^"]+)"><\/script>/)?.[1];
+  assertEquals(scriptPath, runtimeScriptPath());
+  const dispatcher = await (await app.request(scriptPath!)).text();
   assert(dispatcher);
   const element = {
     getAttribute(name: string) {

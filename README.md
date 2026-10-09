@@ -251,13 +251,14 @@ Recommended middleware order for a child router:
 
 ### Content Security Policy
 
-`core()` sends
-`script-src 'self' 'sha256-…'; script-src-attr 'unsafe-hashes'
-'sha256-…'`. The
-two hashes cover the inline `tiny.runHandler` dispatcher and the shared
-attribute body `tiny.runHandler(this,event)`, so every `fn.*` binding is allowed
-while arbitrary inline scripts, legacy `handlers.*` attributes and cross-origin
-scripts are blocked. The policy restricts scripts only.
+`core()` sends `script-src 'self'; script-src-attr 'unsafe-hashes' 'sha256-…'`.
+The `tiny.runHandler` dispatcher and lifecycle runtime load from a same-origin
+script file, `/handlers/tt-runtime_<hash>.js`, named by the hash of its content
+like a handler bundle and served with a year-long immutable cache header, so a
+changed runtime is fetched at once under a new name. The one hash covers the
+shared attribute body `tiny.runHandler(this,event)`, so every `fn.*` binding is
+allowed while arbitrary inline scripts, legacy `handlers.*` attributes and
+cross-origin scripts are blocked. The policy restricts scripts only.
 
 `csp: false` sends no header and renders `fn.*` as legacy inline expressions for
 the request. To manage your own policy, disable the default and include the hash
@@ -862,15 +863,15 @@ restoration), its `onDisconnect` runs when it is removed, and its
 clean themselves up. No wrapper is needed. The JSX runtime declares the tag
 ahead of the markup, as `<meta name="tt-define" content="load-more">` in a full
 page's head or a `<tt-define tag="load-more">` element in streamed and partial
-content, and the lifecycle runtime that ships in the inline head script defines
-it before that markup is parsed or inserted. Elements therefore upgrade in
-document order, a parent's `onConnect` always precedes a child's `onParsed`,
-nothing is rendered beside the element and it keeps working however it is moved,
-substituted or cloned. A `tiny.Templates` bundle whose markup holds such
-elements defines their tags itself. Since `onConnect` can run more than once,
-guard one-time setup. `onLoad` stays with the elements the browser fires `load`
-on (`<body>`, `<img>`, `<link>` and the like); binding it to a lifecycle element
-throws, since that element runs `onConnect` instead.
+content, and the runtime script loaded at the end of the head defines it before
+that markup is parsed or inserted. Elements therefore upgrade in document order,
+a parent's `onConnect` always precedes a child's `onParsed`, nothing is rendered
+beside the element and it keeps working however it is moved, substituted or
+cloned. A `tiny.Templates` bundle whose markup holds such elements defines their
+tags itself. Since `onConnect` can run more than once, guard one-time setup.
+`onLoad` stays with the elements the browser fires `load` on (`<body>`, `<img>`,
+`<link>` and the like); binding it to a lifecycle element throws, since that
+element runs `onConnect` instead.
 
 A built-in element keeps its tag and gets the same lifecycle events through a
 hyphenated `is` attribute: `<button is="custom-button" onConnect={fn.ready}>` or
