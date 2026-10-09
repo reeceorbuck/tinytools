@@ -138,7 +138,7 @@ if (!Deno.args.includes("--none")) {
         assertStringIncludes(runtime, tiny.runHandler.toString());
         assertStringIncludes(
           runtime,
-          "const tiny = {runHandler, defineLifecycleElement};",
+          "const tiny = {runHandler};",
         );
         assertEquals(
           memoryAssets.has(

@@ -27,36 +27,29 @@ import {
 } from "./clientTools.ts";
 import { getContextTitle } from "./titled.ts";
 import { css } from "./scopedStyles.ts";
-import { AssetTags, LifecycleTags } from "./components/AssetTags.tsx";
 import {
-  connectLifecycle,
+  AssetTags,
+  LIFECYCLE_RUNTIME_SENT_KEY,
+  LifecycleTags,
+} from "./components/AssetTags.tsx";
+import {
+  compactSource,
   defineLifecycleElement,
-  defineLifecycleTags,
-  disconnectLifecycle,
-  observeBuiltinFallback,
-  supportsCustomizedBuiltins,
+  lifecycleRuntimeFiles,
+  lifecycleRuntimeScript,
 } from "./lifecycleElement.ts";
 import { NewPartial } from "./components/NewPartial.tsx";
 import { CSP_ENABLED_KEY, eventHandlerBody } from "./eventAttributes.ts";
 
 const ROUTE_LAYOUT_APPLIED_KEY = "tinyToolsRouteLayoutApplied";
 /**
- * The runtime script: the handler dispatcher and the lifecycle element
- * runtime, which defines the tags declared by `<meta name="tt-define">`
- * before the body is parsed. It is served at `runtimeScriptPath()` and
- * loaded by a blocking classic `<script>` at the end of every page's head.
+ * The dispatcher script every page loads at the end of its head. The
+ * lifecycle runtime is included only when a page uses lifecycle tags (see
+ * `lifecycleElement.ts`).
  */
 export const runHandlerScript = [
-  runHandler.toString(),
-  supportsCustomizedBuiltins.toString(),
-  connectLifecycle.toString(),
-  disconnectLifecycle.toString(),
-  observeBuiltinFallback.toString(),
-  defineLifecycleElement.toString(),
-  defineLifecycleTags.toString(),
-  "const lifecycleState = {fallbacks: new Map()};",
-  "defineLifecycleTags();",
-  "const tiny = {runHandler, defineLifecycleElement};",
+  compactSource(runHandler.toString()),
+  "const tiny = {runHandler};",
 ].join("\n");
 
 /**
@@ -113,14 +106,18 @@ export type ClientToolsOptions = {
 };
 
 function createCspMiddleware(): MiddlewareHandler {
-  // The runtime script is a same-origin file, so only the event attribute
-  // body needs a hash.
-  const policy = crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(eventHandlerBody),
-  ).then((digest) => {
-    const eventHash = btoa(String.fromCharCode(...new Uint8Array(digest)));
-    return `script-src 'self'; script-src-attr 'unsafe-hashes' 'sha256-${eventHash}'`;
+  const policy = Promise.all(
+    [lifecycleRuntimeScript, eventHandlerBody].map(
+      async (source) => {
+        const digest = await crypto.subtle.digest(
+          "SHA-256",
+          new TextEncoder().encode(source),
+        );
+        return btoa(String.fromCharCode(...new Uint8Array(digest)));
+      },
+    ),
+  ).then(([lifecycleHash, eventHash]) => {
+    return `script-src 'self' 'sha256-${lifecycleHash}'; script-src-attr 'unsafe-hashes' 'sha256-${eventHash}'`;
   });
   return async (context, next) => {
     await next();
@@ -250,8 +247,12 @@ function createCoreMiddleware(
     },
     ...(options.csp === false ? [] : [createCspMiddleware()]),
     async (context, next) => {
-      // The runtime script, served from memory in every mode under its
-      // content-hashed name, so it caches like the handler bundles.
+      const runtimeFile = lifecycleRuntimeFiles.get(context.req.path);
+      if (runtimeFile !== undefined) {
+        context.header("Content-Type", "application/javascript; charset=utf-8");
+        context.header("Cache-Control", "public, max-age=31536000, immutable");
+        return context.body(runtimeFile);
+      }
       if (context.req.path !== runtimeScriptPath()) return await next();
       context.header("Content-Type", "application/javascript; charset=utf-8");
       context.header("Cache-Control", "public, max-age=31536000, immutable");
@@ -356,6 +357,8 @@ function createCoreMiddleware(
           </update>
         );
       }
+      // Content streamed after the head needs no second copy of the runtime.
+      if (lifecycleTags.length) context.set(LIFECYCLE_RUNTIME_SENT_KEY, true);
       return (
         <html>
           <head>
@@ -374,6 +377,9 @@ function createCoreMiddleware(
               defineWith="meta"
             />
             <script src={runtimeScriptPath()}></script>
+            {lifecycleTags.length > 0 && (
+              <script>{raw(lifecycleRuntimeScript)}</script>
+            )}
           </head>
           {routeLayoutApplied ? body : <body>{body}</body>}
         </html>
@@ -425,41 +431,33 @@ export function runHandler(
   el: HTMLElement | typeof globalThis,
   e: Event,
 ) {
-  const element = el === globalThis ? document.body : el as HTMLElement;
   type Bundle = Record<string, (this: unknown, event: Event) => unknown>;
   const registered = (name: string): Bundle | undefined =>
     (globalThis as { handlers?: Record<string, Bundle> }).handlers?.[name];
-
   // Set once a handler has to wait for its bundle; later handlers in the
   // list queue behind it, so they run in the attribute's order.
   let pending: Promise<unknown> | undefined;
-
   // Each reference is `<bundle>.<handler>`.
   for (
-    const reference of (element.getAttribute("tt-handler-" + e.type) ?? "")
-      .split(" ")
+    const reference of ((el === globalThis ? document.body : el as HTMLElement)
+      .getAttribute("tt-handler-" + e.type) ?? "").split(" ")
   ) {
-    const dot = reference.indexOf(".");
-    if (dot < 1) continue;
-    const name = reference.slice(0, dot);
-    const handler = reference.slice(dot + 1);
+    const [name, handler] = reference.split(".");
+    if (!name || !handler) continue;
+    // Returns nothing, so a queued handler never waits on an async one.
     const run = (bundle: Bundle) => {
-      if (typeof bundle[handler] !== "function") {
-        console.error(`Handler ${reference} not found in its bundle.`);
-        return;
-      }
-      bundle[handler].call(el, e);
+      if (typeof bundle[handler] === "function") bundle[handler].call(el, e);
+      else console.error(`Handler ${reference} not found in its bundle.`);
     };
     const bundle = registered(name);
-    if (bundle && !pending) {
-      run(bundle);
-      continue;
+    if (bundle && !pending) run(bundle);
+    else {
+      // Re-checked at run time: an earlier link may have loaded this bundle.
+      const load = () => registered(name) ?? import(`/handlers/${name}.js`);
+      pending = (pending ? pending.then(load) : Promise.resolve(load()))
+        .then(run)
+        .catch((error) => console.error(`Handler ${reference} failed:`, error));
     }
-    // Re-checked at run time: an earlier link may have loaded this bundle.
-    const load = () => registered(name) ?? import(`/handlers/${name}.js`);
-    pending = (pending ? pending.then(load) : Promise.resolve(load()))
-      .then(run)
-      .catch((error) => console.error(`Handler ${reference} failed:`, error));
   }
 }
 
@@ -472,7 +470,7 @@ export type TinyApi = {
   readonly Signals: typeof Signals;
   readonly Templates: typeof Templates;
   readonly runHandler: typeof runHandler;
-  /** Defines a custom tag as a lifecycle element; in the browser, the inline head runtime. */
+  /** Defines a custom tag as a lifecycle element; in the browser, part of the lifecycle runtime. */
   readonly defineLifecycleElement: typeof defineLifecycleElement;
   readonly Styles: typeof Styles;
   readonly css: typeof css;

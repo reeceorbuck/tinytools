@@ -251,14 +251,16 @@ Recommended middleware order for a child router:
 
 ### Content Security Policy
 
-`core()` sends `script-src 'self'; script-src-attr 'unsafe-hashes' 'sha256-…'`.
-The `tiny.runHandler` dispatcher and lifecycle runtime load from a same-origin
-script file, `/handlers/tt-runtime_<hash>.js`, named by the hash of its content
-like a handler bundle and served with a year-long immutable cache header, so a
-changed runtime is fetched at once under a new name. The one hash covers the
-shared attribute body `tiny.runHandler(this,event)`, so every `fn.*` binding is
-allowed while arbitrary inline scripts, legacy `handlers.*` attributes and
-cross-origin scripts are blocked. The policy restricts scripts only.
+`core()` sends
+`script-src 'self' 'sha256-…'; script-src-attr 'unsafe-hashes'
+'sha256-…'`. The
+dispatcher loads from the same-origin, content-hashed
+`/handlers/tt-runtime_<hash>.js` file and is cached immutably. The hash in
+`script-src` allows the inline lifecycle runtime, which is included only on
+pages using lifecycle elements; the attribute hash allows the shared
+`tiny.runHandler(this,event)` body. Arbitrary inline scripts, legacy
+`handlers.*` attributes and cross-origin scripts remain blocked. The policy
+restricts scripts only.
 
 `csp: false` sends no header and renders `fn.*` as legacy inline expressions for
 the request. To manage your own policy, disable the default and include the hash
@@ -863,8 +865,11 @@ restoration), its `onDisconnect` runs when it is removed, and its
 clean themselves up. No wrapper is needed. The JSX runtime declares the tag
 ahead of the markup, as `<meta name="tt-define" content="load-more">` in a full
 page's head or a `<tt-define tag="load-more">` element in streamed and partial
-content, and the runtime script loaded at the end of the head defines it before
-that markup is parsed or inserted. Elements therefore upgrade in document order,
+content, and the lifecycle runtime defines it before that markup is parsed or
+inserted. The runtime is not part of the dispatcher file: it is inlined after
+the dispatcher for pages that declare tags in the head, and ahead of the first
+`<tt-define>` in streamed or partial content otherwise, so pages without
+lifecycle elements never load it. Elements therefore upgrade in document order,
 a parent's `onConnect` always precedes a child's `onParsed`, nothing is rendered
 beside the element and it keeps working however it is moved, substituted or
 cloned. A `tiny.Templates` bundle whose markup holds such elements defines their
@@ -879,12 +884,13 @@ hyphenated `is` attribute: `<button is="custom-button" onConnect={fn.ready}>` or
 runtime declares it as `custom-button:button` and defines a customized built-in
 element extending the button's own class, so the element upgrades as it is
 parsed like a custom tag. Safari has no customized built-ins; there the first
-such declaration starts one document-wide `MutationObserver` that runs `connect`
-and `disconnect` (and manages the `abortController`) on elements carrying a
-declared `is` as they enter and leave the document. The observer runs in a
-microtask after each insertion, so in Safari these handlers run a little later
-than a custom tag's, and a child's `onParsed` may run before the parent's
-`onConnect`.
+such declaration imports a small fallback module (other browsers never load it)
+that starts one document-wide `MutationObserver` that runs `connect` and
+`disconnect` (and manages the `abortController`) on elements carrying a declared
+`is` as they enter and leave the document. The module loads asynchronously and
+the observer runs in a microtask after each insertion, so in Safari these
+handlers run a little later than a custom tag's, and a child's `onParsed` may
+run before the parent's `onConnect`.
 
 Elements without a hyphenated tag or `is` (a bare `<input>`, say) cannot
 upgrade. These wrappers give them lifecycle events:

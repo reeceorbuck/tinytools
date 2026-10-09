@@ -4,6 +4,7 @@ import { generateHandlerHash, Handlers, Styles } from "../clientTools.ts";
 import { tiny } from "../mod.ts";
 import { runHandlerScript, runtimeScriptPath } from "../honoFactory.tsx";
 import { eventHandlerBody } from "../eventAttributes.ts";
+import { lifecycleRuntimeScript } from "../lifecycleElement.ts";
 import { jsx, jsxAttr, jsxs } from "../jsx-runtime.ts";
 import { jsxDEV } from "../jsx-dev-runtime.ts";
 import { ActivateParsedHandler } from "../components/ActivateOnLoadHandler.tsx";
@@ -71,14 +72,20 @@ Deno.test("package lifecycle components transform references with the package JS
 for (const mode of ["core"] as const) {
   for (const constructor of [false, true]) {
     Deno.test(`CSP defaults on and supports opt-out: ${mode}, constructor=${constructor}`, async () => {
-      const digest = await crypto.subtle.digest(
-        "SHA-256",
-        new TextEncoder().encode(eventHandlerBody),
+      const [lifecycleHash, eventHash] = await Promise.all(
+        [
+          lifecycleRuntimeScript,
+          eventHandlerBody,
+        ].map(async (source) => {
+          const digest = await crypto.subtle.digest(
+            "SHA-256",
+            new TextEncoder().encode(source),
+          );
+          return btoa(String.fromCharCode(...new Uint8Array(digest)));
+        }),
       );
-      const eventHash = btoa(String.fromCharCode(...new Uint8Array(digest)));
-      // The runtime is a same-origin script file, so only the attribute body is hashed.
       const expected =
-        `script-src 'self'; script-src-attr 'unsafe-hashes' 'sha256-${eventHash}'`;
+        `script-src 'self' 'sha256-${lifecycleHash}'; script-src-attr 'unsafe-hashes' 'sha256-${eventHash}'`;
 
       for (const csp of [undefined, true, false]) {
         const app = constructor
@@ -97,7 +104,7 @@ for (const mode of ["core"] as const) {
   }
 }
 
-Deno.test("pages load the runtime script from a content-hashed, immutably cached URL", async () => {
+Deno.test("pages load the dispatcher from a content-hashed, immutably cached URL", async () => {
   const app = new tiny.Hono({ tools: "core" });
   app.get("/", (context) => context.render(<div>Events</div>));
   const response = await app.request("/");
@@ -125,13 +132,15 @@ Deno.test("pages load the runtime script from a content-hashed, immutably cached
   );
   const body = await script.text();
   assertEquals(body, runHandlerScript);
-  assertStringIncludes(body, "function defineLifecycleElement(");
-  assertStringIncludes(body, "defineLifecycleTags();");
-  // Same-origin, so the policy needs no script hash.
+  assertStringIncludes(body, "const tiny = {runHandler};");
+  assertEquals(body.includes("defineLifecycleElement"), false);
   const scriptPolicy = response.headers.get("Content-Security-Policy")?.split(
     ";",
   )[0];
-  assertEquals(scriptPolicy, "script-src 'self'");
+  assertMatch(
+    scriptPolicy ?? "",
+    /^script-src 'self' 'sha256-[A-Za-z0-9+/=]+'$/,
+  );
 });
 
 Deno.test("CSP middleware works standalone and opt-out preserves application policies", async () => {
@@ -140,7 +149,7 @@ Deno.test("CSP middleware works standalone and opt-out preserves application pol
   const response = await standalone.request("/");
   assertMatch(
     response.headers.get("Content-Security-Policy") ?? "",
-    /^script-src 'self'; script-src-attr 'unsafe-hashes' 'sha256-[A-Za-z0-9+/=]+'$/,
+    /^script-src 'self' 'sha256-[A-Za-z0-9+/=]+'; script-src-attr 'unsafe-hashes' 'sha256-[A-Za-z0-9+/=]+'$/,
   );
   assertEquals(await response.text(), "OK");
 
