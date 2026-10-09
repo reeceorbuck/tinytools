@@ -1,9 +1,10 @@
 /**
  * Lifecycle components for @tinytools/hono-tools.
  *
- * Lifecycle elements (a custom tag, or a plain tag with a hyphenated `is`)
- * run `onConnect` and `onDisconnect` by themselves. These components cover
- * the rest: a proxy element that forwards those events to a bare plain tag,
+ * Lifecycle elements (a custom tag, or a plain tag with a hyphenated `is`,
+ * which the JSX runtime adds to one binding `onConnect` or `onDisconnect`
+ * without an `is`) run those events by themselves. These components cover
+ * the rest: a proxy element that forwards them to any other plain tag,
  * and a modulepreload link whose own `load` triggers one-time `onParsed`
  * work on the element before it.
  *
@@ -14,7 +15,11 @@ import type { PropsWithChildren } from "hono/jsx";
 import type { HtmlEscapedString } from "hono/utils/html";
 import { tiny } from "../mod.ts";
 import { Handlers, recordLifecycleTag } from "../clientTools.ts";
-import { templateRootTags, transparent } from "../componentScope.ts";
+import {
+  intrinsicTagName,
+  templateRootTags,
+  transparent,
+} from "../componentScope.ts";
 import {
   claimLifecycleProxy,
   findUnproxied,
@@ -145,14 +150,13 @@ function customTagName(child: unknown): string | undefined {
   const roots = templateRootTags(child);
   const tag = roots
     ? roots.length === 1 ? roots[0] : undefined
-    : typeof child === "object" && child !== null
-    ? (child as { tag?: unknown }).tag
-    : undefined;
+    : intrinsicTagName(child);
   if (typeof tag !== "string") return undefined;
   if (tag.includes("-")) return tag.toLowerCase();
-  // A customized built-in (`<button is="custom-button">`) upgrades by itself.
+  // A customized built-in (`<button is="custom-button">`, or a plain tag the
+  // JSX runtime gave an `is`) upgrades by itself.
   const is = roots
-    ? /^<[a-zA-Z][\w:-]*\s[^>]*?\sis="([^"]*)"/.exec(String(child))?.[1]
+    ? /^<[a-zA-Z][\w:-]*(?:\s[^>]*?)?\sis="([^"]*)"/.exec(String(child))?.[1]
     : (child as { props?: { is?: unknown } }).props?.is;
   return typeof is === "string" && is.includes("-")
     ? lifecycleTagDeclaration(is.toLowerCase(), tag.toLowerCase())
@@ -166,7 +170,9 @@ function customTagName(child: unknown): string | undefined {
  * aborts on removal so listeners can clean up.
  *
  * A custom tag (`<note-entry>`) or a plain tag with a hyphenated `is`
- * (`<input is="bound-input">`) needs no wrapper: binding `onConnect` or
+ * (`<input is="bound-input">`, or `<input is="tt-input">`, which the JSX
+ * runtime adds to a plain tag binding a lifecycle handler without an `is`)
+ * needs no wrapper: binding `onConnect` or
  * `onDisconnect` on it declares the tag by itself, ahead of the markup (a
  * `<meta name="tt-define">` in a full page's head, a `<tt-define>` element
  * in streamed or partial content), and the inline head runtime defines it

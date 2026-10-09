@@ -63,6 +63,20 @@ export function markElementNode<T>(node: T): T {
   return node;
 }
 
+/**
+ * @internal The tag of a node created from an intrinsic tag. Hono renders a
+ * few (`input`, `button`, `form` and the like) through a function named
+ * after the tag, so `node.tag` is not always the string.
+ */
+export function intrinsicTagName(node: unknown): string | undefined {
+  if (!node || typeof node !== "object") return undefined;
+  const tag = (node as JSXNode).tag;
+  if (typeof tag === "string") return tag || undefined;
+  return (node as Record<symbol, boolean>)[ELEMENT] === true
+    ? tag?.name
+    : undefined;
+}
+
 function isElementNode(node: JSXNode): boolean {
   return (node as unknown as Record<symbol, boolean>)[ELEMENT] === true ||
     (typeof node.tag === "string" && node.tag !== "");

@@ -451,7 +451,43 @@ Deno.test("precompiled markup binding a lifecycle handler declares its custom ta
   );
 });
 
-Deno.test("a plain tag binding onConnect without the wrapper throws", async () => {
+Deno.test("a plain tag binding onConnect without an is gets one", async () => {
+  const strings = (...parts: string[]) =>
+    Object.assign(parts, { raw: parts }) as unknown as TemplateStringsArray;
+  const app = new tiny.Hono({ tools: "core" });
+  app.get("/", async (context) => {
+    const { fn } = await tiny.imports(parsedHandlers);
+    return context.render(
+      <div>
+        <input onConnect={fn.build} onDisconnect={fn.build} />
+        {jsxTemplate(
+          strings("<div><textarea ", " ", "></textarea></div>"),
+          jsxAttr("onConnect", fn.build),
+          jsxAttr("onDisconnect", fn.build),
+        )}
+        <UpgradeCustomElement>
+          <select onConnect={fn.build}></select>
+        </UpgradeCustomElement>
+      </div>,
+    );
+  });
+  const html = await (await app.request("/")).text();
+  assertEquals(
+    [...html.matchAll(/<meta name="tt-define" content="([\w:-]+)"\/>/g)]
+      .map(([, tag]) => tag),
+    ["tt-input:input", "tt-textarea:textarea", "tt-select:select"],
+  );
+  // One is per element, however many lifecycle handlers it binds, and no
+  // proxy, not even inside the wrapper.
+  assertEquals(html.match(/is="tt-input"/g)?.length, 1);
+  assertMatch(
+    html,
+    /<div><textarea is="tt-textarea" onconnect="[^"]+" tt-handler-connect="\w+\.build" ondisconnect=/,
+  );
+  assertEquals(html.includes("upgrade-preceding"), false);
+});
+
+Deno.test("a plain tag whose is has no hyphen throws without the wrapper", async () => {
   const { fn } = await tiny.imports(parsedHandlers);
   const strings = (...parts: string[]) =>
     Object.assign(parts, { raw: parts }) as unknown as TemplateStringsArray;
@@ -461,7 +497,7 @@ Deno.test("a plain tag binding onConnect without the wrapper throws", async () =
   assertThrows(
     () => (
       <div>
-        <input onConnect={fn.build} />
+        <input is="plain" onConnect={fn.build} />
       </div>
     ),
     TypeError,
@@ -471,7 +507,7 @@ Deno.test("a plain tag binding onConnect without the wrapper throws", async () =
   assertMatch(
     (assertThrows(() => (
       <div>
-        <input onConnect={fn.build} />
+        <input is="plain" onConnect={fn.build} />
       </div>
     )) as Error).message,
     forgotten,
@@ -479,13 +515,21 @@ Deno.test("a plain tag binding onConnect without the wrapper throws", async () =
   const group = (
     <>
       <span>Label</span>
-      <input onConnect={fn.build} />
+      <input is="plain" onConnect={fn.build} />
     </>
   );
   assertThrows(() => <div>{group}</div>, TypeError);
   assertThrows(
     () => (
-      <div>{["a"].map((key) => <input key={key} onConnect={fn.build} />)}</div>
+      <div>
+        {["a"].map((key) => (
+          <input
+            key={key}
+            is="plain"
+            onConnect={fn.build}
+          />
+        ))}
+      </div>
     ),
     TypeError,
   );
@@ -494,7 +538,7 @@ Deno.test("a plain tag binding onConnect without the wrapper throws", async () =
   assertThrows(
     () =>
       jsxTemplate(
-        strings("<div><input ", "></div>"),
+        strings('<div><input is="plain" ', "></div>"),
         jsxAttr("onConnect", fn.build),
       ),
     TypeError,
@@ -503,7 +547,10 @@ Deno.test("a plain tag binding onConnect without the wrapper throws", async () =
     () =>
       jsxTemplate(
         strings("<div>", "</div>"),
-        jsxTemplate(strings("<input ", ">"), jsxAttr("onConnect", fn.build)),
+        jsxTemplate(
+          strings('<input is="plain" ', ">"),
+          jsxAttr("onConnect", fn.build),
+        ),
       ),
     TypeError,
   );
@@ -515,7 +562,7 @@ Deno.test("a plain tag binding onConnect without the wrapper throws", async () =
   );
 });
 
-Deno.test("a plain tag binding onConnect inside the wrapper renders with its proxy", async () => {
+Deno.test("a plain tag whose is has no hyphen inside the wrapper renders with its proxy", async () => {
   const strings = (...parts: string[]) =>
     Object.assign(parts, { raw: parts }) as unknown as TemplateStringsArray;
   const app = new tiny.Hono({ tools: "core" });
@@ -524,11 +571,11 @@ Deno.test("a plain tag binding onConnect inside the wrapper renders with its pro
     return context.render(
       <div>
         <UpgradeCustomElement>
-          <input onConnect={fn.build} />
+          <input is="plain" onConnect={fn.build} />
         </UpgradeCustomElement>
         <UpgradeCustomElement>
           {jsxTemplate(
-            strings("<textarea ", "></textarea>"),
+            strings('<textarea is="plain" ', "></textarea>"),
             jsxAttr("onConnect", fn.build),
           )}
         </UpgradeCustomElement>
@@ -539,11 +586,11 @@ Deno.test("a plain tag binding onConnect inside the wrapper renders with its pro
   assertEquals(declaredInHead(html), ["upgrade-preceding"]);
   assertMatch(
     html,
-    /<input onconnect="[^"]+" tt-handler-connect="\w+\.build"\/><upgrade-preceding /,
+    /<input is="plain" onconnect="[^"]+" tt-handler-connect="\w+\.build"\/><upgrade-preceding /,
   );
   assertMatch(
     html,
-    /<textarea onconnect="[^"]+" tt-handler-connect="\w+\.build"><\/textarea><upgrade-preceding /,
+    /<textarea is="plain" onconnect="[^"]+" tt-handler-connect="\w+\.build"><\/textarea><upgrade-preceding /,
   );
 });
 
@@ -625,7 +672,7 @@ Deno.test("a fragment-only template keeps a proxied element wrappable", async ()
   const { fn } = await tiny.imports(parsedHandlers);
   const control = () =>
     jsxTemplate(
-      strings("<select ", "></select>"),
+      strings('<select is="plain" ', "></select>"),
       jsxAttr("onConnect", fn.build),
     );
   const fragment = jsxTemplate(strings("", ""), control());
@@ -646,7 +693,7 @@ Deno.test("a fragment-only template keeps a proxied element wrappable", async ()
   const html = await (await app.request("/")).text();
   assertMatch(
     html,
-    /<select onconnect="[^"]+" tt-handler-connect="\w+\.build"><\/select><upgrade-preceding /,
+    /<select is="plain" onconnect="[^"]+" tt-handler-connect="\w+\.build"><\/select><upgrade-preceding /,
   );
 });
 

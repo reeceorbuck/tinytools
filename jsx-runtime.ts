@@ -7,7 +7,8 @@
  *
  * Lifecycle handlers (`onConnect`, `onDisconnect`, and `onLoad` where only the
  * browser fires it) are bound at render time (see lifecycleBindings.ts): a custom tag
- * is declared as a lifecycle tag without any wrapper, a plain tag that needs
+ * is declared as a lifecycle tag without any wrapper, a plain tag without an
+ * `is` gets one so it becomes a customized built-in, a plain tag that needs
  * an `<upgrade-preceding>` proxy is marked, and placing a marked element
  * inside another element throws, so a forgotten `UpgradeCustomElement`
  * fails at render time rather than silently never firing.
@@ -33,6 +34,7 @@ import {
   wrapComponent,
 } from "./componentScope.ts";
 import {
+  automaticLifecycleIs,
   findUnproxied,
   lifecycleAttributeEvent,
   lifecycleEvent,
@@ -53,6 +55,8 @@ function inspectTemplate(
   slots: readonly ValueSlot[],
 ): ProxyNeed | undefined {
   let need: ProxyNeed | undefined;
+  /** The `is` added to each element that had none, by element index. */
+  const added = new Map<number, string>();
   // An `is` bound dynamically is another attribute value of the same tag.
   const dynamicIs = (slot: ValueSlot): string | undefined => {
     for (const [index, other] of slots.entries()) {
@@ -66,7 +70,16 @@ function inspectTemplate(
     if (event) {
       const slot = slots[index];
       if (!slot.tag) return;
-      const is = slot.is ?? dynamicIs(slot);
+      let is = slot.is ?? added.get(slot.element!) ?? dynamicIs(slot);
+      const automatic = automaticLifecycleIs(slot.tag, event, is);
+      if (automatic) {
+        // Rendered with the handler attribute, so it lands in the same tag.
+        values[index] = honoJsxTemplate`${
+          honoJsxAttr("is", automatic)
+        } ${value}`;
+        added.set(slot.element!, automatic);
+        is = automatic;
+      }
       if (!lifecycleHandlerNeedsProxy(slot.tag, event, is)) return;
       // Nested in the same markup, so no wrapper can ever follow it.
       if (slot.depth > 0) {
@@ -110,7 +123,10 @@ export const jsx: typeof honoJsx = (tag, props, key) => {
     const event = Object.keys(attributes).length
       ? lifecycleEvent(name)
       : undefined;
-    if (event && lifecycleHandlerNeedsProxy(tag, event, props.is)) {
+    if (!event) continue;
+    const automatic = automaticLifecycleIs(tag, event, expanded.is);
+    if (automatic) expanded.is = automatic;
+    if (lifecycleHandlerNeedsProxy(tag, event, expanded.is)) {
       need = { tag, event };
     }
   }

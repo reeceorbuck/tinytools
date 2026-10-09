@@ -5,12 +5,14 @@
  *
  * A custom tag (one with a hyphen), or a plain tag with a hyphenated `is`
  * attribute, is recorded as a lifecycle tag, so the page declares it and the
- * inline head runtime upgrades it; no wrapper is needed. Any other plain tag
- * only receives `connect` and `disconnect` from an `<upgrade-preceding>`
- * proxy, which `UpgradeCustomElement` renders after it, so the runtime marks
- * the element as needing one and throws when the element is placed inside
- * another element while still marked: that is where a forgotten wrapper
- * shows up. `onLoad` belongs to the elements the browser fires `load` on
+ * inline head runtime upgrades it; no wrapper is needed. A plain tag with no
+ * `is` at all gets one (`<input is="tt-input">`, see `automaticLifecycleIs`),
+ * so it becomes a customized built-in the same way. A plain tag whose `is`
+ * has no hyphen only receives `connect` and `disconnect` from an
+ * `<upgrade-preceding>` proxy, which `UpgradeCustomElement` renders after it,
+ * so the runtime marks the element as needing one and throws when the
+ * element is placed inside another element while still marked: that is
+ * where a forgotten wrapper shows up. `onLoad` belongs to the elements the browser fires `load` on
  * (`<body>`, `<img>`, `<link>` and the like); on anything else it throws,
  * since a lifecycle element runs `onConnect` instead.
  *
@@ -56,6 +58,21 @@ export function lifecycleEvent(attribute: string): string | undefined {
 }
 
 /**
+ * The `is` the JSX runtime adds to a plain tag that binds `event` with no
+ * `is` of its own, making it a customized built-in (`<input is="tt-input">`),
+ * or undefined when the element needs none or already has one.
+ */
+export function automaticLifecycleIs(
+  tag: string,
+  event: string,
+  is?: unknown,
+): string | undefined {
+  if (is !== undefined && is !== null) return undefined;
+  if (!LIFECYCLE_EVENTS.has(event) || tag.includes("-")) return undefined;
+  return `tt-${tag.toLowerCase()}`;
+}
+
+/**
  * Applies the binding rules for `event` on the intrinsic `tag`, with the
  * element's `is` attribute when it has one: records a custom tag or a
  * customized built-in, accepts a `load` the browser fires itself, throws
@@ -93,13 +110,13 @@ export function lifecycleHandlerNeedsProxy(
 export function unproxiedLifecycleError({ tag, event }: ProxyNeed): TypeError {
   if (event === "load") {
     return new TypeError(
-      `<${tag}> binds onLoad but nothing fires load on it. Bind onConnect instead, and give the element a hyphenated is="..." attribute or a custom tag so it upgrades.`,
+      `<${tag}> binds onLoad but nothing fires load on it. Bind onConnect instead; the element then upgrades by itself.`,
     );
   }
   return new TypeError(
     `<${tag}> binds ${
       attributeName(event)
-    } but nothing fires it. Give it an is="..." attribute with a hyphen (a customized built-in), give it a custom tag with a hyphen, or wrap it in <UpgradeCustomElement>, which renders an <upgrade-preceding> proxy after it.`,
+    } but nothing fires it. Give its is="..." attribute a hyphen (a customized built-in), remove the attribute so the runtime adds one, give it a custom tag with a hyphen, or wrap it in <UpgradeCustomElement>, which renders an <upgrade-preceding> proxy after it.`,
   );
 }
 

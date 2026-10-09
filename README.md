@@ -296,7 +296,7 @@ import type { HandlerProp } from "tinytools";
 function Panel(
   props: { onConnect?: HandlerProp<(this: HTMLElement) => void> },
 ) {
-  return <section is="live-section" onConnect={props.onConnect} />;
+  return <section onConnect={props.onConnect} />;
 }
 ```
 
@@ -446,11 +446,7 @@ In handlers, import a collection and use `signal.name.value` directly. In JSX,
 const { fn, signal } = await tiny.imports(viewerSignals, signalTools);
 
 <input type="range" onInput={signal.setContrast} />;
-<dialog
-  is="themed-dialog"
-  onConnect={signal.contrast}
-  onSignal={fn.setCssProperty}
-/>;
+<dialog onConnect={signal.contrast} onSignal={fn.setCssProperty} />;
 ```
 
 - On `input` / `change` the signal takes the target's value and, if the input
@@ -476,7 +472,6 @@ const { contrast } = viewerSignals.evaluateUsingInitialValues({
   setContrast: 0.5,
 });
 <output
-  is="live-output"
   onConnect={signal.contrast}
   onSignal={fn.setTextContent}
 >
@@ -599,11 +594,7 @@ const layerSignals = new tiny.Signals(
 
 <fieldset tt-instance={layerSignals.instanceKey}>
   <select onChange={signal.material}>...</select>
-  <select
-    is="live-select"
-    onConnect={signal.material}
-    onSignal={fn.applyMaterial}
-  >
+  <select onConnect={signal.material} onSignal={fn.applyMaterial}>
     ...
   </select>
 </fieldset>;
@@ -670,11 +661,7 @@ const noteSignals = new tiny.Signals(
   <fieldset tt-instance={noteSignals.instanceKeyFor("layer")}>
     <select onChange={signal.material}>...</select>
   </fieldset>
-  <output
-    is="live-output"
-    onConnect={signal.summary}
-    onSignal={fn.setTextContent}
-  />
+  <output onConnect={signal.summary} onSignal={fn.setTextContent} />
 </form>;
 ```
 
@@ -878,39 +865,46 @@ tags itself. Since `onConnect` can run more than once, guard one-time setup.
 `<link>` and the like); binding it to a lifecycle element throws, since that
 element runs `onConnect` instead.
 
-A built-in element keeps its tag and gets the same lifecycle events through a
-hyphenated `is` attribute: `<button is="custom-button" onConnect={fn.ready}>` or
-`<input is="bound-input" onConnect={signal.search} onSignal={fn.apply}>`. The
-runtime declares it as `custom-button:button` and defines a customized built-in
+A built-in element keeps its tag and gets the same lifecycle events with no
+extra markup: `<button onConnect={fn.ready}>` or
+`<input onConnect={signal.search} onSignal={fn.apply}>` just work. The JSX
+runtime adds an `is` attribute to any plain tag that binds `onConnect` or
+`onDisconnect` without one, so it renders as `<button is="tt-button" ...>`,
+declared as `tt-button:button`, and the runtime defines a customized built-in
 element extending the button's own class, so the element upgrades as it is
-parsed like a custom tag. Safari has no customized built-ins; there the first
-such declaration imports a small fallback module (other browsers never load it)
-that starts one document-wide `MutationObserver` that runs `connect` and
-`disconnect` (and manages the `abortController`) on elements carrying a declared
-`is` as they enter and leave the document. The module loads asynchronously and
-the observer runs in a microtask after each insertion, so in Safari these
-handlers run a little later than a custom tag's, and a child's `onParsed` may
-run before the parent's `onConnect`.
+parsed like a custom tag. You never need to write `is` yourself. If you do give
+one (`<button is="custom-button">`), it must contain a hyphen; it is used as
+written and declared as `custom-button:button`. Safari has no customized
+built-ins; there the first such declaration imports a small fallback module
+(other browsers never load it) that starts one document-wide `MutationObserver`
+that runs `connect` and `disconnect` (and manages the `abortController`) on
+elements carrying a declared `is` as they enter and leave the document. The
+module loads asynchronously and the observer runs in a microtask after each
+insertion, so in Safari these handlers run a little later than a custom tag's,
+and a child's `onParsed` may run before the parent's `onConnect`. Customized
+built-ins only exist for HTML elements, so SVG and MathML elements cannot bind
+lifecycle handlers this way.
 
-Elements without a hyphenated tag or `is` (a bare `<input>`, say) cannot
-upgrade. These wrappers give them lifecycle events:
+An element you give an `is` without a hyphen (`<input is="text">`, say) cannot
+upgrade. These wrappers cover it and other one-off cases:
 
 - `<UpgradeCustomElement>` renders an `<upgrade-preceding>` sibling after each
   child without a hyphenated tag or `is`, a lifecycle element that forwards its
   `connect` and `disconnect` to the element before it, so the two must stay
-  together. A bare element that binds `onConnect` or `onDisconnect` without this
-  wrapper throws while rendering, so a forgotten wrapper cannot silently never
-  fire. The check runs where the element is placed inside other markup, so an
-  element a component returns on its own is only checked once something places
-  it. Children with a hyphenated tag or `is` pass through unchanged, and a child
-  binding `onLoad` is rejected, since the proxy does not forward `load`.
+  together. An element with an unhyphenated `is` that binds `onConnect` or
+  `onDisconnect` without this wrapper throws while rendering, so a forgotten
+  wrapper cannot silently never fire. The check runs where the element is placed
+  inside other markup, so an element a component returns on its own is only
+  checked once something places it. Children with a hyphenated tag or `is`
+  (including one the runtime added) pass through unchanged, and a child binding
+  `onLoad` is rejected, since the proxy does not forward `load`.
 - `<ActivateParsedHandler>` runs each child's `onParsed` exactly once, via a
   trigger placed right after it that fires once the child and its content have
   been parsed. Use it for one-time work such as building an element's content
   from a template; unlike `onConnect` it never repeats when the element is moved
   or restored. The trigger acts on its previous sibling, so content that moves
   the element away from it before it fires can run the handler on the wrong
-  element. For repeating lifecycle events use `UpgradeCustomElement`.
+  element. For repeating lifecycle events bind `onConnect` instead.
 - `<BuildFromTemplate template={template.card}>` clones a `tiny.Templates` entry
   in place once its children are parsed, filling the clone's named `<slot>`s
   from children with a matching `slot` attribute and its unnamed `<slot>` from

@@ -30,7 +30,7 @@ export type HandlerReference<TName extends string, TFunction> = {
  * @example
  * ```tsx
  * function Card(props: { onConnect?: HandlerProp<(this: HTMLElement) => void> }) {
- *   return <article is="live-card" onConnect={props.onConnect}>...</article>;
+ *   return <article onConnect={props.onConnect}>...</article>;
  * }
  * ```
  */
