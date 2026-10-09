@@ -1,8 +1,8 @@
 import { assertEquals, assertMatch, assertStringIncludes } from "@std/assert";
 import { Hono } from "hono";
-import { Handlers, Styles } from "../clientTools.ts";
+import { generateHandlerHash, Handlers, Styles } from "../clientTools.ts";
 import { tiny } from "../mod.ts";
-import { runHandlerScript } from "../honoFactory.tsx";
+import { runHandlerScript, runtimeScriptPath } from "../honoFactory.tsx";
 import { eventHandlerBody } from "../eventAttributes.ts";
 import { lifecycleRuntimeScript } from "../lifecycleElement.ts";
 import { jsx, jsxAttr, jsxs } from "../jsx-runtime.ts";
@@ -72,9 +72,8 @@ Deno.test("package lifecycle components transform references with the package JS
 for (const mode of ["core"] as const) {
   for (const constructor of [false, true]) {
     Deno.test(`CSP defaults on and supports opt-out: ${mode}, constructor=${constructor}`, async () => {
-      const [scriptHash, lifecycleHash, eventHash] = await Promise.all(
+      const [lifecycleHash, eventHash] = await Promise.all(
         [
-          runHandlerScript,
           lifecycleRuntimeScript,
           eventHandlerBody,
         ].map(async (source) => {
@@ -86,7 +85,7 @@ for (const mode of ["core"] as const) {
         }),
       );
       const expected =
-        `script-src 'self' 'sha256-${scriptHash}' 'sha256-${lifecycleHash}'; script-src-attr 'unsafe-hashes' 'sha256-${eventHash}'`;
+        `script-src 'self' 'sha256-${lifecycleHash}'; script-src-attr 'unsafe-hashes' 'sha256-${eventHash}'`;
 
       for (const csp of [undefined, true, false]) {
         const app = constructor
@@ -105,26 +104,43 @@ for (const mode of ["core"] as const) {
   }
 }
 
-Deno.test("CSP hash matches the inline runHandler script in rendered pages", async () => {
+Deno.test("pages load the dispatcher from a content-hashed, immutably cached URL", async () => {
   const app = new tiny.Hono({ tools: "core" });
   app.get("/", (context) => context.render(<div>Events</div>));
   const response = await app.request("/");
   const html = await response.text();
   assertEquals(response.status, 200, html);
-  const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
-  assertEquals(script, runHandlerScript);
-  // A page without lifecycle tags gets the dispatcher and nothing else.
-  assertEquals(html.match(/<script>/g)?.length, 1);
-  assertEquals(script!.includes("defineLifecycleElement"), false);
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(script),
+  // No inline script: a blocking classic script at the end of the head.
+  assertEquals(html.includes("<script>"), false);
+  const src = html.match(/<script src="([^"]+)"><\/script><\/head>/)?.[1];
+  assertEquals(src, runtimeScriptPath());
+  // Named like a handler bundle, by the hash of its content, so a changed
+  // runtime is a new URL while the old one stays cached.
+  assertEquals(
+    src,
+    `/handlers/tt-runtime_${generateHandlerHash(runHandlerScript)}.js`,
   );
-  const hash = btoa(String.fromCharCode(...new Uint8Array(digest)));
+  const script = await app.request(src!);
+  assertEquals(script.status, 200);
+  assertEquals(
+    script.headers.get("Content-Type"),
+    "application/javascript; charset=utf-8",
+  );
+  assertEquals(
+    script.headers.get("Cache-Control"),
+    "public, max-age=31536000, immutable",
+  );
+  const body = await script.text();
+  assertEquals(body, runHandlerScript);
+  assertStringIncludes(body, "const tiny = {runHandler};");
+  assertEquals(body.includes("defineLifecycleElement"), false);
   const scriptPolicy = response.headers.get("Content-Security-Policy")?.split(
     ";",
   )[0];
-  assertStringIncludes(scriptPolicy!, `script-src 'self' 'sha256-${hash}' `);
+  assertMatch(
+    scriptPolicy ?? "",
+    /^script-src 'self' 'sha256-[A-Za-z0-9+/=]+'$/,
+  );
 });
 
 Deno.test("CSP middleware works standalone and opt-out preserves application policies", async () => {
@@ -133,7 +149,7 @@ Deno.test("CSP middleware works standalone and opt-out preserves application pol
   const response = await standalone.request("/");
   assertMatch(
     response.headers.get("Content-Security-Policy") ?? "",
-    /^script-src 'self' 'sha256-[A-Za-z0-9+/=]+' 'sha256-[A-Za-z0-9+/=]+'; script-src-attr 'unsafe-hashes' 'sha256-[A-Za-z0-9+/=]+'$/,
+    /^script-src 'self' 'sha256-[A-Za-z0-9+/=]+'; script-src-attr 'unsafe-hashes' 'sha256-[A-Za-z0-9+/=]+'$/,
   );
   assertEquals(await response.text(), "OK");
 

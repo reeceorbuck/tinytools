@@ -252,13 +252,15 @@ Recommended middleware order for a child router:
 ### Content Security Policy
 
 `core()` sends
-`script-src 'self' 'sha256-…' 'sha256-…'; script-src-attr 'unsafe-hashes'
-'sha256-…'`.
-The hashes cover the inline `tiny.runHandler` dispatcher, the inline lifecycle
-runtime (sent only to pages using lifecycle elements) and the shared attribute
-body `tiny.runHandler(this,event)`, so every `fn.*` binding is allowed while
-arbitrary inline scripts, legacy `handlers.*` attributes and cross-origin
-scripts are blocked. The policy restricts scripts only.
+`script-src 'self' 'sha256-…'; script-src-attr 'unsafe-hashes'
+'sha256-…'`. The
+dispatcher loads from the same-origin, content-hashed
+`/handlers/tt-runtime_<hash>.js` file and is cached immutably. The hash in
+`script-src` allows the inline lifecycle runtime, which is included only on
+pages using lifecycle elements; the attribute hash allows the shared
+`tiny.runHandler(this,event)` body. Arbitrary inline scripts, legacy
+`handlers.*` attributes and cross-origin scripts remain blocked. The policy
+restricts scripts only.
 
 `csp: false` sends no header and renders `fn.*` as legacy inline expressions for
 the request. To manage your own policy, disable the default and include the hash
@@ -864,9 +866,9 @@ clean themselves up. No wrapper is needed. The JSX runtime declares the tag
 ahead of the markup, as `<meta name="tt-define" content="load-more">` in a full
 page's head or a `<tt-define tag="load-more">` element in streamed and partial
 content, and the lifecycle runtime defines it before that markup is parsed or
-inserted. The runtime is not part of the core head script: it is inlined after
-the dispatcher in the head of a page that declares tags there, and ahead of the
-first `<tt-define>` in streamed or partial content otherwise, so pages without
+inserted. The runtime is not part of the dispatcher file: it is inlined after
+the dispatcher for pages that declare tags in the head, and ahead of the first
+`<tt-define>` in streamed or partial content otherwise, so pages without
 lifecycle elements never load it. Elements therefore upgrade in document order,
 a parent's `onConnect` always precedes a child's `onParsed`, nothing is rendered
 beside the element and it keeps working however it is moved, substituted or

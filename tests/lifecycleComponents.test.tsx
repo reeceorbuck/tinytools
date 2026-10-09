@@ -5,7 +5,7 @@ import {
   assertStringIncludes,
   assertThrows,
 } from "@std/assert";
-import { runHandlerScript, tiny } from "../honoFactory.tsx";
+import { runHandlerScript, runtimeScriptPath, tiny } from "../honoFactory.tsx";
 import { Signals, Templates } from "../clientTools.ts";
 import {
   bundleByFilename,
@@ -45,12 +45,16 @@ Deno.test("UpgradeCustomElement declares each custom tag once, ahead of the head
     ));
   const html = await (await app.request("/")).text();
   assertEquals(declaredInHead(html), ["x-panel", "y-panel"]);
-  // The declarations precede the inline runtime that defines them, and the
-  // runtime precedes the body, so the elements upgrade as they are parsed.
+  // The declarations precede the runtime that defines them, and the runtime
+  // precedes the body, so the elements upgrade as they are parsed.
   const metaAt = html.indexOf('<meta name="tt-define"');
-  const scriptAt = html.indexOf("defineLifecycleTags();");
+  const scriptAt = html.indexOf(`<script src="${runtimeScriptPath()}">`);
+  const lifecycleAt = html.indexOf(
+    `<script>${lifecycleRuntimeScript}</script>`,
+  );
   const bodyAt = html.indexOf("<body>");
-  assertEquals(metaAt < scriptAt && scriptAt < bodyAt, true);
+  assertEquals(metaAt < scriptAt && scriptAt < lifecycleAt, true);
+  assertEquals(lifecycleAt < bodyAt, true);
   // Nothing is rendered beside the elements, and no define bundle is loaded.
   assertEquals(html.includes("modulepreload"), false);
   assertEquals(html.includes("?define="), false);
@@ -113,7 +117,9 @@ Deno.test("only pages using lifecycle tags carry the lifecycle runtime", async (
   const plain = await (await app.request("/plain")).text();
   assertEquals(plain.includes(lifecycleRuntimeScript), false);
   const upgraded = await (await app.request("/upgraded")).text();
-  const coreAt = upgraded.indexOf(`<script>${runHandlerScript}</script>`);
+  const coreAt = upgraded.indexOf(
+    `<script src="${runtimeScriptPath()}"></script>`,
+  );
   const runtimeAt = upgraded.indexOf(
     `<script>${lifecycleRuntimeScript}</script>`,
   );

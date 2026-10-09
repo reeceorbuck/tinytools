@@ -147,7 +147,7 @@ export function defineLifecycleElement(declaration: string): void {
  * when the runtime first loads.
  */
 export function defineLifecycleTags(): void {
-  // The head script may be evaluated outside a browser (tests do).
+  // The runtime script may be evaluated outside a browser (tests do).
   if (!globalThis.customElements) return;
   customElements.define(
     "tt-define",

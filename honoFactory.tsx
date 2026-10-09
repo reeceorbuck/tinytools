@@ -12,6 +12,7 @@ import { jsxRenderer } from "hono/jsx-renderer";
 
 import {
   Constants,
+  generateHandlerHash,
   Handlers,
   imports,
   memoryAssets,
@@ -42,15 +43,29 @@ import { CSP_ENABLED_KEY, eventHandlerBody } from "./eventAttributes.ts";
 
 const ROUTE_LAYOUT_APPLIED_KEY = "tinyToolsRouteLayoutApplied";
 /**
- * The inline head script every page carries: just the handler dispatcher and
- * the `tiny` global. The lifecycle runtime follows it only on pages that use
- * lifecycle tags (see `lifecycleElement.ts`). Exported for tests that check
- * the CSP hash.
+ * The dispatcher script every page loads at the end of its head. The
+ * lifecycle runtime is included only when a page uses lifecycle tags (see
+ * `lifecycleElement.ts`).
  */
 export const runHandlerScript = [
   compactSource(runHandler.toString()),
   "const tiny = {runHandler};",
 ].join("\n");
+
+/**
+ * The base name of the runtime script file, `tt-runtime_<hash>`. The hash
+ * is that of the script's content, computed like a handler bundle's, so any
+ * change to the runtime is a new URL: browsers fetch it at once while the
+ * old one may stay cached as an immutable asset.
+ */
+export function runtimeScriptFilename(): string {
+  return `tt-runtime_${generateHandlerHash(runHandlerScript)}`;
+}
+
+/** The URL the runtime script is served at, beside the handler bundles. */
+export function runtimeScriptPath(): string {
+  return `/handlers/${runtimeScriptFilename()}.js`;
+}
 
 export type RouteLayoutProps = { children: Child };
 /** A layout callback; it may return the children unchanged. */
@@ -92,7 +107,7 @@ export type ClientToolsOptions = {
 
 function createCspMiddleware(): MiddlewareHandler {
   const policy = Promise.all(
-    [runHandlerScript, lifecycleRuntimeScript, eventHandlerBody].map(
+    [lifecycleRuntimeScript, eventHandlerBody].map(
       async (source) => {
         const digest = await crypto.subtle.digest(
           "SHA-256",
@@ -101,8 +116,8 @@ function createCspMiddleware(): MiddlewareHandler {
         return btoa(String.fromCharCode(...new Uint8Array(digest)));
       },
     ),
-  ).then(([scriptHash, lifecycleHash, eventHash]) => {
-    return `script-src 'self' 'sha256-${scriptHash}' 'sha256-${lifecycleHash}'; script-src-attr 'unsafe-hashes' 'sha256-${eventHash}'`;
+  ).then(([lifecycleHash, eventHash]) => {
+    return `script-src 'self' 'sha256-${lifecycleHash}'; script-src-attr 'unsafe-hashes' 'sha256-${eventHash}'`;
   });
   return async (context, next) => {
     await next();
@@ -238,6 +253,12 @@ function createCoreMiddleware(
         context.header("Cache-Control", "public, max-age=31536000, immutable");
         return context.body(runtimeFile);
       }
+      if (context.req.path !== runtimeScriptPath()) return await next();
+      context.header("Content-Type", "application/javascript; charset=utf-8");
+      context.header("Cache-Control", "public, max-age=31536000, immutable");
+      return context.body(runHandlerScript);
+    },
+    async (context, next) => {
       if (memoryBuild && /^\/(handlers|styles)\//.test(context.req.path)) {
         const content = memoryAssets.get(context.req.path);
         if (content === undefined) return context.notFound();
@@ -355,7 +376,7 @@ function createCoreMiddleware(
               accessedLifecycleTags={lifecycleTags}
               defineWith="meta"
             />
-            <script>{raw(runHandlerScript)}</script>
+            <script src={runtimeScriptPath()}></script>
             {lifecycleTags.length > 0 && (
               <script>{raw(lifecycleRuntimeScript)}</script>
             )}
