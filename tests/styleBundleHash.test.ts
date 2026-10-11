@@ -24,7 +24,12 @@
 
 import { assert, assertEquals, assertNotEquals } from "@std/assert";
 import { pathToFileURL } from "node:url";
-import { cache, registeredClientTools, Styles } from "../clientTools.ts";
+import {
+  cache,
+  Handlers,
+  registeredClientTools,
+  Styles,
+} from "../clientTools.ts";
 import {
   changedStyleKeys,
   css,
@@ -113,6 +118,16 @@ async function touchFakeSource(url: string, body: string): Promise<void> {
   await Deno.writeTextFile(normalized, body);
 }
 
+/** The generated class name a source's style currently resolves to. */
+function styleClassName(sourceUrl: string, styleName: string): string {
+  const source = sourceUrl.split("/").at(-1)!;
+  const impl = [...scopedStylesRegistry.values()].find((style) =>
+    style.styleName === styleName && style.sourceFileUrl?.endsWith(source)
+  );
+  if (!impl) throw new Error(`No style ${styleName} registered`);
+  return impl.filename;
+}
+
 /** Drive ensureBuilt() and return the resolved bundle filename for the first own style. */
 async function buildAndGetBundleFilename(
   // deno-lint-ignore no-explicit-any
@@ -126,6 +141,67 @@ async function buildAndGetBundleFilename(
   if (!filename) throw new Error("No bundle filename resolved");
   return filename;
 }
+
+// ============================================================================
+
+Deno.test({
+  name:
+    "style bundle hash - a handler in the same file building first does not leave an edited style stale",
+  async fn() {
+    await cleanupTestDirs();
+    fullReset();
+
+    const sourceUrl = await writeFakeSource("handlerFirst", "// v1");
+
+    // ---- Process load 1: a style and a handler from one source ----
+    const styles1 = new Styles(sourceUrl, {
+      item: css`
+        margin: 0;
+      `,
+    });
+    new Handlers(sourceUrl, {
+      handlerFirstFn(this: HTMLElement) {
+        console.log("unchanged");
+      },
+    });
+    await styles1.ensureBuilt();
+    const before = styleClassName(sourceUrl, "item");
+
+    await touchFakeSource(sourceUrl, "// v2");
+
+    // ---- Process load 2: only the style changed; the handler builds first ----
+    simulateProcessRestart();
+    const styles2 = new Styles(sourceUrl, {
+      item: css`
+        margin: 0;
+        scroll-margin-top: 1rem;
+      `,
+    });
+    const handlers2 = new Handlers(sourceUrl, {
+      handlerFirstFn(this: HTMLElement) {
+        console.log("unchanged");
+      },
+    });
+    await handlers2.ensureBuilt();
+    const bundle = await buildAndGetBundleFilename(styles2, "item");
+
+    const className = styleClassName(sourceUrl, "item");
+    assertNotEquals(
+      className,
+      before,
+      "A style must be re-hashed when its source changed, even if a sibling handler committed the new mtime first",
+    );
+    const bundleCss = await Deno.readTextFile(`./public/styles/${bundle}.css`);
+    assert(
+      bundleCss.includes(className),
+      "The style bundle must be rebuilt for the re-hashed class name",
+    );
+
+    await cleanupTestDirs();
+  },
+  sanitizeOps: false,
+  sanitizeResources: false,
+});
 
 // ============================================================================
 

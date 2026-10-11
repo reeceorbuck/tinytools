@@ -1673,6 +1673,16 @@ class ClientToolsClass<
       }
     }
 
+    // A sibling in another instance (such as a handler bundle from the same
+    // source) can rename an own style in an earlier pass, before this
+    // instance builds. Its bundle is then still the one built for the old
+    // name, which the style keeps until the bundle is rebuilt.
+    if (!anyStyleChanged) {
+      anyStyleChanged = [...this._ownStyleNames].some((name) =>
+        this._scopedStyles.get(name)?.staleFilenameForCleanup !== undefined
+      );
+    }
+
     // If any own style changed, re-finalize the bundle
     if (anyStyleChanged && this._ownStyleNames.size > 0) {
       const { oldBundleFilename, newBundleFilename } = this

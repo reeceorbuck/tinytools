@@ -439,6 +439,9 @@ export class HandlerBundle {
     // left stale under an unchanged name (e.g. by a framework upgrade).
     const sourceChanged = this.sourceFileUrl !== undefined &&
       cache.checkAndTrackMtimeChange(this.sourceFileUrl);
+    // The pass commits the new mtime, after which a style from the same
+    // file no longer sees the change, so re-hash those styles now.
+    if (sourceChanged) await revalidateSourceFileSiblings(this.sourceFileUrl!);
     if (
       !options.fresh && !sourceChanged &&
       await fsStat(path).then(() => true, () => false)
@@ -454,8 +457,9 @@ export class HandlerBundle {
 }
 
 /**
- * Revalidate every style registered against `sourceFileUrl`. Handler bundles
- * need no revalidation: their content-addressed files are written on use.
+ * Revalidate every style registered against `sourceFileUrl`, when a handler
+ * bundle or a style first sees the file changed. Handler bundles need no
+ * revalidation: their content-addressed files are written on use.
  */
 export async function revalidateSourceFileSiblings(
   sourceFileUrl: string,
