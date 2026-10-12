@@ -20,8 +20,11 @@ async function cloneTemplate(
   if (dot < 1) throw new Error(`Invalid template reference: ${reference}`);
   const bundle = reference.slice(0, dot);
   const name = reference.slice(dot + 1);
+  // Held in a variable so `deno publish` does not rewrite the URL as a
+  // package-relative path, which esbuild would then try to resolve.
+  const url = `/handlers/${bundle}.js`;
   const module = (globalThis as { handlers?: RegisteredBundles }).handlers
-    ?.[bundle] ?? await import(`/handlers/${bundle}.js`);
+    ?.[bundle] ?? await import(url);
   const clone = module[name];
   if (typeof clone !== "function") {
     throw new Error(`Template ${reference} not found in its bundle.`);

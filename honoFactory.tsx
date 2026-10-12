@@ -455,7 +455,10 @@ export function runHandler(
     if (bundle && !pending) run(bundle);
     else {
       // Re-checked at run time: an earlier link may have loaded this bundle.
-      const load = () => registered(name) ?? import(`/handlers/${name}.js`);
+      // Held in a variable so `deno publish` does not rewrite the URL as a
+      // package-relative path.
+      const url = `/handlers/${name}.js`;
+      const load = () => registered(name) ?? import(url);
       pending = (pending ? pending.then(load) : Promise.resolve(load()))
         .then(run)
         .catch((error) => console.error(`Handler ${reference} failed:`, error));
