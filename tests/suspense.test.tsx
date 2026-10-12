@@ -1,3 +1,5 @@
+/** @jsxRuntime automatic */
+/** @jsxImportSource @tinytools/hono-tools */
 /**
  * Tests for Suspense streaming and async component rendering.
  *

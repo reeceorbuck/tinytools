@@ -1,3 +1,5 @@
+/** @jsxRuntime automatic */
+/** @jsxImportSource @tinytools/hono-tools */
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import type { Child } from "hono/jsx";
 import { type JSX, jsx, jsxAttr, jsxTemplate } from "../jsx-runtime.ts";

@@ -1,3 +1,5 @@
+/** @jsxRuntime automatic */
+/** @jsxImportSource @tinytools/hono-tools */
 import {
   assert,
   assertEquals,

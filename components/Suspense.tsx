@@ -8,6 +8,8 @@
  */
 
 import { raw } from "hono/html";
+// deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
+import { Fragment, h } from "../jsx-runtime.ts";
 import { HtmlEscapedCallbackPhase, resolveCallback } from "hono/utils/html";
 import type { HtmlEscapedString } from "hono/utils/html";
 import type { Child, PropsWithChildren } from "hono/jsx";

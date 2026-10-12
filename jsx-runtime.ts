@@ -138,6 +138,29 @@ export const jsx: typeof honoJsx = (tag, props, key) => {
 
 export const jsxs: typeof honoJsx = jsx;
 
+/**
+ * Classic-runtime factory for the package's own TSX, which compiles with
+ * `"jsx": "react"` because JSR cannot resolve the package importing its own
+ * `jsx-runtime` through an automatic `jsxImportSource`. Moves the children
+ * and key into the automatic shape and delegates to `jsx`.
+ */
+export function h(
+  tag: Parameters<typeof jsx>[0],
+  props: Record<string, unknown> | null,
+  ...children: unknown[]
+): ReturnType<typeof jsx> {
+  const { key, ...rest } = props ?? {};
+  if (children.length) {
+    rest.children = children.length === 1 ? children[0] : children;
+  }
+  return jsx(tag, rest, key as string | undefined);
+}
+
+/** Classic mode looks up the JSX types on the factory, so `h.JSX` is ours. */
+export declare namespace h {
+  export type { JSX };
+}
+
 export const jsxAttr = (
   name: string,
   value:

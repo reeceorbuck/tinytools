@@ -1,3 +1,5 @@
+/** @jsxRuntime automatic */
+/** @jsxImportSource @tinytools/hono-tools */
 import { assertEquals } from "@std/assert";
 import { tiny } from "../honoFactory.tsx";
 import type { ImportedTools } from "../mod.ts";

@@ -9,7 +9,8 @@ import {
   lifecycleRuntimeScript,
 } from "../lifecycleElement.ts";
 import { raw } from "hono/html";
-import type { JSX } from "../jsx-runtime.ts";
+// deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
+import { Fragment, h, type JSX } from "../jsx-runtime.ts";
 
 type AssetTagsProps = {
   /** Handler bundle files (`<name>.js`) to load; defaults to the request's accessed handlers. */

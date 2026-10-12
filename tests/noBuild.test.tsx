@@ -1,3 +1,5 @@
+/** @jsxRuntime automatic */
+/** @jsxImportSource @tinytools/hono-tools */
 import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import { fileURLToPath } from "node:url";
 

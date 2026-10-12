@@ -13,9 +13,9 @@
     "./handlers": "./handlers/mod.ts"
   },
   "dependencies": {
-    "hono": "^4.12.32",
-    "esbuild": "^0.28.1",
-    "esbuild-wasm": "^0.28.1"
+    "hono": "^4.13.13",
+    "esbuild": "^0.28.2",
+    "esbuild-wasm": "^0.28.2"
   },
   "peerDependencies": {
     "@hono/node-server": "^1.0.0"

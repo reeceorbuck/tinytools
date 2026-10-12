@@ -5,7 +5,8 @@ import {
   createNoContextToolUsageTracker,
   withNoContextToolUsageTracker,
 } from "./clientTools.ts";
-import type { JSX } from "./jsx-runtime.ts";
+// deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
+import { h, type JSX } from "./jsx-runtime.ts";
 import { headHandler, tiny } from "./honoFactory.tsx";
 
 /** The part of Hono's SSE stream API that {@link sendUpdateStream} writes to. */

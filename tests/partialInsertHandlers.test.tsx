@@ -1,3 +1,5 @@
+/** @jsxRuntime automatic */
+/** @jsxImportSource @tinytools/hono-tools */
 /**
  * Public API tests for handler-driven partial insertion.
  */

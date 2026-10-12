@@ -1,4 +1,6 @@
 import type { PropsWithChildren } from "hono/jsx";
+// deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
+import { h } from "../jsx-runtime.ts";
 import type { HtmlEscapedString } from "hono/utils/html";
 import { type PartialAbortableHTMLElement, tiny } from "../mod.ts";
 import { Handlers, imports } from "../clientTools.ts";

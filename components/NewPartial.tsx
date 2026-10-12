@@ -5,6 +5,8 @@ import { Handlers } from "../clientTools.ts";
 import { tiny } from "../honoFactory.tsx";
 import { routeCacheTools } from "../handlers/routeCacheTools.ts";
 import type { ActivatedClientFunction, JSX } from "../jsx-runtime.ts";
+// deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
+import { Fragment, h } from "../jsx-runtime.ts";
 import type { HandlerReference } from "../eventAttributes.ts";
 import { PartialCacheRoutes } from "./ClientRoutes.tsx";
 import { partialInsertHandlers } from "../handlers/partialInsertHandlers.ts";

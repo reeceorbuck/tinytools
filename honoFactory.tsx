@@ -1,5 +1,7 @@
 /** Hono middleware and request rendering for TinyTools. */
 import { component, transparent } from "./componentScope.ts";
+// deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
+import { h } from "./jsx-runtime.ts";
 import { Hono as HonoBase } from "hono";
 import type { Context, MiddlewareHandler } from "hono";
 import type { BlankEnv, Env } from "hono/types";

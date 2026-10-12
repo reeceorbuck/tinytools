@@ -1,3 +1,5 @@
+/** @jsxRuntime automatic */
+/** @jsxImportSource @tinytools/hono-tools */
 import { assertEquals, assertMatch, assertStringIncludes } from "@std/assert";
 import { Hono } from "hono";
 import { parseHTML } from "linkedom";
