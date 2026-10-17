@@ -350,3 +350,203 @@ Deno.test("instanceKeyFor only accepts the collection's perInstance names", () =
   // @ts-expect-error no named perInstance in this collection
   void (() => flat.instanceKeyFor("count"));
 });
+
+Deno.test("a root's seed starts its new instance from the rendered values", () => {
+  const seed = (values: unknown) =>
+    `tt-seed='${JSON.stringify({ [key]: values })}'`;
+  const byId = installDocument(`
+    <fieldset ${root} ${seed({ material: "flow", shade: "B1" })}>
+      <select id="a"></select>
+    </fieldset>
+    <fieldset ${root}><select id="b"></select></fieldset>
+    <fieldset ${root} ${seed({ description: "x", missing: 1 })}>
+      <select id="c"></select>
+    </fieldset>
+    <fieldset ${root} tt-seed='not json'><select id="d"></select></fieldset>
+    <fieldset ${root} tt-seed='{"other_key":{"shade":"C2"}}'>
+      <select id="e"></select>
+    </fieldset>`);
+  const errors: unknown[][] = [];
+  const consoleError = console.error;
+  console.error = (...args: unknown[]) => errors.push(args);
+  try {
+    const { material, shade, description, summary } = layerGraph();
+    for (const id of ["a", "b", "c", "d", "e"]) material.for(byId(id));
+    assertEquals(material.for(byId("a")).value, "flow");
+    assertEquals(shade.for(byId("a")).value, "B1");
+    // Computeds and aggregates start from the seed.
+    assertEquals(description.for(byId("a")).value, "flow B1");
+    assertEquals(
+      summary.value,
+      "flow B1; bulk A3; bulk A3; bulk A3; bulk A3",
+    );
+    // Another collection's seed on the root is not this one's.
+    assertEquals(shade.for(byId("e")).value, "A3");
+
+    // Computeds and unknown names are reported and skipped, as is bad JSON.
+    assertEquals(description.for(byId("c")).value, "bulk A3");
+    assertEquals(errors.length, 3);
+    assertEquals(String(errors[0][0]).includes("'description'"), true);
+    assertEquals(String(errors[1][0]).includes("'missing'"), true);
+    assertEquals(String(errors[2][0]).includes("malformed"), true);
+  } finally {
+    console.error = consoleError;
+    uninstallDocument();
+  }
+});
+
+Deno.test("a resumed instance keeps its values over its seed", () => {
+  const byId = installDocument(`<div id="list"></div>`);
+  try {
+    const { shade } = layerGraph();
+    const root = byId("list").ownerDocument.createElement("fieldset");
+    root.setAttribute("tt-instance", key);
+    root.setAttribute("tt-seed", JSON.stringify({ [key]: { shade: "B1" } }));
+    root.innerHTML = `<select id="a"></select>`;
+    Object.assign(root, { abortController: new AbortController() });
+    byId("list").append(root);
+    assertEquals(shade.for(byId("a")).value, "B1");
+    shade.for(byId("a")).value = "C2";
+
+    // Parked, then back: the edited value, not the seed.
+    root.remove();
+    (root as unknown as { abortController: AbortController }).abortController
+      .abort();
+    Object.assign(root, { abortController: new AbortController() });
+    byId("list").append(root);
+    assertEquals(shade.for(byId("a")).value, "C2");
+  } finally {
+    uninstallDocument();
+  }
+});
+
+Deno.test("seed and seedFor render the tt-seed the runtime reads", () => {
+  const notes = new Signals(
+    import.meta.url,
+    ({ Signal, Computed, perInstance }) => {
+      const note = perInstance(() => {
+        const isolation = new Signal<string>("rdam");
+        const layer = perInstance("layer", () => ({
+          material: new Signal<string>("bulk"),
+          count: new Signal<number>(1),
+          target: new Signal<Element | null>(),
+        }));
+        return {
+          isolation,
+          ...layer,
+          label: new Computed(() => isolation.value),
+        };
+      });
+      return { ...note, page: new Signal<string>("") };
+    },
+  );
+  assertEquals(
+    notes.seed({ isolation: "isolite" }),
+    JSON.stringify({ [notes.instanceKey]: { isolation: "isolite" } }),
+  );
+  assertEquals(
+    notes.seedFor("layer", { material: "flow", count: 2 }),
+    JSON.stringify({
+      [notes.instanceKeyFor("layer")]: { material: "flow", count: 2 },
+    }),
+  );
+  // @ts-expect-error computeds cannot be seeded
+  notes.seed({ label: "x" });
+  // @ts-expect-error page-wide signals are not per-instance
+  notes.seed({ page: "x" });
+  // @ts-expect-error layer signals are seeded on a layer root
+  notes.seed({ material: "flow" });
+  // @ts-expect-error note signals are seeded on the note root
+  notes.seedFor("layer", { isolation: "x" });
+  // @ts-expect-error the value must match the signal's type
+  notes.seedFor("layer", { count: "2" });
+  // @ts-expect-error elements do not survive JSON
+  notes.seedFor("layer", { target: {} as Element });
+
+  // The rendered attribute seeds the matching level in the browser.
+  const byId = installDocument(`
+    <form tt-instance="${notes.instanceKey}"
+      tt-seed='${notes.seed({ isolation: "isolite" })}'>
+      <fieldset tt-instance="${notes.instanceKeyFor("layer")}"
+        tt-seed='${notes.seedFor("layer", { material: "flow" })}'>
+        <select id="a"></select>
+      </fieldset>
+    </form>`);
+  try {
+    const { Signal, perInstance } = signalClasses(true, notes.instanceKey);
+    const graph = perInstance(() => ({
+      isolation: new Signal<string>("rdam"),
+      ...perInstance("layer", () => ({ material: new Signal<string>("bulk") })),
+    }));
+    assertEquals(graph.isolation.for(byId("a")).value, "isolite");
+    assertEquals(graph.material.for(byId("a")).value, "flow");
+  } finally {
+    uninstallDocument();
+  }
+});
+
+Deno.test("evaluateUsingInitialValues reports a seeded instance's values", () => {
+  const notes = new Signals(
+    import.meta.url,
+    ({ Signal, Computed, perInstance }) => {
+      const page = new Signal<string>("light");
+      const note = perInstance(() => {
+        const material = new Signal<string>("bulk");
+        const shade = new Signal<string>("A3");
+        const layer = perInstance("layer", () => ({
+          // Inner levels start fresh but read the seeded outer instance.
+          label: new Computed(() => `layer of ${material.value}`),
+        }));
+        return {
+          material,
+          shade,
+          ...layer,
+          description: new Computed(
+            () => `${material.value} ${shade.value} (${page.value})`,
+          ),
+        };
+      });
+      // A second unnamed group shares the instance key and the seed.
+      const tooth = perInstance(() => ({ surface: new Signal<string>("O") }));
+      return { page, ...note, ...tooth };
+    },
+  );
+  assertEquals(
+    notes.evaluateUsingInitialValues({ page: "dark" }, {
+      material: "flow",
+      surface: "MO",
+    }),
+    {
+      page: "dark",
+      material: "flow",
+      shade: "A3",
+      label: "layer of flow",
+      description: "flow A3 (dark)",
+      surface: "MO",
+    },
+  );
+  // Without a seed, a fresh instance as before.
+  assertEquals(
+    notes.evaluateUsingInitialValues().description,
+    "bulk A3 (light)",
+  );
+
+  assertThrows(
+    // @ts-expect-error computeds cannot be seeded
+    () => notes.evaluateUsingInitialValues({}, { description: "x" }),
+    TypeError,
+    "'description'",
+  );
+  assertThrows(
+    // @ts-expect-error page-wide signals are inputs, not seeds
+    () => notes.evaluateUsingInitialValues({}, { page: "x" }),
+    TypeError,
+    "'page'",
+  );
+  assertThrows(
+    // @ts-expect-error not a signal of this collection
+    () => notes.evaluateUsingInitialValues({}, { missing: "x" }),
+    TypeError,
+    "'missing'",
+  );
+});

@@ -452,10 +452,17 @@ const { fn, signal } = await tiny.imports(viewerSignals, signalTools);
 - On `input` / `change` the signal takes the target's value and, if the input
   has a `name` (or `data-bind-name`), that name.
 - On `load` the element subscribes to the signal and receives a `signal` event
-  (`event.signal.value`) with the current value at once, then one whenever it
-  changes; `event.initial` is true for the first. Subscriptions use the
-  element's `abortController` when present (see Lifecycle components), so they
-  end when the element is removed.
+  (`event.signal.value`) whenever it changes. Subscribing sends nothing, so
+  `onSignal` reacts to changes rather than running on connect; render the
+  current value on the server. Subscriptions use the element's
+  `abortController` when present (see Lifecycle components), so they end when
+  the element is removed.
+- An element that may connect after its signals have already changed (into a
+  cached or resumed instance, or after another element's `onConnect` wrote
+  them) catches up with `signalTools.fireSelfSignal` listed after the signals:
+  `onConnect={[signal.filter, fn.fireSelfSignal]}`. It runs `onSignal` once
+  per signal the element has subscribed to so far, with that signal's current
+  value.
 - On any other event (`onClick={signal.requests}`) a numeric signal adds one, so
   subscribers run on each click and a `Computed` can count them. No handler is
   needed to turn a click into a signal, and a non-numeric signal throws.
@@ -620,11 +627,55 @@ const layerSignals = new tiny.Signals(
   Nothing observes the document.
 - Signals outside `perInstance` stay page-wide, and collections without it work
   as before.
+- A root can start its instance from the values the server rendered rather than
+  the factory's: set `tt-seed={collection.seed(values)}` on it (or
+  `collection.seedFor(name, values)` on a nested root). Only that level's
+  writable signals are accepted, typed from the factory, and values travel as
+  JSON, so elements cannot be seeded. Handlers and computeds then read the
+  rendered value rather than the factory's, and `fireSelfSignal` sends it. The
+  seed applies when the instance is created; the same
+  element resumed later keeps its own values. A root has one `tt-seed`, so a
+  root of several collections can seed one of them.
+
+  ```tsx
+  <patient-picker
+    tt-instance={pickerSignals.instanceKey}
+    tt-seed={pickerSignals.seed({ patientId: String(patient.id) })}
+  >
+    <input
+      type="hidden"
+      name="patientId"
+      value={patient.id}
+      onConnect={signal.patientId}
+      onSignal={fn.setValue}
+    />
+  </patient-picker>;
+  ```
+
 - `evaluateUsingInitialValues` reports a fresh instance's value for per-instance
   signals, sees no instances for `.all`, and does not accept them as inputs.
   `signal.x.initialValue` is that fresh value, so a computed over `.all` can
   fall back to it (`all.value.length ? ... : x.initialValue`) and render the
   same text on the server as the first instance will show.
+- To render a seeded root, pass its seed as the second argument:
+  `evaluateUsingInitialValues(inputs, seed)` reports the per-instance signals of
+  an instance started from `seed`, so its computeds render the same first text
+  the browser shows, with no separate server-side formatting:
+
+  ```tsx
+  const { weekday } = stepSignals.evaluateUsingInitialValues({}, { date });
+  <date-input
+    tt-instance={stepSignals.instanceKey}
+    tt-seed={stepSignals.seed({ date })}
+  >
+    <output onConnect={signal.weekday} onSignal={fn.setTextContent}>
+      {weekday}
+    </output>
+  </date-input>;
+  ```
+
+  Nested levels inside it report fresh values, computed from the seeded
+  instance.
 
 #### Nested instances
 

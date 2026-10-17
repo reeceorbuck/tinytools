@@ -5,8 +5,6 @@ type EffectFn = () => void;
 /** The event a `tiny.Signals` signal dispatches to its subscribers. */
 export interface SignalEvent extends Event {
   signal: Signal<SignalValue>;
-  /** True for the event delivered when the element subscribed on load. */
-  initial?: boolean;
 }
 
 /** An upgraded custom element (see `UpgradeCustomElement`) receiving signal events. */
@@ -19,19 +17,15 @@ export interface SignalElement extends HTMLElement {
  * `onSignal` event of an element subscribed with `onConnect={signal.name}`.
  */
 export const signalTools = new tiny.Handlers(import.meta.url, {
-  /** Runs `callback` whenever any of `dependencies` changes, until the controller aborts. */
-  effect: function (
-    callback: EffectFn,
-    dependencies: Signal<SignalValue>[],
-    abortController: AbortController,
-  ): void {
-    const target = new EventTarget();
-    for (const signal of dependencies) {
-      signal.subscribe(target);
-    }
-    target.addEventListener("signal", callback, {
-      signal: abortController.signal,
-    });
+  /**
+   * Runs the element's `onSignal` handler once for each signal it has
+   * subscribed to so far, with that signal's current value. Subscribing alone
+   * only hears later changes, so list this after the signals in `onConnect`
+   * (`onConnect={[signal.filter, fn.fireSelfSignal]}`) when the element must
+   * catch up with a value that may have changed before it connected.
+   */
+  fireSelfSignal: function (this: HTMLElement): void {
+    this.dispatchEvent(new Event("tt-fire-signals"));
   },
   /** Writes the signal value as the element's text. */
   setTextContent: function (this: SignalElement, event: SignalEvent): void {
@@ -49,5 +43,23 @@ export const signalTools = new tiny.Handlers(import.meta.url, {
       return;
     }
     this.style.setProperty(`--${name}`, value?.toString() ?? "");
+  },
+});
+
+export const outdatedSignalTools = new tiny.Handlers(import.meta.url, {
+  /** Runs `callback` whenever any of `dependencies` changes, until the controller aborts. */
+  // I think this is no longer required since html attributes can now directly bind to signal values.
+  effect: function (
+    callback: EffectFn,
+    dependencies: Signal<SignalValue>[],
+    abortController: AbortController,
+  ): void {
+    const target = new EventTarget();
+    for (const signal of dependencies) {
+      signal.subscribe(target);
+    }
+    target.addEventListener("signal", callback, {
+      signal: abortController.signal,
+    });
   },
 });

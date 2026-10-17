@@ -251,20 +251,21 @@ Deno.test({
       });
       let notifications = 0;
       subscriber.addEventListener("signal", () => notifications++);
-      // A load subscribes once and delivers the current value once.
+      // A load subscribes once and sends nothing until a change.
       textModule.text.call(subscriber, new Event("load"));
       textModule.text.call(subscriber, new Event("load"));
-      assertEquals(notifications, 1);
+      assertEquals(notifications, 0);
       textModule.text().value = "first";
-      assertEquals(notifications, 2);
+      assertEquals(notifications, 1);
       subscriber.abortController.abort();
       textModule.text().value = "second";
-      assertEquals(notifications, 2);
+      subscriber.dispatchEvent(new Event("tt-fire-signals"));
+      assertEquals(notifications, 1);
       subscriber.abortController = new AbortController();
       textModule.text.call(subscriber, new Event("load"));
-      assertEquals(notifications, 3);
+      assertEquals(notifications, 1);
       textModule.text().value = "third";
-      assertEquals(notifications, 4);
+      assertEquals(notifications, 2);
       const references = await imports(first);
       assertEquals(typeof references.signal.count, "object");
       assertThrows(

@@ -141,26 +141,49 @@ Deno.test("a signal without an initial value must allow null", () => {
   new Signal<string>();
 });
 
-Deno.test("a load subscription delivers the current value, then changes", () => {
+Deno.test("a load subscription sends changes only, and fires on request", () => {
   const { Signal } = signalClasses();
   const signal = new Signal<number>(1);
   const target = new EventTarget();
-  const seen: [unknown, unknown][] = [];
+  const seen: unknown[] = [];
   target.addEventListener("signal", (event) => {
-    const { signal: source, initial } = event as Event & {
-      signal: { value: unknown };
-      initial?: boolean;
-    };
-    seen.push([source.value, initial]);
+    seen.push((event as Event & { signal: { value: unknown } }).signal.value);
   });
   const subscriber = signal as unknown as {
     handleEvent(target: unknown, event: Event): unknown;
   };
   subscriber.handleEvent(target, new Event("load"));
-  assertEquals(seen, [[1, true]]);
+  assertEquals(seen, []);
   signal.value = 2;
-  assertEquals(seen, [[1, true], [2, false]]);
+  assertEquals(seen, [2]);
   // Equal values still do not notify.
   signal.value = 2;
-  assertEquals(seen.length, 2);
+  assertEquals(seen, [2]);
+  // `fireSelfSignal` asks each subscribed signal for its current value.
+  target.dispatchEvent(new Event("tt-fire-signals"));
+  assertEquals(seen, [2, 2]);
+  signal.unsubscribe(target);
+  target.dispatchEvent(new Event("tt-fire-signals"));
+  signal.value = 3;
+  assertEquals(seen, [2, 2]);
+});
+
+Deno.test("fireSelfSignal sends every subscribed signal once", () => {
+  const { Signal, Computed } = signalClasses();
+  const a = new Signal<string>("a");
+  const b = new Signal<number>(1);
+  const doubled = new Computed(() => b.value * 2);
+  const unrelated = new Signal<string>("x");
+  const target = new EventTarget();
+  const seen: unknown[] = [];
+  target.addEventListener("signal", (event) => {
+    seen.push((event as Event & { signal: { value: unknown } }).signal.value);
+  });
+  for (const signal of [a, doubled]) signal.subscribe(target);
+  // Subscribing twice is one subscription.
+  a.subscribe(target);
+  target.dispatchEvent(new Event("tt-fire-signals"));
+  assertEquals(seen, ["a", 2]);
+  unrelated.value = "y";
+  assertEquals(seen, ["a", 2]);
 });

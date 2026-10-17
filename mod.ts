@@ -67,6 +67,7 @@ export {
 export type {
   InstanceDefinitions,
   InstanceLevels,
+  InstanceSeed,
   InstanceSignal,
   InstanceSignals,
   ReadonlySignal,

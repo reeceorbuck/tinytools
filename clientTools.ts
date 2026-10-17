@@ -32,6 +32,7 @@ import { raw } from "hono/html";
 import type { HtmlEscapedString } from "hono/utils/html";
 import {
   type InstanceLevels,
+  type InstanceSeed,
   type SignalAccessors,
   signalClasses,
   type SignalConstant,
@@ -1154,14 +1155,34 @@ type SignalsCollection<
   /** The root marker for the signals of `perInstance(name, ...)`. */
   instanceKeyFor(name: InstanceLevels<Definitions>): string;
   /**
+   * A `tt-seed` value that starts a root's new instance from `values`
+   * instead of the factory's initial values, so it begins as the server
+   * rendered it:
+   * `<fieldset tt-instance={c.instanceKey} tt-seed={c.seed({ shade: "B1" })}>`.
+   * Only writable signals of the unnamed `perInstance` are accepted. An
+   * instance resumed on the same element keeps its own values. A root has
+   * one `tt-seed`, so it can seed one of the collections it roots.
+   */
+  seed(values: InstanceSeed<Definitions>): string;
+  /** As `seed`, for a root of `perInstance(name, ...)`. */
+  seedFor<Level extends InstanceLevels<Definitions> & string>(
+    name: Level,
+    values: InstanceSeed<Definitions, Level>,
+  ): string;
+  /**
    * Runs the factory on the server with `inputs` written to its writable
    * signals and returns every signal's value, so initial markup can be
    * rendered by the same computations the browser runs. Each call builds a
    * fresh graph; nothing is shared between calls. A collection with an async
    * definition resolves it first, so the result is a promise.
+   *
+   * Per-instance signals report a fresh instance's values, or with `seed`
+   * (the object given to `seed()`) those of an instance started from it, so
+   * a seeded root renders its first text from the same computeds.
    */
   evaluateUsingInitialValues(
     inputs?: SignalInputs<Definitions>,
+    seed?: InstanceSeed<Definitions>,
   ): Deferred extends true ? Promise<SignalValues<Definitions>>
     : SignalValues<Definitions>;
 };
@@ -2168,7 +2189,13 @@ function splitFactory(
 /** `signalClasses` also returns the per-instance handle class, for validation. */
 type InternalSignalTools = SignalTools & {
   // deno-lint-ignore no-explicit-any
-  InstanceSignal: new (...args: any[]) => { readonly initialValue: unknown };
+  InstanceSignal: new (...args: any[]) => {
+    readonly initialValue: unknown;
+    seededValue(
+      seed: Record<string, unknown>,
+      instances: Map<unknown, unknown>,
+    ): unknown;
+  };
 };
 
 /** Module-level names every Signals bundle may use. */
@@ -2412,16 +2439,28 @@ class SignalsClass extends StoreClass {
     return `${this.instanceKey}-${name}`;
   }
 
-  evaluateUsingInitialValues(
-    inputs: Record<string, unknown> = {},
-  ): Record<string, unknown> | Promise<Record<string, unknown>> {
-    if (this.#deferred) {
-      return this.ensureDefined().then(() => this.#evaluate(inputs));
-    }
-    return this.#evaluate(inputs);
+  seed(values: Record<string, unknown>): string {
+    return JSON.stringify({ [this.instanceKey]: values });
   }
 
-  #evaluate(inputs: Record<string, unknown>): Record<string, unknown> {
+  seedFor(name: string, values: Record<string, unknown>): string {
+    return JSON.stringify({ [this.instanceKeyFor(name)]: values });
+  }
+
+  evaluateUsingInitialValues(
+    inputs: Record<string, unknown> = {},
+    seed?: Record<string, unknown>,
+  ): Record<string, unknown> | Promise<Record<string, unknown>> {
+    if (this.#deferred) {
+      return this.ensureDefined().then(() => this.#evaluate(inputs, seed));
+    }
+    return this.#evaluate(inputs, seed);
+  }
+
+  #evaluate(
+    inputs: Record<string, unknown>,
+    seed?: Record<string, unknown>,
+  ): Record<string, unknown> {
     const tools = signalClasses(true) as InternalSignalTools;
     const graph = runSignalFactory(this.#compiled.factory!, tools);
     for (const [name, value] of Object.entries(inputs)) {
@@ -2438,14 +2477,25 @@ class SignalsClass extends StoreClass {
       // Assigning to a computed signal throws: only writable signals are inputs.
       (graph[name] as { value: unknown }).value = value;
     }
-    // Per-instance signals report a fresh instance's value; `.all` aggregates
-    // see no instances on the server.
+    for (const name of Object.keys(seed ?? {})) {
+      if (!(graph[name] instanceof tools.InstanceSignal)) {
+        throw new TypeError(
+          `Cannot seed '${name}': it is not a per-instance signal of this collection.`,
+        );
+      }
+    }
+    // Per-instance signals report the value of one instance, started from
+    // `seed` when given and fresh otherwise; `.all` aggregates see no
+    // instances on the server.
+    const instances = new Map();
     return Object.fromEntries(
       Object.entries(graph).map(([name, signal]) => [
         name,
-        signal instanceof tools.InstanceSignal
-          ? signal.initialValue
-          : (signal as { value: unknown }).value,
+        !(signal instanceof tools.InstanceSignal)
+          ? (signal as { value: unknown }).value
+          : seed
+          ? signal.seededValue(seed, instances)
+          : signal.initialValue,
       ]),
     );
   }
