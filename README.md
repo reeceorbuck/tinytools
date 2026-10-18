@@ -417,14 +417,6 @@ const viewerSignals = new tiny.Signals(
   value: a numeric signal reads a number, a boolean signal a checkbox's state,
   and an array signal the checked values of a checkbox group or the selected
   options of a `<select multiple>`; anything else is a string.
-- A signal may also hold an element, or an array of elements, so elements find
-  each other through the signal network rather than by id or selector: a handler
-  publishes `signal.target.value = this` and a subscriber reads
-  `signal.target.value`. Elements exist only in the browser, so declare such a
-  signal as `new Signal<Element | null>()`; it starts as `null`, and
-  `evaluateUsingInitialValues` reports `null` for it. A held element is not
-  released when it leaves the document, so a handler on an upgraded custom
-  element should clear the signal when its `abortController` aborts.
 - `Computed` is read-only and updates synchronously when a signal its callback
   read changes. Dependencies are tracked on every run, so a read behind a
   condition counts only while that branch is taken. An optional second argument
@@ -613,8 +605,17 @@ const layerSignals = new tiny.Signals(
   root throws.
 - Roots of different collections can nest. One element can root several
   collections by listing their keys separated by spaces.
-- In handlers, `signal.material.for(this)` is the signal of the instance
+- In handlers, `signal.material.forInstance(this)` is the signal of the instance
   enclosing `this`. A per-instance signal has no single `.value`.
+- `signal.filterByInstance(this)` gives every signal at once as seen from
+  `this`: per-instance signals resolve to the enclosing instance and
+  collection-wide signals come back as they are, so
+  `const { operator, weekday } = signal.filterByInstance(this)` replaces one
+  `.forInstance(this)` per signal. A handler file that uses it keeps all of its
+  imported signals. `filterByInstance` cannot be used as a signal name.
+  **Under review:** it may be deprecated, since it isn't clear it earns its
+  place over `.forInstance(this)`. For now only the booking `SlotPicker` in
+  `dental` uses it; avoid adopting it elsewhere until that is decided.
 - `signal.x.all` is a read-only signal of every instance's value in document
   order, so a `Computed` depending on it is the net result of all instances. An
   instance joins when something inside its root first resolves a signal (an
@@ -631,11 +632,10 @@ const layerSignals = new tiny.Signals(
   the factory's: set `tt-seed={collection.seed(values)}` on it (or
   `collection.seedFor(name, values)` on a nested root). Only that level's
   writable signals are accepted, typed from the factory, and values travel as
-  JSON, so elements cannot be seeded. Handlers and computeds then read the
-  rendered value rather than the factory's, and `fireSelfSignal` sends it. The
-  seed applies when the instance is created; the same
-  element resumed later keeps its own values. A root has one `tt-seed`, so a
-  root of several collections can seed one of them.
+  JSON. Handlers and computeds then read the rendered value rather than the
+  factory's, and `fireSelfSignal` sends it. The seed applies when the instance
+  is created; the same element resumed later keeps its own values. A root has
+  one `tt-seed`, so a root of several collections can seed one of them.
 
   ```tsx
   <patient-picker
@@ -719,7 +719,7 @@ const noteSignals = new tiny.Signals(
 - A nested `perInstance` needs a name. Its roots carry `instanceKeyFor(name)`;
   unnamed top-level roots carry `instanceKey`. `instanceKeyFor` only accepts
   names whose signals the factory returns, so a typo fails type checking.
-- Signals resolve level by level: `signal.material.for(this)` finds the
+- Signals resolve level by level: `signal.material.forInstance(this)` finds the
   enclosing form, then the layer inside it. A layer signal used outside a layer
   root throws.
 - Read a nested signal's `.all` inside the enclosing `perInstance`, where it is

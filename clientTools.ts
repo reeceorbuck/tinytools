@@ -2283,6 +2283,11 @@ function signalNames(factory: SignalFactory): string[] {
       "Signals factory must synchronously return an object of Signal or Computed instances, or perInstance signals.",
     );
   }
+  if (Object.hasOwn(definitions, "filterByInstance")) {
+    throw new TypeError(
+      "'filterByInstance' is reserved for signal.filterByInstance(element); give the signal another name.",
+    );
+  }
   return Object.keys(definitions);
 }
 
@@ -2874,6 +2879,13 @@ export async function imports(
         };
       }
     }
+    Object.defineProperty(signalReferences, "filterByInstance", {
+      value() {
+        throw new Error(
+          "signal.filterByInstance() cannot be called during server-side definition. Call it inside a returned handler.",
+        );
+      },
+    });
     const unsupported = () => {
       throw new Error(
         "Handler definitions support only fn from tiny.imports(); request tools are unavailable.",

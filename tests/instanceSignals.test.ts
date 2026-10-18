@@ -63,21 +63,21 @@ Deno.test("per-instance signals resolve to the enclosing instance root", () => {
     const b = byId("b");
 
     // Written through the handler path, as `onChange={signal.material}` does.
-    material.for(a);
+    material.forInstance(a);
     (material as unknown as {
       handleEvent(target: unknown, event: Event): unknown;
     }).handleEvent(a, change("flow"));
 
-    assertEquals(material.for(a).value, "flow");
-    assertEquals(material.for(b).value, "bulk");
+    assertEquals(material.forInstance(a).value, "flow");
+    assertEquals(material.forInstance(b).value, "bulk");
     // Computeds inside perInstance see only their own instance.
-    assertEquals(description.for(a).value, "flow A3");
-    assertEquals(description.for(b).value, "bulk A3");
+    assertEquals(description.forInstance(a).value, "flow A3");
+    assertEquals(description.forInstance(b).value, "bulk A3");
     // The root itself belongs to its instance.
-    assertEquals(material.for(byId("one")).value, "flow");
+    assertEquals(material.forInstance(byId("one")).value, "flow");
 
     assertThrows(
-      () => material.for(byId("outside")),
+      () => material.forInstance(byId("outside")),
       Error,
       "instance root",
     );
@@ -104,9 +104,9 @@ Deno.test("`.all` aggregates every resolved instance in document order", () => {
     // Nothing scans the document: a root counts once something inside it
     // resolves a signal, as its onLoad / onChange references do.
     assertEquals(summary.value, "");
-    shade.for(byId("b")).value = "B1";
+    shade.forInstance(byId("b")).value = "B1";
     assertEquals(summary.value, "bulk B1");
-    material.for(byId("a"));
+    material.forInstance(byId("a"));
     assertEquals(summary.value, "bulk A3; bulk B1");
     assertEquals(material.all.value, ["bulk", "bulk"]);
 
@@ -115,7 +115,7 @@ Deno.test("`.all` aggregates every resolved instance in document order", () => {
       "afterbegin",
       `<fieldset id="zero" ${root}><select id="z"></select></fieldset>`,
     );
-    material.for(byId("z")).value = "flow";
+    material.forInstance(byId("z")).value = "flow";
     assertEquals(summary.value, "flow A3; bulk A3; bulk B1");
 
     // An upgraded root (one with an abortController) leaves when it aborts.
@@ -125,7 +125,7 @@ Deno.test("`.all` aggregates every resolved instance in document order", () => {
     upgraded.innerHTML = `<select id="u"></select>`;
     Object.assign(upgraded, { abortController: controller });
     byId("list").append(upgraded);
-    material.for(byId("u")).value = "glass";
+    material.forInstance(byId("u")).value = "glass";
     assertEquals(summary.value, "flow A3; bulk A3; bulk B1; glass A3");
     upgraded.remove();
     controller.abort();
@@ -135,7 +135,7 @@ Deno.test("`.all` aggregates every resolved instance in document order", () => {
     // Without an abort, a removed root is left out of values but not dropped.
     byId("one").remove();
     assertEquals(summary.value, "flow A3; bulk A3; bulk B1");
-    shade.for(byId("z")).value = "A2";
+    shade.forInstance(byId("z")).value = "A2";
     assertEquals(summary.value, "flow A2; bulk B1");
   } finally {
     uninstallDocument();
@@ -157,8 +157,8 @@ Deno.test("an aborted root re-inserted later resumes its instance", () => {
     const first = upgrade("a");
     const second = upgrade("b");
     byId("list").append(first, second);
-    shade.for(byId("a")).value = "B1";
-    material.for(byId("b")).value = "flow";
+    shade.forInstance(byId("a")).value = "B1";
+    material.forInstance(byId("b")).value = "flow";
     assertEquals(summary.value, "bulk B1; flow A3");
 
     // Removing the root parks its instance: it leaves `.all` at once.
@@ -169,7 +169,7 @@ Deno.test("an aborted root re-inserted later resumes its instance", () => {
     // The same element back in the document is the same instance.
     first.abortController = new AbortController();
     byId("list").prepend(first);
-    assertEquals(shade.for(byId("a")).value, "B1");
+    assertEquals(shade.forInstance(byId("a")).value, "B1");
     assertEquals(summary.value, "bulk B1; flow A3");
 
     // It parks again under its new controller.
@@ -180,7 +180,7 @@ Deno.test("an aborted root re-inserted later resumes its instance", () => {
     // A fresh element with the same markup is a new instance.
     const third = upgrade("a");
     byId("list").prepend(third);
-    assertEquals(shade.for(byId("a")).value, "A3");
+    assertEquals(shade.forInstance(byId("a")).value, "A3");
     assertEquals(summary.value, "bulk A3; flow A3");
   } finally {
     uninstallDocument();
@@ -192,7 +192,7 @@ Deno.test("per-instance signals stay inert outside the browser runtime", () => {
   const { material } = perInstance(() => ({ material: new Signal("bulk") }));
   // Aggregates can be declared during server-side validation.
   void material.all;
-  assertThrows(() => material.for({} as Element), Error, "client handlers");
+  assertThrows(() => material.forInstance({} as Element), Error, "client handlers");
 });
 
 Deno.test("Signals collections expose an instance root and evaluate instances", () => {
@@ -268,20 +268,20 @@ Deno.test("nested perInstance scopes each level and `.all` to its parent", () =>
     const sumA = byId("sumA");
     const sumB = byId("sumB");
     // Layers count once resolved, as their onLoad references do.
-    for (const id of ["a1", "b1", "b2"]) material.for(byId(id));
-    assertEquals(summary.for(sumA).value, "bulk (cheekguard)");
+    for (const id of ["a1", "b1", "b2"]) material.forInstance(byId(id));
+    assertEquals(summary.forInstance(sumA).value, "bulk (cheekguard)");
     assertEquals(
-      summary.for(sumB).value,
+      summary.forInstance(sumB).value,
       "bulk (cheekguard); bulk (cheekguard)",
     );
 
     // Each note keeps its own isolation and layers.
-    isolation.for(byId("isoA")).value = "rdam";
-    material.for(byId("b2")).value = "flow";
-    assertEquals(label.for(byId("a1")).value, "bulk (rdam)");
-    assertEquals(summary.for(sumA).value, "bulk (rdam)");
+    isolation.forInstance(byId("isoA")).value = "rdam";
+    material.forInstance(byId("b2")).value = "flow";
+    assertEquals(label.forInstance(byId("a1")).value, "bulk (rdam)");
+    assertEquals(summary.forInstance(sumA).value, "bulk (rdam)");
     assertEquals(
-      summary.for(sumB).value,
+      summary.forInstance(sumB).value,
       "bulk (cheekguard); flow (cheekguard)",
     );
 
@@ -290,15 +290,15 @@ Deno.test("nested perInstance scopes each level and `.all` to its parent", () =>
       "beforeend",
       `<fieldset ${layerRoot}><select id="a2"></select></fieldset>`,
     );
-    material.for(byId("a2"));
-    assertEquals(summary.for(sumA).value, "bulk (rdam); bulk (rdam)");
+    material.forInstance(byId("a2"));
+    assertEquals(summary.forInstance(sumA).value, "bulk (rdam); bulk (rdam)");
     assertEquals(
-      summary.for(sumB).value,
+      summary.forInstance(sumB).value,
       "bulk (cheekguard); flow (cheekguard)",
     );
 
     // Layer signals need a layer root; nested `.all` is read inside the note.
-    assertThrows(() => material.for(byId("isoA")), Error, `${key}-layer`);
+    assertThrows(() => material.forInstance(byId("isoA")), Error, `${key}-layer`);
     assertThrows(() => material.all, TypeError, "nested");
   } finally {
     uninstallDocument();
@@ -371,20 +371,20 @@ Deno.test("a root's seed starts its new instance from the rendered values", () =
   console.error = (...args: unknown[]) => errors.push(args);
   try {
     const { material, shade, description, summary } = layerGraph();
-    for (const id of ["a", "b", "c", "d", "e"]) material.for(byId(id));
-    assertEquals(material.for(byId("a")).value, "flow");
-    assertEquals(shade.for(byId("a")).value, "B1");
+    for (const id of ["a", "b", "c", "d", "e"]) material.forInstance(byId(id));
+    assertEquals(material.forInstance(byId("a")).value, "flow");
+    assertEquals(shade.forInstance(byId("a")).value, "B1");
     // Computeds and aggregates start from the seed.
-    assertEquals(description.for(byId("a")).value, "flow B1");
+    assertEquals(description.forInstance(byId("a")).value, "flow B1");
     assertEquals(
       summary.value,
       "flow B1; bulk A3; bulk A3; bulk A3; bulk A3",
     );
     // Another collection's seed on the root is not this one's.
-    assertEquals(shade.for(byId("e")).value, "A3");
+    assertEquals(shade.forInstance(byId("e")).value, "A3");
 
     // Computeds and unknown names are reported and skipped, as is bad JSON.
-    assertEquals(description.for(byId("c")).value, "bulk A3");
+    assertEquals(description.forInstance(byId("c")).value, "bulk A3");
     assertEquals(errors.length, 3);
     assertEquals(String(errors[0][0]).includes("'description'"), true);
     assertEquals(String(errors[1][0]).includes("'missing'"), true);
@@ -405,8 +405,8 @@ Deno.test("a resumed instance keeps its values over its seed", () => {
     root.innerHTML = `<select id="a"></select>`;
     Object.assign(root, { abortController: new AbortController() });
     byId("list").append(root);
-    assertEquals(shade.for(byId("a")).value, "B1");
-    shade.for(byId("a")).value = "C2";
+    assertEquals(shade.forInstance(byId("a")).value, "B1");
+    shade.forInstance(byId("a")).value = "C2";
 
     // Parked, then back: the edited value, not the seed.
     root.remove();
@@ -414,7 +414,7 @@ Deno.test("a resumed instance keeps its values over its seed", () => {
       .abort();
     Object.assign(root, { abortController: new AbortController() });
     byId("list").append(root);
-    assertEquals(shade.for(byId("a")).value, "C2");
+    assertEquals(shade.forInstance(byId("a")).value, "C2");
   } finally {
     uninstallDocument();
   }
@@ -429,7 +429,6 @@ Deno.test("seed and seedFor render the tt-seed the runtime reads", () => {
         const layer = perInstance("layer", () => ({
           material: new Signal<string>("bulk"),
           count: new Signal<number>(1),
-          target: new Signal<Element | null>(),
         }));
         return {
           isolation,
@@ -460,8 +459,6 @@ Deno.test("seed and seedFor render the tt-seed the runtime reads", () => {
   notes.seedFor("layer", { isolation: "x" });
   // @ts-expect-error the value must match the signal's type
   notes.seedFor("layer", { count: "2" });
-  // @ts-expect-error elements do not survive JSON
-  notes.seedFor("layer", { target: {} as Element });
 
   // The rendered attribute seeds the matching level in the browser.
   const byId = installDocument(`
@@ -478,8 +475,8 @@ Deno.test("seed and seedFor render the tt-seed the runtime reads", () => {
       isolation: new Signal<string>("rdam"),
       ...perInstance("layer", () => ({ material: new Signal<string>("bulk") })),
     }));
-    assertEquals(graph.isolation.for(byId("a")).value, "isolite");
-    assertEquals(graph.material.for(byId("a")).value, "flow");
+    assertEquals(graph.isolation.forInstance(byId("a")).value, "isolite");
+    assertEquals(graph.material.forInstance(byId("a")).value, "flow");
   } finally {
     uninstallDocument();
   }

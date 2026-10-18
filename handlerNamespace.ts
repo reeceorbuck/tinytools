@@ -225,6 +225,26 @@ export async function compileHandlerBundle(
     [...dependencies.keys()].map((key, index) => [key, `./__tiny_${index}.js`]),
   );
   const paths = new Set(syntheticPaths.values());
+  // `signal.filterByInstance` reaches every signal, so using it keeps them
+  // all. The marker path shows in the output only when it is used.
+  const filterMarkerPath = "./__tiny_filterByInstance.js";
+  paths.add(filterMarkerPath);
+  const signalKeys = [...dependencies.keys()].filter((key) =>
+    namespaceOf(key) === "signal"
+  );
+  const filterByInstanceExport = [
+    `import { marker as __tiny_marker } from ${
+      JSON.stringify(filterMarkerPath)
+    };`,
+    ...signalKeys.map((key, index) =>
+      `import { ${exportName(dependencies.get(key)!.exportName)} as __tiny_${index} } from ${
+        JSON.stringify(syntheticPaths.get(key))
+      };`
+    ),
+    `export const filterByInstance = () => [__tiny_marker${
+      signalKeys.map((_, index) => `, __tiny_${index}`).join("")
+    }];`,
+  ].join("\n");
   const plugin: Plugin = {
     name: "tiny-handler-bundle",
     setup(build) {
@@ -235,13 +255,16 @@ export async function compileHandlerBundle(
       build.onLoad(
         { filter: /^(fn|signal|template)$/, namespace: "tiny-handlers" },
         (args) => ({
-          contents: [...dependencies].filter(([key]) =>
-            namespaceOf(key) === args.path
-          ).map(([key, { exportName: name }]) =>
-            `export { ${exportName(name)} as ${
-              exportName(nameOf(key))
-            } } from ${JSON.stringify(syntheticPaths.get(key))};`
-          ).join("\n"),
+          contents: [
+            ...[...dependencies].filter(([key]) =>
+              namespaceOf(key) === args.path
+            ).map(([key, { exportName: name }]) =>
+              `export { ${exportName(name)} as ${
+                exportName(nameOf(key))
+              } } from ${JSON.stringify(syntheticPaths.get(key))};`
+            ),
+            args.path === "signal" ? filterByInstanceExport : "",
+          ].join("\n"),
           loader: "js",
         }),
       );
@@ -354,7 +377,14 @@ export async function compileHandlerBundle(
     } };`
     : "";
   const fnMembers = namespace("fn");
-  const signalMembers = namespace("signal");
+  // Each property resolves on read, so a nested level the element is not
+  // inside throws only when that signal is used. Collection-wide signals
+  // pass through as they are.
+  const filterByInstanceMember = livePaths.has(filterMarkerPath)
+    ? "filterByInstance(element) { const scoped = {}; for (const name of Object.keys(signal)) { if (name === \"filterByInstance\") continue; Object.defineProperty(scoped, name, { enumerable: true, get() { const found = signal[name]; return typeof found.forInstance === \"function\" ? found.forInstance(element) : found; } }); } return scoped; }"
+    : "";
+  const signalMembers = [namespace("signal"), filterByInstanceMember]
+    .filter(Boolean).join(", ");
   const templateMembers = namespace("template");
   const transformed = await Promise.all(
     pieces.map(async (piece) =>

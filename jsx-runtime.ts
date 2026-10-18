@@ -185,6 +185,7 @@ export const jsxAttr = (
 
 import type { JSX as HonoJSX } from "hono/jsx/jsx-runtime";
 import type { IncomingDataEvent } from "./handlers/processIncomingData.ts";
+import type { SortedEvent } from "./handlers/dragSortTools.ts";
 
 /**
  * Brand symbol for ClientFunction types.
@@ -404,6 +405,8 @@ interface GlobalOverrides {
   onDragLeave?: ClientEventHandler<DragEvent>;
   onDragOver?: ClientEventHandler<DragEvent>;
   onDrop?: ClientEventHandler<DragEvent>;
+  /** Dispatched by `dragSortTools` after a list item moves. */
+  onSorted?: ClientEventHandler<SortedEvent>;
 
   // Touch events
   onTouchStart?: ClientEventHandler<TouchEvent>;

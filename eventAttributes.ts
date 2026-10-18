@@ -1,4 +1,5 @@
 import type { ActivatedClientFunction } from "./jsx-runtime.ts";
+import type { InstanceSignal } from "./signals.ts";
 import { tryGetContext } from "hono/context-storage";
 
 /** Context variable recording whether the CSP-friendly reference transform is active. */
@@ -56,6 +57,24 @@ export type SignalReferences<TSignals> = {
     // deno-lint-ignore no-explicit-any
     & (TSignals[Name] extends (...args: any[]) => infer Signal ? Signal
       : never);
+} & {
+  /**
+   * Every signal as seen from `element`: per-instance signals resolve to the
+   * instance enclosing it, collection-wide signals are returned as they are.
+   * Client handlers only.
+   */
+  filterByInstance(element: Element): InstanceScopedSignals<TSignals>;
+};
+
+/** What `signal.filterByInstance(element)` returns. */
+export type InstanceScopedSignals<TSignals> = {
+  readonly [Name in keyof TSignals]: TSignals[Name] extends
+    // deno-lint-ignore no-explicit-any
+    (...args: any[]) => infer Signal
+    // deno-lint-ignore no-explicit-any
+    ? Signal extends InstanceSignal<any, infer Instance, any> ? Instance
+    : Signal
+    : never;
 };
 
 const referenceDetails = new WeakMap<
@@ -132,6 +151,13 @@ export function createSignalReferences<TSignals>(
   return new Proxy({}, {
     get(_target, name) {
       if (typeof name !== "string") return undefined;
+      if (name === "filterByInstance") {
+        return () => {
+          throw new Error(
+            "signal.filterByInstance() resolves instances in client handlers; while rendering, bind signals as signal.name.",
+          );
+        };
+      }
       const resolved = resolveHandler(name);
       if (typeof resolved !== "string") return undefined;
       const unavailable = () => {

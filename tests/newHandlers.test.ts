@@ -120,6 +120,60 @@ Deno.test({
   },
 });
 
+Deno.test({
+  name:
+    "signal.filterByInstance keeps every signal and resolves each from the element",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  async fn() {
+    try {
+      // `layered` is per-instance (it has forInstance); `shared` is not.
+      const signals = `data:text/javascript,${
+        encodeURIComponent(
+          'const layered = { forInstance: (element) => ({ value: "for " + element.id }) };' +
+            'const shared = { value: "everywhere" };' +
+            "export const layeredSignal = () => layered;" +
+            "export const sharedSignal = () => shared;" +
+            "export const unusedSignal = () => { throw new Error('read'); };",
+        )
+      }`;
+      const result = await compileOne(
+        "function () { const scoped = signal.filterByInstance(this); return [scoped.layered.value, scoped.shared.value, Object.keys(scoped)]; }",
+        [
+          ["signal:layered", signals, "layeredSignal"],
+          ["signal:shared", signals, "sharedSignal"],
+          ["signal:unused", signals, "unusedSignal"],
+        ],
+      );
+      assertEquals(result.dependencies.sort(), [
+        "signal:layered",
+        "signal:shared",
+        "signal:unused",
+      ]);
+      assertStringIncludes(result.code, "filterByInstance(element)");
+      const module = await loadCode(result.code);
+      // Properties resolve on read, so the throwing signal never runs.
+      assertEquals(module.consumer.call({ id: "root-a" }), [
+        "for root-a",
+        "everywhere",
+        ["layered", "shared", "unused"],
+      ]);
+
+      const without = await compileOne(
+        "function () { return signal.shared.value; }",
+        [
+          ["signal:shared", signals, "sharedSignal"],
+          ["signal:unused", signals, "unusedSignal"],
+        ],
+      );
+      assertEquals(without.dependencies, ["signal:shared"]);
+      assertEquals(without.code.includes("filterByInstance"), false);
+    } finally {
+      (await getEsbuild()).stop();
+    }
+  },
+});
+
 function reset() {
   (cache as { trustCache: boolean }).trustCache = false;
   handlers.clear();
@@ -418,10 +472,10 @@ Deno.test({
       });
       assertEquals(module.materials().value, "flow");
       // The second root counts once something inside it resolves a signal.
-      module.material().for(window.document.getElementById("b"));
+      module.material().forInstance(window.document.getElementById("b"));
       assertEquals(module.materials().value, "flow, bulk");
       // Read from a handler, the accessor is the per-instance handle.
-      assertEquals(module.material().for(a).value, "flow");
+      assertEquals(module.material().forInstance(a).value, "flow");
     } finally {
       const globals = globalThis as Record<string, unknown>;
       delete globals.document;
@@ -453,6 +507,15 @@ Deno.test("Signals reject non-signal outputs and definition-time value access", 
       () => asynchronous.ensureDefined(),
       TypeError,
       "synchronously",
+    );
+    const reservedName = new Signals(
+      import.meta.url,
+      ({ Signal }) => ({ filterByInstance: new Signal(1) }),
+    );
+    await assertRejects(
+      () => reservedName.ensureDefined(),
+      TypeError,
+      "'filterByInstance' is reserved",
     );
     const readsValue = new Signals(import.meta.url, ({ Signal }) => {
       const value = new Signal(1);

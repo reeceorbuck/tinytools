@@ -1,22 +1,20 @@
 /**
- * What a signal may hold. Besides plain values, a signal can carry an element
- * (or a list of them) so the elements of a page reach each other through the
- * signal network instead of id or selector lookups: an element publishes
- * itself from a handler (`signal.target.value = this`) and a subscriber reads
- * it. Elements exist only in the browser, so such a signal starts as `null`,
- * which is also what `evaluateUsingInitialValues` reports for it on the
- * server. A held element outlives its removal from the document: when the
- * holder is an upgraded custom element, clear the signal when its
- * `abortController` aborts.
+ * What a signal may hold.
+ *
+ * Signals once could also hold elements (or arrays of them). That was removed
+ * (2026-10-18) because no use case gained much from it: data-backed elements
+ * already have ids to look up, while element values could not be seeded or
+ * evaluated on the server and went stale when content was re-rendered. It
+ * could be added back if a case turns up where it is a significant
+ * improvement, such as reaching elements inside shadow roots that id lookups
+ * cannot.
  */
 export type SignalValue =
   | string
   | number
   | boolean
   | null
-  | readonly string[]
-  | Element
-  | readonly Element[];
+  | readonly string[];
 
 export interface ReadonlySignal<Value = SignalValue> {
   readonly value: Value;
@@ -60,7 +58,7 @@ export interface InstanceSignal<
 > {
   name?: string;
   /** The signal of the instance enclosing `element`. */
-  for(element: Element): Instance;
+  forInstance(element: Element): Instance;
   /**
    * Every instance's value in document order. It updates when any instance
    * changes, when an instance is first resolved (something inside its root
@@ -221,7 +219,7 @@ export type SignalValues<Definitions extends SignalDefinitions> = {
 /**
  * The values an instance root can start its instance with: the writable
  * signals of one `perInstance` level (`Level` is its name, `never` for the
- * unnamed top level). Seeds travel as JSON, so elements cannot be seeded.
+ * unnamed top level). Seeds travel as JSON.
  */
 export type InstanceSeed<
   Definitions extends SignalDefinitions,
@@ -237,8 +235,7 @@ export type InstanceSeed<
       : never
       : never
   ]?: Definitions[Name] extends // deno-lint-ignore no-explicit-any
-  InstanceSignal<infer Value, any, any>
-    ? Exclude<Value, Element | readonly Element[]>
+  InstanceSignal<infer Value, any, any> ? Value
     : never;
 };
 
@@ -735,14 +732,14 @@ export function signalClasses(
       return this.#group.template[this.#name].name;
     }
 
-    for(element: Element): SignalInstance<Value> {
+    forInstance(element: Element): SignalInstance<Value> {
       if (!runtime) {
         throw new Error("Signal values are only available in client handlers.");
       }
       const signal = this.#group.instanceFor(element)[this.#name];
       // A nested signal resolves its own, inner instance next.
       return signal instanceof InstanceSignalHandle
-        ? signal.for(element) as SignalInstance<Value>
+        ? signal.forInstance(element) as SignalInstance<Value>
         : signal as SignalInstance<Value>;
     }
 
@@ -780,25 +777,25 @@ export function signalClasses(
 
     get value(): never {
       throw new Error(
-        "Per-instance signals have a value per instance: read `.for(element).value`, or `.all.value` for every instance.",
+        "Per-instance signals have a value per instance: read `.forInstance(element).value`, or `.all.value` for every instance.",
       );
     }
 
     subscribe(target: Element): void {
-      this.for(target).subscribe(target);
+      this.forInstance(target).subscribe(target);
     }
 
     unsubscribe(target: Element): void {
-      this.for(target).unsubscribe(target);
+      this.forInstance(target).unsubscribe(target);
     }
 
     /**
      * As a handler, acts on the instance enclosing the element. Read from a
-     * handler (no event) it returns itself so `.for()` and `.all` are reachable.
+     * handler (no event) it returns itself so `.forInstance()` and `.all` are reachable.
      */
     handleEvent(target: unknown, event?: Event | null): unknown {
       if (!event) return this;
-      return this.for(target as Element).handleEvent(target, event);
+      return this.forInstance(target as Element).handleEvent(target, event);
     }
   }
 
