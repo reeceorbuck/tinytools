@@ -6,9 +6,12 @@ declare const tiny: { runHandler(target: HTMLElement, event: Event): unknown };
 export type SortedDetail = {
   /** The item that moved. */
   item: HTMLElement;
-  /** Its index before the move. */
+  /** Its index among the sortable items before the move. */
   from: number;
-  /** Its index after the move. */
+  /**
+   * Its index after the move. Equal to `from` when the item only crossed a
+   * separator, such as a group heading (see `groupedDragSortTools`).
+   */
   to: number;
 };
 
@@ -31,9 +34,11 @@ function dragSortDragged(list: HTMLElement): HTMLElement | null {
 
 /**
  * Moves `dragged` `dy` px from its slot, clamped to the list, and shifts each
- * item it has passed by one slot. An item makes way once the dragged item's
- * leading edge is `data-sort-threshold` (default 0.6) of the way over it.
- * Returns the item the dragged one should be inserted before (null for the
+ * of `children` it has passed by one slot. A child makes way once the
+ * dragged item's leading edge is `data-sort-threshold` (default 0.6) of the
+ * way over it. `children` are the list's items, or with separators between
+ * them every rendered child; children before the first item stay above it.
+ * Returns the child the dragged item should be inserted before (null for the
  * end), or undefined when it has not left its slot. Positions come from
  * `offsetTop`, which ignores transforms, so the layout stays fixed for the
  * whole drag.
@@ -42,11 +47,13 @@ function layoutDragSort(
   list: HTMLElement,
   dragged: HTMLElement,
   dy: number,
+  children: HTMLElement[] = dragSortItems(list),
 ): HTMLElement | null | undefined {
-  const items = dragSortItems(list);
-  const first = items[0];
-  const last = items[items.length - 1];
-  const minDy = first.offsetTop - dragged.offsetTop;
+  const firstItem = children.find((child) =>
+    child.getAttribute("draggable") === "true"
+  )!;
+  const last = children[children.length - 1];
+  const minDy = firstItem.offsetTop - dragged.offsetTop;
   const maxDy = last.offsetTop + last.offsetHeight - dragged.offsetHeight -
     dragged.offsetTop;
   const offset = Math.min(maxDy, Math.max(minDy, dy));
@@ -57,53 +64,56 @@ function layoutDragSort(
   const slot = dragged.offsetHeight + gap;
   const top = dragged.offsetTop + offset;
   const bottom = top + dragged.offsetHeight;
-  const from = items.indexOf(dragged);
+  const from = children.indexOf(dragged);
   let insertBefore: HTMLElement | null | undefined = undefined;
-  for (const [index, item] of items.entries()) {
-    if (item === dragged) continue;
+  for (const [index, child] of children.entries()) {
+    if (child === dragged) continue;
     if (
-      index > from && bottom > item.offsetTop + item.offsetHeight * threshold
+      index > from && bottom > child.offsetTop + child.offsetHeight * threshold
     ) {
-      item.style.transform = `translateY(${-slot}px)`;
-      insertBefore = items[index + 1] ?? null;
+      child.style.transform = `translateY(${-slot}px)`;
+      insertBefore = children[index + 1] ?? null;
     } else if (
       index < from &&
-      top < item.offsetTop + item.offsetHeight * (1 - threshold)
+      top < child.offsetTop + child.offsetHeight * (1 - threshold)
     ) {
-      item.style.transform = `translateY(${slot}px)`;
-      insertBefore ??= item;
+      child.style.transform = `translateY(${slot}px)`;
+      insertBefore ??= child;
     } else {
-      item.style.transform = "";
+      child.style.transform = "";
     }
   }
   return insertBefore;
 }
 
+/** Returns every child to its slot, animated by the children's own transitions. */
+function resetDragSort(list: HTMLElement): void {
+  for (const child of Array.from(list.children) as HTMLElement[]) {
+    child.style.transform = "";
+  }
+}
+
 /**
  * Commits the order and animates `dragged` from where it was let go into its
- * new slot. The other items are already drawn in their new slots, so their
- * transforms are cleared with transitions off.
+ * new slot. The other children are already drawn in their new slots, so
+ * their transforms are cleared with transitions off.
  */
 function settleDragSort(
   list: HTMLElement,
   dragged: HTMLElement,
   insertBefore: HTMLElement | null,
 ): void {
-  const items = dragSortItems(list);
+  const children = Array.from(list.children) as HTMLElement[];
   const releasedTop = dragged.getBoundingClientRect().top;
-  for (const item of items) {
-    item.style.transition = "none";
-    item.style.transform = "";
+  for (const child of children) {
+    child.style.transition = "none";
+    child.style.transform = "";
   }
-  // Keep the new position relative to the list's other children too.
-  list.insertBefore(
-    dragged,
-    insertBefore ?? items[items.length - 1].nextSibling,
-  );
+  list.insertBefore(dragged, insertBefore);
   const slotTop = dragged.getBoundingClientRect().top;
   dragged.style.transform = `translateY(${releasedTop - slotTop}px)`;
   dragged.offsetHeight; // Commit the start position before transitioning.
-  for (const item of items) item.style.transition = "";
+  for (const child of children) child.style.transition = "";
   delete dragged.dataset.dragging;
   dragged.style.transform = "";
 }
@@ -149,11 +159,16 @@ function dispatchSorted(list: HTMLElement, detail: SortedDetail): void {
  * item must cover a neighbour before it makes way; the default is 0.6.
  * After a move the list dispatches a bubbling `sorted` event
  * ({@link SortedEvent}).
+ *
+ * For lists with group headings, or items that can also be dropped on
+ * targets outside the list, use `groupedDragSortTools`, which builds on
+ * these.
  */
 export const dragSortTools = new Handlers(import.meta.url, {
   dragSortItems,
   dragSortDragged,
   layoutDragSort,
+  resetDragSort,
   settleDragSort,
   dispatchSorted,
   startDragSort: function (this: HTMLElement, event: DragEvent) {
@@ -172,11 +187,18 @@ export const dragSortTools = new Handlers(import.meta.url, {
     document.body.append(ghost);
     event.dataTransfer.setDragImage(ghost, 0, 0);
     setTimeout(() => ghost.remove());
+    const startY = String(event.clientY);
     this.dataset.dragSortFrom = String(dragSortItems(this).indexOf(item));
-    this.dataset.dragSortStartY = String(event.clientY);
+    this.dataset.dragSortStartY = startY;
     // Chrome cancels the drag if the source is restyled during dragstart.
+    // A drag can also end before the next frame, so only mark the item if
+    // this drag is still the one in progress.
     requestAnimationFrame(() => {
-      item.dataset.dragging = "";
+      if (
+        this.dataset.dragSortStartY === startY && item.parentElement === this
+      ) {
+        item.dataset.dragging = "";
+      }
     });
   },
   moveDragSort: function (this: HTMLElement, event: DragEvent) {
@@ -213,35 +235,32 @@ export const dragSortTools = new Handlers(import.meta.url, {
    * outside the list) animates back.
    */
   endDragSort: function (this: HTMLElement, _event: DragEvent) {
-    for (const item of dragSortItems(this)) {
-      delete item.dataset.dragging;
-      item.style.transform = "";
-    }
+    for (const item of dragSortItems(this)) delete item.dataset.dragging;
+    resetDragSort(this);
     delete this.dataset.dragSortFrom;
     delete this.dataset.dragSortStartY;
   },
   /**
-   * Alt+ArrowUp / Alt+ArrowDown moves the focused item, as a keyboard
-   * alternative to dragging.
+   * Alt+ArrowUp / Alt+ArrowDown moves the focused item past its neighbour,
+   * as a keyboard alternative to dragging.
    */
   sortByKey: function (this: HTMLElement, event: KeyboardEvent) {
     if (!event.altKey) return;
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
     const item = (event.target as Element).closest<HTMLElement>(
       '[draggable="true"]',
     );
     if (!item || item.parentElement !== this) return;
     const items = dragSortItems(this);
     const from = items.indexOf(item);
-    const to = event.key === "ArrowUp"
-      ? from - 1
-      : event.key === "ArrowDown"
-      ? from + 1
-      : from;
-    if (to === from || to < 0 || to >= items.length) return;
+    const to = event.key === "ArrowUp" ? from - 1 : from + 1;
+    if (to < 0 || to >= items.length) return;
     event.preventDefault();
-    if (to < from) this.insertBefore(item, items[to]);
-    else this.insertBefore(item, items[to].nextSibling);
-    item.focus();
+    // Moving an element blurs whatever had focus inside it.
+    const focused = document.activeElement as HTMLElement | null;
+    if (to < from) items[to].before(item);
+    else items[to].after(item);
+    (focused && item.contains(focused) ? focused : item).focus();
     dispatchSorted(this, { item, from, to });
   },
 });

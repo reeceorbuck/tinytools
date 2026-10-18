@@ -31,3 +31,4 @@ export {
   type SortedDetail,
   type SortedEvent,
 } from "./dragSortTools.ts";
+export { groupedDragSortTools } from "./groupedDragSortTools.ts";
