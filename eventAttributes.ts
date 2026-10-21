@@ -37,6 +37,26 @@ export type HandlerReference<TName extends string, TFunction> = {
  */
 export type HandlerProp<TFunction> = HandlerReference<string, TFunction>;
 
+/**
+ * Type for a component prop that receives a signal reference from
+ * `tiny.imports()`, such as `signal.query`, which the component binds as an
+ * element property or attribute or subscribes with `onConnect`.
+ *
+ * @example
+ * ```tsx
+ * function Search(props: { query: SignalProp<string> }) {
+ *   return <input value={props.query} />;
+ * }
+ * ```
+ */
+export type SignalProp<Value = unknown> =
+  & HandlerReference<string, unknown>
+  & {
+    readonly initial: Value;
+    /** See `RenderableSignal.withInitial`. */
+    withInitial(initial?: Value): SignalProp<Value>;
+  };
+
 export type HandlerReferences<TFunctions> = {
   readonly [Name in keyof TFunctions]:
     & HandlerReference<
@@ -84,17 +104,31 @@ export type InstanceScopedSignals<TSignals> = {
  * live text: an inline `<signal-text>` holding the initial value, subscribed
  * to the signal so each change replaces its text.
  */
-export type RenderableSignal<Signal> = {
+export interface RenderableSignal<Signal> {
   /**
    * The value the signal starts with, as `evaluateUsingInitialValues()`
    * reports it (a per-instance signal's is a fresh instance's), for
    * initial markup such as an input's `value`.
    */
-  readonly initial: Signal extends // deno-lint-ignore no-explicit-any
-  InstanceSignal<infer Value, any, any> ? Value
-    : Signal extends { readonly value: infer Value } ? Value
-    : never;
-};
+  readonly initial: SignalInitial<Signal>;
+  /**
+   * This signal with `initial` rendered in place of the value it starts
+   * with, wherever it is bound or placed, for values the server cannot
+   * render (a seeded per-instance signal's) or a placeholder. Without one,
+   * the binding renders no initial value and leaves the element's own markup
+   * as it is, so a textarea's children are its placeholder:
+   * `<textarea value={signal.message.withInitial()}>Loading…</textarea>`.
+   * The signal replaces it on its next change, or at once with
+   * `fn.fireSelfSignal` in `onConnect`.
+   */
+  withInitial(initial?: SignalInitial<Signal>): this;
+}
+
+/** The value type of a signal, as `RenderableSignal.initial` gives it. */
+type SignalInitial<Signal> = Signal extends // deno-lint-ignore no-explicit-any
+InstanceSignal<infer Value, any, any> ? Value
+  : Signal extends { readonly value: infer Value } ? Value
+  : never;
 
 /**
  * A signal reference from `tiny.imports()`, given as an element property such
@@ -122,8 +156,9 @@ export const signalProperties: {
     readonly setter: `set${Capitalize<Property>}`;
   };
 } = {
-  // A textarea's or select's `value` attribute is not what it shows.
-  value: { tags: ["input"], setter: "setValue" },
+  // A select's `value` attribute is not what it shows. A textarea's is not
+  // either, so a textarea renders no initial value (see signalPropertyProps).
+  value: { tags: ["input", "textarea"], setter: "setValue" },
   checked: { tags: ["input"], setter: "setChecked" },
   selected: { tags: ["option"], setter: "setSelected" },
   disabled: {
@@ -186,7 +221,8 @@ type SignalProperties = typeof signalProperties;
 /** What `tiny.imports()` gives signal references to implement `RenderableSignal`. */
 export type SignalRendering = {
   initial(name: string): unknown;
-  text(reference: object, name: string): JSX.Element;
+  /** Live text for `reference`, starting from `initial`. */
+  text(reference: object, initial: unknown): JSX.Element;
   /** The handler an element given a signal as `binding` runs. */
   setter(binding: SignalBinding): object;
 };
@@ -203,6 +239,11 @@ type SignalPropertyBinding = {
    * attribute out.
    */
   initial: string | boolean | undefined;
+  /**
+   * Whether the reference renders no initial value (`withInitial()`), leaving
+   * the element's own markup in place.
+   */
+  omitted: boolean;
   /** `<bundle>.<name>`, which the setter checks each signal event against. */
   signal: string;
   /** The signal reference, subscribed by `onConnect`. */
@@ -247,6 +288,13 @@ export function isBoundSignal(value: unknown): boolean {
     signalBindings.has(value);
 }
 
+/** Whether JSX `children` holds anything to render (whitespace counts). */
+function hasChildren(children: unknown): boolean {
+  if (Array.isArray(children)) return children.some(hasChildren);
+  return children !== undefined && children !== null && children !== false &&
+    children !== "";
+}
+
 /**
  * An element's props with signal references given as properties or
  * attributes (`<input value={signal.query} />`, `<div
@@ -288,7 +336,21 @@ export function signalPropertyProps(
   const setters = new Map<string, object>();
   for (const name of bound) {
     const binding = signalBindings.get(props[name] as object)!(name);
-    expanded[name] = binding.initial;
+    if (binding.omitted) {
+      // The element keeps its own markup (a textarea's children).
+      delete expanded[name];
+    } else if (name === "value" && tag?.toLowerCase() === "textarea") {
+      // A textarea shows its children, not a `value` attribute.
+      if (hasChildren(props.children)) {
+        throw new TypeError(
+          "A <textarea> given a signal as its value takes no children: the signal's initial value is its text. Use signal.name.withInitial() to keep its children as a placeholder instead.",
+        );
+      }
+      delete expanded.value;
+      expanded.children = binding.initial;
+    } else {
+      expanded[name] = binding.initial;
+    }
     expanded[signalPropertyAttribute(name)] = binding.signal;
     // A signal bound twice is subscribed once, and `setBoundAttributes`
     // writes every attribute, so it runs once.
@@ -414,43 +476,66 @@ export function createSignalReferences<TSignals>(
           `Signal '${name}' is only a handler reference while rendering. Read signal values in client handlers.`,
         );
       };
-      const reference: object = Object.freeze(Object.defineProperties({}, {
-        value: { get: unavailable, set: unavailable },
-        subscribe: { get: unavailable },
-        unsubscribe: { get: unavailable },
-        initial: { get: () => renderingFor("used as .initial").initial(name) },
-        // A template literal (`${signal.x}`) would stringify the reference.
-        [Symbol.toPrimitive]: {
-          value: () => {
-            throw new Error(
-              `Signal '${name}' was turned into a string. Place it as a JSX child ({signal.${name}}) for live text, or use signal.${name}.initial for its initial value.`,
-            );
+      /**
+       * A reference rendering `initialOf()` as the value it starts with, or,
+       * when `omitted`, no initial value at all.
+       */
+      const createReference = (
+        initialOf: () => unknown,
+        omitted = false,
+      ): object => {
+        const reference: object = Object.freeze(Object.defineProperties({}, {
+          value: { get: unavailable, set: unavailable },
+          subscribe: { get: unavailable },
+          unsubscribe: { get: unavailable },
+          initial: { get: initialOf },
+          withInitial: {
+            value: (initial?: unknown) =>
+              createReference(() => initial, initial === undefined),
           },
-        },
-      }));
-      signalTexts.set(
-        reference,
-        () => renderingFor("as a JSX child").text(reference, name),
+          // A template literal (`${signal.x}`) would stringify the reference.
+          [Symbol.toPrimitive]: {
+            value: () => {
+              throw new Error(
+                `Signal '${name}' was turned into a string. Place it as a JSX child ({signal.${name}}) for live text, or use signal.${name}.initial for its initial value.`,
+              );
+            },
+          },
+        }));
+        signalTexts.set(
+          reference,
+          () =>
+            renderingFor("as a JSX child").text(
+              reference,
+              omitted ? "" : initialOf(),
+            ),
+        );
+        signalBindings.set(reference, (binding) => {
+          const rendering = renderingFor(`as ${binding}`);
+          const initial = initialOf();
+          const signal = handlerReferencePattern.exec(resolved)?.[1];
+          if (!signal) {
+            throw new TypeError(`Invalid handler reference: ${name}`);
+          }
+          return {
+            // Written as the setter writes it.
+            initial: isSignalAttribute(binding)
+              ? initial?.toString()
+              : binding === "value"
+              ? initial?.toString() ?? ""
+              : Boolean(initial),
+            omitted,
+            signal,
+            onConnect: reference,
+            onSignal: rendering.setter(binding),
+          };
+        });
+        referenceDetails.set(reference, { name, resolved });
+        return reference;
+      };
+      return createReference(() =>
+        renderingFor("used as .initial").initial(name)
       );
-      signalBindings.set(reference, (binding) => {
-        const rendering = renderingFor(`as ${binding}`);
-        const initial = rendering.initial(name);
-        const signal = handlerReferencePattern.exec(resolved)?.[1];
-        if (!signal) throw new TypeError(`Invalid handler reference: ${name}`);
-        return {
-          // Written as the setter writes it.
-          initial: isSignalAttribute(binding)
-            ? initial?.toString()
-            : binding === "value"
-            ? initial?.toString() ?? ""
-            : Boolean(initial),
-          signal,
-          onConnect: reference,
-          onSignal: rendering.setter(binding),
-        };
-      });
-      referenceDetails.set(reference, { name, resolved });
-      return reference;
     },
   }) as SignalReferences<TSignals>;
 }

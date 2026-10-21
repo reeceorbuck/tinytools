@@ -579,8 +579,36 @@ It expands to `value={signal.query.initial}`, `onConnect={signal.query}` and
 `onSignal` handlers, plus a `tt-value-signal` attribute naming the signal.
 `setValue` then ignores every other signal the input subscribes to, so the
 element can bind more signals of its own, and writes the value only when it
-differs, so typing is not interrupted. Only `<input>` takes one: a textarea's or
-select's `value` attribute is not what it shows.
+differs, so typing is not interrupted. A select does not take one: its `value`
+attribute is not what it shows.
+
+A `<textarea>` takes one too. It shows its text rather than a `value` attribute,
+so the initial value is rendered as its text, and it takes no other children.
+
+Where the server cannot render the value the element should start with, such as
+a seeded per-instance signal's (its fresh value is not the item's own), bind
+`signal.x.withInitial(value)` instead: the same signal, rendered from `value`.
+Without a value, `signal.x.withInitial()` renders no initial value at all and
+leaves the element's own markup in place, so a textarea's children are its
+placeholder. Either works wherever the signal is bound or placed as a child.
+List `fn.fireSelfSignal` in `onConnect` to replace the placeholder at once (it
+runs after the binding's subscription):
+
+```tsx
+<textarea
+  value={signal.message.withInitial()}
+  onConnect={fn.fireSelfSignal}
+>
+  Loading…
+</textarea>;
+```
+
+Precompiled, a textarea's text sits between its tags, out of an attribute's
+reach, so a bound textarea there keeps its own text (`withInitial()`) or is
+listed in `jsxPrecompileSkipElements`; anything else throws.
+
+A component that takes a signal to bind types the prop as `SignalProp<Value>`,
+as `HandlerProp` types a handler.
 
 A checkbox or radio given a signal as its `checked` works the same way, through
 `setChecked` and a `tt-checked-signal` attribute. It is checked while the

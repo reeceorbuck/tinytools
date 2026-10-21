@@ -3136,12 +3136,12 @@ async function signalRendering(
   };
   return {
     initial,
-    text: (reference, name) =>
+    text: (reference, initialText) =>
       jsx("signal-text", {
         onConnect: reference,
         onSignal: fn.setTextContent,
         // Written as setTextContent writes it.
-        children: `${initial(name)}`,
+        children: `${initialText}`,
         // A JSXNode renders like the Element JSX expressions are typed as.
       }) as unknown as JSX.Element,
     setter: (binding) => fn[signalSetter(binding)] as object,

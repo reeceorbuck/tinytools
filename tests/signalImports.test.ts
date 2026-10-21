@@ -304,12 +304,70 @@ Deno.test({
       // Each attribute appears once.
       assertEquals(precompiled.match(/onconnect=/g)?.length, 1);
       assertEquals(precompiled.match(/onsignal=/g)?.length, 1);
-      // A textarea's value attribute is not what it shows.
+      // A select's value attribute is not what it shows.
       assertThrows(
-        () => jsx("textarea", { value: signal.query }),
+        () => jsx("select", { value: signal.query }),
         TypeError,
-        "only <input> can",
+        "only <input> or <textarea> can",
       );
+      assertThrows(
+        () =>
+          jsxTemplate(
+            strings("<select ", "></select>"),
+            jsxAttr("value", signal.query),
+          ),
+        TypeError,
+        "only <input> or <textarea> can",
+      );
+      // A textarea's initial value is its text; the element's own onConnect
+      // (fn.fireSelfSignal, say) follows the binding's signal.
+      const textareaParts = [
+        'tt-value-signal="signalImports_test.query"',
+        `${handler} tt-handler-connect="signalImports_test.query signalImports_test.focus"`,
+        `${onSignal} tt-handler-signal="signals.setValue"`,
+      ];
+      const textarea = unhashed(jsx("textarea", {
+        value: signal.query,
+        onConnect: fn.focus,
+      }));
+      for (const part of textareaParts) assertStringIncludes(textarea, part);
+      assertEquals(textarea.includes("value="), false);
+      assertStringIncludes(textarea, ">tea</textarea>");
+      assertThrows(
+        () => jsx("textarea", { value: signal.query, children: "x" }),
+        TypeError,
+        "takes no children",
+      );
+      // withInitial() renders no initial value, so the textarea keeps its
+      // own children as a placeholder, in either mode.
+      for (
+        const html of [
+          unhashed(jsx("textarea", {
+            value: signal.query.withInitial(),
+            onConnect: fn.focus,
+            children: "Loading…",
+          })),
+          unhashed(jsxTemplate(
+            strings("<textarea ", " ", ">Loading…</textarea>"),
+            jsxAttr("value", signal.query.withInitial()),
+            jsxAttr("onConnect", fn.focus),
+          )),
+        ]
+      ) {
+        for (const part of textareaParts) assertStringIncludes(html, part);
+        assertStringIncludes(html, ">Loading…</textarea>");
+        assertEquals(html.includes("tea"), false);
+        assertEquals(html.includes("value="), false);
+      }
+      // Elsewhere it leaves the attribute out, and child text starts empty.
+      const withoutInitial = unhashed(jsx("div", {
+        "data-status": signal.query.withInitial(),
+        hidden: signal.query.withInitial(),
+        children: signal.query.withInitial(),
+      }));
+      assertEquals(withoutInitial.includes("data-status="), false);
+      assertEquals(withoutInitial.includes("hidden="), false);
+      assertStringIncludes(withoutInitial, "></signal-text>");
       assertThrows(
         () =>
           jsxTemplate(
@@ -317,8 +375,19 @@ Deno.test({
             jsxAttr("value", signal.query),
           ),
         TypeError,
-        "only <input> can",
+        "jsxPrecompileSkipElements",
       );
+      // withInitial applies wherever the signal is bound or placed.
+      assertStringIncludes(
+        unhashed(jsx("input", { value: signal.query.withInitial("…") })),
+        'value="…" tt-value-signal="signalImports_test.query"',
+      );
+      assertStringIncludes(
+        unhashed(jsx("p", { children: signal.query.withInitial("Loading") })),
+        ">Loading</signal-text>",
+      );
+      assertEquals(signal.query.withInitial("x").initial, "x");
+      assertEquals(signal.query.initial, "tea");
       // A signal as checked renders checked only when its value is truthy.
       const unchecked = unhashed(jsx("input", {
         type: "checkbox",

@@ -74,6 +74,27 @@ Deno.test("a signal bound to another event counts it", () => {
   assertThrows(() => text.handleEvent({}, click), TypeError, "counts");
 });
 
+Deno.test("a trigger fires on every event and on fire()", () => {
+  type Dispatching = {
+    value: unknown;
+    fire(): void;
+    subscribe(target: EventTarget): void;
+    handleEvent(target: unknown, event: Event): unknown;
+  };
+  const { Trigger } = signalClasses();
+  const addRow = new Trigger() as unknown as Dispatching;
+  let notifications = 0;
+  const listener = new EventTarget();
+  listener.addEventListener("signal", () => notifications++);
+  addRow.subscribe(listener);
+  addRow.handleEvent({}, { type: "click" } as Event);
+  // A change event fires it too, rather than reading the control's value.
+  addRow.handleEvent({}, { type: "change", target: { value: "x" } } as unknown as Event);
+  addRow.fire();
+  assertEquals(notifications, 3);
+  assertThrows(() => (addRow.value = 1), TypeError, "fire()");
+});
+
 Deno.test("signals take their name from the input that writes them", () => {
   const { Signal } = signalClasses();
   const signal = new Signal<string | null>(null) as unknown as {

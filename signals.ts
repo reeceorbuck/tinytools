@@ -38,6 +38,22 @@ export interface Signal<Value = SignalValue> extends ReadonlySignal<Value> {
   readonly [writableSignal]?: true;
 }
 
+/** Type-only marker telling triggers apart from other read-only signals. */
+declare const triggerSignal: unique symbol;
+
+/**
+ * A signal that carries no value, only the fact that something happened:
+ * subscribers run each time it fires. Bound as a handler to any event other
+ * than `connect`/`load` (`onClick={signal.addRow}`) it fires once per event;
+ * `fire()` fires it from a handler. Its `value` changes on every fire so
+ * dependents notice, but is otherwise meaningless.
+ */
+export interface Trigger extends ReadonlySignal<unknown> {
+  /** Notifies subscribers and dependent computeds. */
+  fire(): void;
+  readonly [triggerSignal]?: true;
+}
+
 /** Type-only marker recording which named `perInstance` a signal belongs to. */
 declare const instanceLevel: unique symbol;
 
@@ -131,6 +147,11 @@ export interface SignalTools {
       ...args: null extends Value ? [] : [initialValue: Value]
     ): Signal<Value>;
   };
+  /**
+   * A signal with no value of its own, for one element to tell others that
+   * something happened (a button asking a list to add a row).
+   */
+  Trigger: new () => Trigger;
   /**
    * A read-only signal recomputed whenever a signal its callback read
    * changes. Dependencies are tracked on every run, so reads behind
@@ -461,6 +482,39 @@ export function signalClasses(
     }
   }
 
+  class TriggerInstance extends SignalInstance<number> implements Trigger {
+    #fired = 0;
+
+    constructor() {
+      super(0);
+    }
+
+    fire(): void {
+      super.value = ++this.#fired;
+    }
+
+    override get value(): number {
+      return super.value;
+    }
+
+    override set value(_value: number) {
+      throw new TypeError("Triggers have no value to set: call `fire()`.");
+    }
+
+    /** Every event fires it, except the ones that subscribe. */
+    override handleEvent(target: unknown, event?: Event | null): this {
+      if (
+        (event?.type === "connect" || event?.type === "load") &&
+        target instanceof EventTarget
+      ) {
+        this.subscribe(target);
+      } else if (event) {
+        this.fire();
+      }
+      return this;
+    }
+  }
+
   class ComputedInstance<Value> extends SignalInstance<Value>
     implements ReadonlySignal<Value> {
     #compute: () => Value;
@@ -677,7 +731,8 @@ export function signalClasses(
         const signal = graph[name];
         if (
           !(signal instanceof SignalInstance) ||
-          signal instanceof ComputedInstance
+          signal instanceof ComputedInstance ||
+          signal instanceof TriggerInstance
         ) {
           report(
             `Cannot seed '${name}': it is not a writable signal of this perInstance level.`,
@@ -848,6 +903,7 @@ export function signalClasses(
   return Object.assign(
     {
       Signal: SignalInstance,
+      Trigger: TriggerInstance,
       Computed: ComputedInstance,
       signalsFrom: signalsFrom as SignalTools["signalsFrom"],
       perInstance: perInstance as unknown as SignalTools["perInstance"],

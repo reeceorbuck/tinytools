@@ -78,6 +78,7 @@ export type {
   SignalDefinitions,
   SignalTools,
   SignalValue,
+  Trigger,
 } from "./signals.ts";
 // Registry exports (used by build process)
 export {
@@ -86,6 +87,7 @@ export {
   type HandlerProp,
   type HandlerReference,
   type HandlerReferences,
+  type SignalProp,
 } from "./eventAttributes.ts";
 export { handlers } from "./clientFunctions.ts";
 export {

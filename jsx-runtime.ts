@@ -149,6 +149,17 @@ function bindSignalProperties(
       for (const [name] of entries) delete props[name];
       return entries;
     });
+    // A textarea's text sits between its tags, out of an attribute's reach.
+    if ("children" in props) {
+      if (props.children !== "") {
+        throw new TypeError(
+          `A precompiled <${
+            slots[bound[0]].tag
+          }> cannot render its signal's initial value as its text. Use signal.name.withInitial() to keep its own text as a placeholder, or add it to "jsxPrecompileSkipElements".`,
+        );
+      }
+      delete props.children;
+    }
     own[0].push(...Object.entries(props));
     bound.forEach((at, i) => values[at] = renderAttributes(own[i]));
   }
@@ -623,7 +634,8 @@ type ElementEventOverridesStrict =
 
 /** The tags that take a signal as each property, as `signalProperties` lists. */
 type SignalPropertyTags = {
-  [Property in SignalProperty]: Property extends "value" | "checked" ? "input"
+  [Property in SignalProperty]: Property extends "value" ? "input" | "textarea"
+    : Property extends "checked" ? "input"
     : Property extends "selected" ? "option"
     : Property extends "disabled" ?
         | "button"
