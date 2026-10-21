@@ -97,10 +97,32 @@ export type RenderableSignal<Signal> = {
     : never;
 };
 
+/** A signal reference from `tiny.imports()`, given as an element's `value`. */
+export type SignalValueReference =
+  & HandlerReference<string, unknown>
+  & { readonly initial: unknown };
+
 /** What `tiny.imports()` gives signal references to implement `RenderableSignal`. */
 export type SignalRendering = {
   initial(name: string): unknown;
   text(reference: object, name: string): JSX.Element;
+  /** `fn.setValue`, which an element given a signal as `value` runs. */
+  setValue(): object;
+};
+
+/** The attribute naming the signal an element's `value` follows. */
+export const SIGNAL_VALUE_ATTRIBUTE = "tt-value-signal";
+
+/** What a signal reference given as an element's `value` binds. */
+type SignalValueBinding = {
+  /** The initial value, written as `setValue` writes it. */
+  value: string;
+  /** `<bundle>.<name>`, which `setValue` checks each signal event against. */
+  signal: string;
+  /** The signal reference, subscribed by `onConnect`. */
+  onConnect: object;
+  /** `fn.setValue`, run by `onSignal`. */
+  onSignal: object;
 };
 
 const referenceDetails = new WeakMap<
@@ -125,6 +147,63 @@ export function signalChild(value: unknown): unknown {
   }
   if (typeof value !== "object" || value === null) return value;
   return signalTexts.get(value)?.() ?? value;
+}
+
+/** Each signal reference's binding as an element's `value`. */
+const signalValues = new WeakMap<object, () => SignalValueBinding>();
+
+/** Whether `value` is a signal reference, which `value` binds as live. */
+export function isSignalValue(value: unknown): boolean {
+  return typeof value === "object" && value !== null && signalValues.has(value);
+}
+
+/**
+ * An input's props with a signal reference given as `value` (`<input
+ * value={signal.query} />`) expanded to what keeps it live: the initial
+ * value, `onConnect` subscribing the signal and `onSignal` running
+ * `setValue`, each placed first among the handlers the element already binds.
+ * `tt-value-signal` names the signal, so `setValue` ignores the other signals
+ * the element subscribes to. Other props are returned as they are.
+ */
+export function signalValueProps(
+  props: Record<string, unknown>,
+  tag?: string,
+): Record<string, unknown> {
+  const value = props.value;
+  if (!isSignalValue(value)) return props;
+  // A textarea's or select's `value` attribute is not what it shows.
+  if (tag !== undefined && tag.toLowerCase() !== "input") {
+    throw new TypeError(
+      `Only an <input> takes a signal as its value, not <${tag}>. Bind onConnect={signal.name} and onSignal={fn.setValue} instead.`,
+    );
+  }
+  const binding = signalValues.get(value as object)!();
+  const expanded: Record<string, unknown> = {
+    ...props,
+    value: binding.value,
+    [SIGNAL_VALUE_ATTRIBUTE]: binding.signal,
+  };
+  for (
+    const [attribute, reference] of [
+      ["onConnect", binding.onConnect],
+      ["onSignal", binding.onSignal],
+    ] as const
+  ) {
+    // An event attribute matches whatever its case (`onconnect` too).
+    const name = Object.keys(expanded).find((key) =>
+      key.toLowerCase() === attribute.toLowerCase()
+    ) ?? attribute;
+    const bound = expanded[name];
+    expanded[name] = [
+      reference,
+      ...(bound === undefined || bound === null
+        ? []
+        : Array.isArray(bound)
+        ? bound
+        : [bound]),
+    ];
+  }
+  return expanded;
 }
 
 export function handlerReferenceAttributes(
@@ -237,6 +316,19 @@ export function createSignalReferences<TSignals>(
         reference,
         () => renderingFor("as a JSX child").text(reference, name),
       );
+      signalValues.set(reference, () => {
+        const rendering = renderingFor("as a value");
+        const initial = rendering.initial(name);
+        const signal = handlerReferencePattern.exec(resolved)?.[1];
+        if (!signal) throw new TypeError(`Invalid handler reference: ${name}`);
+        return {
+          // Written as setValue writes it.
+          value: initial?.toString() ?? "",
+          signal,
+          onConnect: reference,
+          onSignal: rendering.setValue(),
+        };
+      });
       referenceDetails.set(reference, { name, resolved });
       return reference;
     },

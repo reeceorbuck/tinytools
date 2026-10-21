@@ -565,6 +565,21 @@ The `signalTools` collection from `tinytools/handlers` provides `effect`,
 `setTextContent`, `setValue` and `setCssProperty` (which writes
 `--<signal name>`).
 
+An input given a signal as its `value` renders the signal's initial value and
+follows each change:
+
+```tsx
+<input value={signal.query} onInput={signal.query} />;
+```
+
+It expands to `value={signal.query.initial}`, `onConnect={signal.query}` and
+`onSignal={fn.setValue}`, placed first among the element's own `onConnect` and
+`onSignal` handlers, plus a `tt-value-signal` attribute naming the signal.
+`setValue` then ignores every other signal the input subscribes to, so the
+element can bind more signals of its own, and writes the value only when it
+differs, so typing is not interrupted. Only `<input>` takes one: a textarea's or
+select's `value` attribute is not what it shows.
+
 ### Per-instance signals
 
 When a component renders several times on a page (for example each layer of a

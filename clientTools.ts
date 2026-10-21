@@ -3114,7 +3114,9 @@ async function signalRendering(
     import("./jsx-runtime.ts"),
   ]);
   await signalTools.ensureBuilt();
-  const fn = createHandlerReferences<Record<"setTextContent", unknown>>(
+  const fn = createHandlerReferences<
+    Record<"setTextContent" | "setValue", unknown>
+  >(
     (name) =>
       resolveToolAccessFromChain([signalTools], "function", name, recordUsage),
   );
@@ -3141,6 +3143,7 @@ async function signalRendering(
         children: `${initial(name)}`,
         // A JSXNode renders like the Element JSX expressions are typed as.
       }) as unknown as JSX.Element,
+    setValue: () => fn.setValue as object,
   };
 }
 

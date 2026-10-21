@@ -16,7 +16,7 @@ import {
   Signals,
 } from "../clientTools.ts";
 import { buildScriptFiles } from "../build.ts";
-import { Fragment, jsx } from "../jsx-runtime.ts";
+import { Fragment, jsx, jsxAttr, jsxTemplate } from "../jsx-runtime.ts";
 import {
   handlerBundles,
   handlers,
@@ -235,6 +235,89 @@ Deno.test({
         `<p>${bound("signalImports_test.count", 3)} doubled is ${
           bound("signalImports_test.doubled", 6)
         }</p>`,
+      );
+    } finally {
+      await Deno.remove(directory, { recursive: true }).catch(() => {});
+      reset();
+      (await getEsbuild()).stop();
+    }
+  },
+});
+
+Deno.test({
+  name: "a signal given as value renders its initial value and stays live",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  async fn() {
+    reset();
+    const directory = "./.test-build-output/signal-value";
+    const search = new Signals(import.meta.url, ({ Signal }) => ({
+      query: new Signal("tea"),
+      filter: new Signal(0),
+    }));
+    const clicks = new Handlers(import.meta.url, {
+      focus(this: HTMLElement) {},
+    });
+    try {
+      await buildScriptFiles({ fresh: true, publicDir: directory });
+      const { signal, fn } = await imports(search, clicks);
+      const strings = (...parts: string[]) =>
+        Object.assign(parts, { raw: parts }) as unknown as TemplateStringsArray;
+      // Bundle names carry content hashes.
+      const unhashed = (html: unknown) =>
+        String(html).replace(/(\w+)_[0-9a-f]{5}\./g, "$1.");
+      const handler = 'onconnect="tiny.runHandler(this,event)"';
+      const onSignal = 'onsignal="tiny.runHandler(this,event)"';
+      const alone =
+        `value="tea" tt-value-signal="signalImports_test.query" ${handler} tt-handler-connect="signalImports_test.query" ${onSignal} tt-handler-signal="signals.setValue"`;
+      assertEquals(
+        unhashed(jsx("input", { value: signal.query })),
+        `<input value="tea" tt-value-signal="signalImports_test.query" ${handler} tt-handler-connect="signalImports_test.query" is="tt-input" ${onSignal} tt-handler-signal="signals.setValue"/>`,
+      );
+      assertEquals(
+        unhashed(jsxTemplate(
+          strings("<input ", "/>"),
+          jsxAttr("value", signal.query),
+        )),
+        `<input is="tt-input" ${alone}/>`,
+      );
+      // The element's own handlers follow the binding's, in either mode.
+      const merged = [
+        'value="tea"',
+        'tt-value-signal="signalImports_test.query"',
+        `${handler} tt-handler-connect="signalImports_test.query signalImports_test.filter signalImports_test.focus"`,
+        `${onSignal} tt-handler-signal="signals.setValue signalImports_test.focus"`,
+      ];
+      const fromJsx = unhashed(jsx("input", {
+        onConnect: [signal.filter, fn.focus],
+        value: signal.query,
+        onSignal: fn.focus,
+      }));
+      for (const part of merged) assertStringIncludes(fromJsx, part);
+      const precompiled = unhashed(jsxTemplate(
+        strings("<input ", " ", " ", "/>"),
+        jsxAttr("onConnect", [signal.filter, fn.focus]),
+        jsxAttr("value", signal.query),
+        jsxAttr("onSignal", fn.focus),
+      ));
+      for (const part of merged) assertStringIncludes(precompiled, part);
+      // Each attribute appears once.
+      assertEquals(precompiled.match(/onconnect=/g)?.length, 1);
+      assertEquals(precompiled.match(/onsignal=/g)?.length, 1);
+      // A textarea's value attribute is not what it shows.
+      assertThrows(
+        () => jsx("textarea", { value: signal.query }),
+        TypeError,
+        "Only an <input>",
+      );
+      assertThrows(
+        () =>
+          jsxTemplate(
+            strings("<textarea ", "></textarea>"),
+            jsxAttr("value", signal.query),
+          ),
+        TypeError,
+        "Only an <input>",
       );
     } finally {
       await Deno.remove(directory, { recursive: true }).catch(() => {});
