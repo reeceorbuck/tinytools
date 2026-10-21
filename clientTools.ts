@@ -13,6 +13,7 @@
 import type {
   ActivateClientFunctions,
   BrandAsClientFunction as _BrandAsClientFunction,
+  JSX,
 } from "./jsx-runtime.ts";
 import {
   type ActivateScopedStyles,
@@ -49,6 +50,7 @@ import {
   type Events,
   type HandlerReferences,
   type SignalReferences,
+  type SignalRendering,
 } from "./eventAttributes.ts";
 
 // Import shared registries from registry modules
@@ -1185,6 +1187,18 @@ type SignalsCollection<
     seed?: InstanceSeed<Definitions>,
   ): Deferred extends true ? Promise<SignalValues<Definitions>>
     : SignalValues<Definitions>;
+  /**
+   * This collection, for `tiny.imports()`, with the server's initial values
+   * evaluated from `inputs` and `seed` as `evaluateUsingInitialValues` does:
+   * `tiny.imports(wageSignals.withInputs({ netProduction }))`. The imported
+   * signals' `.initial` and live text placed as a child then start from
+   * those values. It changes nothing in the browser: a seeded root still
+   * needs its `tt-seed`. Anywhere else it is the collection itself.
+   */
+  withInputs(
+    inputs?: SignalInputs<Definitions>,
+    seed?: InstanceSeed<Definitions>,
+  ): SignalsCollection<Definitions, Deferred>;
 };
 
 /**
@@ -2320,6 +2334,15 @@ function serverReferences(
  * factory once against the shared signal runtime (signals.ts), and each
  * signal is exported as an accessor that can be referenced like any handler.
  */
+/** What each `collection.withInputs()` stands for, for `tiny.imports()`. */
+const signalInputs = new WeakMap<object, SignalEvaluation>();
+
+type SignalEvaluation = {
+  collection: SignalsClass;
+  inputs: Record<string, unknown>;
+  seed?: Record<string, unknown>;
+};
+
 class SignalsClass extends StoreClass {
   #prelude: { code: string };
   /** The compiled factory; set once an async definition has resolved. */
@@ -2450,6 +2473,29 @@ class SignalsClass extends StoreClass {
 
   seedFor(name: string, values: Record<string, unknown>): string {
     return JSON.stringify({ [this.instanceKeyFor(name)]: values });
+  }
+
+  /** `evaluateUsingInitialValues()` for a collection already defined. */
+  _initialValues(
+    inputs: Record<string, unknown> = {},
+    seed?: Record<string, unknown>,
+  ): Record<string, unknown> {
+    return this.#evaluate(inputs, seed);
+  }
+
+  withInputs(
+    inputs: Record<string, unknown> = {},
+    seed?: Record<string, unknown>,
+  ): this {
+    // Members run on the collection, so its private fields stay reachable.
+    const withInputs = new Proxy(this, {
+      get: (target, property) => {
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    signalInputs.set(withInputs, { collection: this, inputs, seed });
+    return withInputs;
   }
 
   evaluateUsingInitialValues(
@@ -2808,8 +2854,15 @@ export async function imports<
   >
 >;
 export async function imports(
-  ...imported: Importable[]
+  ...given: Importable[]
 ): Promise<ImportedTools<unknown, unknown, unknown, unknown, unknown>> {
+  const evaluations = new Map<SignalsClass, SignalEvaluation>();
+  const imported = given.map((item) => {
+    const evaluation = signalInputs.get(item);
+    if (!evaluation) return item;
+    evaluations.set(evaluation.collection, evaluation);
+    return evaluation.collection;
+  });
   const constantSets = imported.filter((item) =>
     item instanceof ConstantsClass
   );
@@ -2959,6 +3012,9 @@ export async function imports(
   });
   const signals = tools.filter((tool) => tool instanceof SignalsClass);
   const templates = tools.filter((tool) => tool instanceof TemplatesClass);
+  const rendering = signals.length
+    ? await signalRendering(signals, evaluations, recordUsage)
+    : undefined;
   // Rendering a template puts its markup on the page, so the page needs the
   // assets the markup was rendered with, as if it had rendered them itself.
   const template = new Proxy({}, {
@@ -2994,9 +3050,19 @@ export async function imports(
   });
   return {
     constants: mergeConstants({}, constantSets),
-    signal: createSignalReferences((name) =>
-      resolveToolAccessFromChain(signals, "function", name, recordUsage)
-    ),
+    signal: createSignalReferences((name) => {
+      // Unlike handlers, a signal name in two collections is never an
+      // override: each element would silently bind to the last one.
+      const owners = signals.filter((tool) => tool._handlerFilenames.has(name));
+      if (owners.length > 1) {
+        throw new Error(
+          `Ambiguous signal '${name}': it is defined by the collections ${
+            owners.map((tool) => `'${tool.instanceKey}'`).join(" and ")
+          }. Import those collections in separate tiny.imports() calls.`,
+        );
+      }
+      return resolveToolAccessFromChain(signals, "function", name, recordUsage);
+    }, rendering),
     fn: createHandlerReferences((name) =>
       (handlers as Record<string, unknown>)[name]
     ),
@@ -3010,6 +3076,71 @@ export async function imports(
       }
       return context;
     },
+  };
+}
+
+/**
+ * Registers `signalTools` for a build when the app defines a `tiny.Signals`
+ * collection, since a signal placed as a JSX child renders with its
+ * `setTextContent`. Otherwise it is loaded only by the first `tiny.imports()`
+ * of a signal, after the build, so its bundle would be missing from a fresh
+ * build. An app without signals never loads it.
+ */
+export async function registerSignalTextTools(): Promise<void> {
+  for (const tools of registeredClientTools) {
+    if (tools instanceof SignalsClass) {
+      await import("./handlers/signals.ts");
+      return;
+    }
+  }
+}
+
+/**
+ * Implements `signal.name.initial` and a signal reference placed as a JSX
+ * child, which renders the initial value inside `<signal-text
+ * onConnect={signal} onSignal={fn.setTextContent}>`, so the text is there
+ * before any script runs and follows each change after; a custom element is
+ * inline, like a span.
+ * Both must be synchronous to sit inline in JSX, so `signalTools` is built
+ * here, ahead of any use. Both modules are loaded lazily: they import this one.
+ */
+async function signalRendering(
+  signals: readonly SignalsClass[],
+  evaluations: ReadonlyMap<SignalsClass, SignalEvaluation>,
+  recordUsage: (type: ToolUsageType, filename: string) => void,
+): Promise<SignalRendering> {
+  const [{ signalTools }, { jsx }] = await Promise.all([
+    import("./handlers/signals.ts"),
+    import("./jsx-runtime.ts"),
+  ]);
+  await signalTools.ensureBuilt();
+  const fn = createHandlerReferences<Record<"setTextContent", unknown>>(
+    (name) =>
+      resolveToolAccessFromChain([signalTools], "function", name, recordUsage),
+  );
+  // Each collection's factory runs once per tiny.imports(), on first use.
+  const initialValues = new Map<SignalsClass, Record<string, unknown>>();
+  const initial = (name: string) => {
+    const owner = signals.findLast((tool) => tool._handlerFilenames.has(name))!;
+    if (!initialValues.has(owner)) {
+      const evaluation = evaluations.get(owner);
+      initialValues.set(
+        owner,
+        owner._initialValues(evaluation?.inputs, evaluation?.seed),
+      );
+    }
+    return initialValues.get(owner)![name];
+  };
+  return {
+    initial,
+    text: (reference, name) =>
+      jsx("signal-text", {
+        onConnect: reference,
+        onSignal: fn.setTextContent,
+        // Written as setTextContent writes it.
+        children: `${initial(name)}`,
+        // A JSXNode renders like the Element JSX expressions are typed as.
+      }) as unknown as JSX.Element,
   };
 }
 

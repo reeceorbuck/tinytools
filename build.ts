@@ -14,6 +14,7 @@ import {
   cache,
   memoryBuild,
   registeredClientTools,
+  registerSignalTextTools,
   setGeneratedFilenameHashLength,
   setGeneratedHandlerHashLength,
   setGeneratedStyleHashLength,
@@ -323,6 +324,7 @@ export async function buildScriptFiles(options: BuildOptions = {}) {
   performance.mark("startup:buildScriptFilesStart");
   performance.mark("buildScriptFiles:begin");
 
+  await registerSignalTextTools();
   for (const tools of registeredClientTools) {
     await tools.ensureDefined();
   }

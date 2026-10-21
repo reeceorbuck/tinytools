@@ -1,5 +1,11 @@
-import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
-import { pathToFileURL } from "node:url";
+import {
+  assertEquals,
+  assertExists,
+  assertRejects,
+  assertStringIncludes,
+  assertThrows,
+} from "@std/assert";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { getEsbuild } from "../esbuildInit.ts";
 import {
   cache,
@@ -10,6 +16,7 @@ import {
   Signals,
 } from "../clientTools.ts";
 import { buildScriptFiles } from "../build.ts";
+import { Fragment, jsx } from "../jsx-runtime.ts";
 import {
   handlerBundles,
   handlers,
@@ -155,4 +162,161 @@ Deno.test("Signals definitions reject captures, signal imports and non-factories
   } finally {
     reset();
   }
+});
+
+Deno.test({
+  name: "a signal name defined by two imported collections is ambiguous",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  async fn() {
+    reset();
+    const directory = "./.test-build-output/signal-ambiguous";
+    const images = new Signals(import.meta.url, ({ Signal }) => ({
+      opens: new Signal(0),
+      imageSrc: new Signal(""),
+    }));
+    const attachments = new Signals(import.meta.url, ({ Signal }) => ({
+      opens: new Signal(0),
+      href: new Signal(""),
+    }));
+    try {
+      await buildScriptFiles({ fresh: true, publicDir: directory });
+      const { signal } = await imports(images, attachments);
+      // Names only one collection defines still resolve.
+      assertExists(signal.imageSrc);
+      assertThrows(() => signal.opens, Error, "Ambiguous signal 'opens'");
+      // Imported separately, each collection's `opens` is unambiguous.
+      assertExists((await imports(images)).signal.opens);
+      assertExists((await imports(attachments)).signal.opens);
+    } finally {
+      await Deno.remove(directory, { recursive: true }).catch(() => {});
+      reset();
+      (await getEsbuild()).stop();
+    }
+  },
+});
+
+Deno.test({
+  name:
+    "signal.name.initial and a signal placed as a child render its initial value",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  async fn() {
+    reset();
+    const directory = "./.test-build-output/signal-bind";
+    const counters = new Signals(import.meta.url, ({ Signal, Computed }) => {
+      const count = new Signal(3);
+      const doubled = new Computed(() => count.value * 2, [count]);
+      return { count, doubled };
+    });
+    try {
+      await buildScriptFiles({ fresh: true, publicDir: directory });
+      const { signal } = await imports(counters);
+      const html = String(
+        jsx("p", {
+          children: [
+            signal.count,
+            " doubled is ",
+            signal.doubled,
+          ],
+        }),
+      );
+      assertEquals([signal.count.initial, signal.doubled.initial], [3, 6]);
+      assertEquals(
+        String(jsx(Fragment, { children: signal.count })),
+        String(jsx("p", { children: signal.count })).slice(3, -4),
+      );
+      assertThrows(() => `${signal.count}`, Error, "turned into a string");
+      const bound = (handler: string, value: number) =>
+        `<signal-text onconnect="tiny.runHandler(this,event)" tt-handler-connect="${handler}" onsignal="tiny.runHandler(this,event)" tt-handler-signal="signals.setTextContent">${value}</signal-text>`;
+      assertEquals(
+        // Bundle names carry content hashes.
+        html.replace(/(\w+)_[0-9a-f]{5}\./g, "$1."),
+        `<p>${bound("signalImports_test.count", 3)} doubled is ${
+          bound("signalImports_test.doubled", 6)
+        }</p>`,
+      );
+    } finally {
+      await Deno.remove(directory, { recursive: true }).catch(() => {});
+      reset();
+      (await getEsbuild()).stop();
+    }
+  },
+});
+
+Deno.test({
+  name: "collection.withInputs() starts imported signals from those inputs",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  async fn() {
+    reset();
+    const directory = "./.test-build-output/signal-with-inputs";
+    const wages = new Signals(import.meta.url, ({ Signal, Computed }) => {
+      const production = new Signal<number>(0);
+      const pay = new Computed(() => `$${production.value * 0.4}`, [
+        production,
+      ]);
+      return { production, pay };
+    });
+    try {
+      await buildScriptFiles({ fresh: true, publicDir: directory });
+      const withInputs = wages.withInputs({ production: 1000 });
+      // Anywhere but tiny.imports() it is the collection itself.
+      assertEquals(withInputs.instanceKey, wages.instanceKey);
+      assertEquals(withInputs.evaluateUsingInitialValues().pay, "$0");
+      const { signal } = await imports(withInputs);
+      assertEquals([signal.production.initial, signal.pay.initial], [
+        1000,
+        "$400",
+      ]);
+      assertStringIncludes(
+        String(jsx("p", { children: signal.pay })),
+        ">$400</signal-text>",
+      );
+      // Inputs belong to that import only.
+      assertEquals((await imports(wages)).signal.pay.initial, "$0");
+      const { signal: wrong } = await imports(
+        wages.withInputs({ pay: "$1" } as never),
+      );
+      assertThrows(() => wrong.pay.initial, Error);
+    } finally {
+      await Deno.remove(directory, { recursive: true }).catch(() => {});
+      reset();
+      (await getEsbuild()).stop();
+    }
+  },
+});
+
+Deno.test("a build writes signalTools only for an app that defines signals", async () => {
+  const fixture = fileURLToPath(
+    new URL("./fixtures/signal-build.ts", import.meta.url),
+  );
+  /** Whether a fresh build wrote the bundle holding `setTextContent`. */
+  const writesSignalTools = async (kind: string) => {
+    const directory = `./.test-build-output/signal-build-${kind}`;
+    try {
+      const result = await new Deno.Command(Deno.execPath(), {
+        args: ["run", "--no-lock", "-A", fixture, directory, kind],
+        stdout: "piped",
+        stderr: "piped",
+      }).output();
+      assertEquals(
+        result.code,
+        0,
+        new TextDecoder().decode(result.stdout) +
+          new TextDecoder().decode(result.stderr),
+      );
+      for await (const entry of Deno.readDir(`${directory}/handlers`)) {
+        const code = await Deno.readTextFile(
+          `${directory}/handlers/${entry.name}`,
+        );
+        if (code.includes("setTextContent")) return true;
+      }
+      return false;
+    } finally {
+      await Deno.remove(directory, { recursive: true }).catch(() => {});
+    }
+  };
+  assertEquals(await writesSignalTools("signals"), true);
+  assertEquals(await writesSignalTools("handlers"), false);
 });

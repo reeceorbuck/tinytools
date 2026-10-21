@@ -16,15 +16,18 @@
  * @module
  */
 
-export { Fragment, jsxEscape } from "hono/jsx/jsx-runtime";
+export { Fragment } from "hono/jsx/jsx-runtime";
 import {
+  Fragment,
   jsx as honoJsx,
   jsxAttr as honoJsxAttr,
+  jsxEscape as honoJsxEscape,
   jsxTemplate as honoJsxTemplate,
 } from "hono/jsx/jsx-runtime";
 import {
   type HandlerReference,
   handlerReferenceAttributes,
+  signalChild,
 } from "./eventAttributes.ts";
 import {
   markElementNode,
@@ -98,14 +101,27 @@ function inspectTemplate(
   return need;
 }
 
+/** A precompiled child expression: a signal reference renders as live text. */
+export const jsxEscape: typeof honoJsxEscape = (value) =>
+  honoJsxEscape(signalChild(value) as typeof value);
+
 export const jsxTemplate: typeof honoJsxTemplate = withTemplateRoots(
   honoJsxTemplate,
   inspectTemplate,
 );
 
 export const jsx: typeof honoJsx = (tag, props, key) => {
+  // A component gets its children as given; where it places them in an
+  // element (or fragment), a signal reference among them renders as live text.
+  if (tag === Fragment && props && "children" in props) {
+    props = { ...props, children: signalChild(props.children) };
+  }
   if (typeof tag === "function") {
     return honoJsx(wrapComponent(tag as (props: never) => unknown), props, key);
+  }
+  if (props && "children" in props) {
+    const children = signalChild(props.children);
+    if (children !== props.children) props = { ...props, children };
   }
   if (!props) return markElementNode(honoJsx(tag, props, key));
   let expanded = props;

@@ -116,7 +116,13 @@ export type InstanceLevels<Definitions> = {
 
 export interface SignalTools {
   Signal: {
-    new <Value extends SignalValue>(initialValue: Value): Signal<Value>;
+    /**
+     * The value type is inferred widened (`new Signal(0)` is a
+     * `Signal<number>`, not `Signal<0>`). `Value` is left unconstrained
+     * because a constraint naming primitives makes TypeScript keep the
+     * literal; the parameter's `& SignalValue` does the checking instead.
+     */
+    new <Value>(initialValue: Value & SignalValue): Signal<Value>;
     /**
      * Without an initial value a signal starts as `null`, so that is only
      * allowed when the value type includes `null`.

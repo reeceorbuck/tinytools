@@ -1,4 +1,4 @@
-import type { ActivatedClientFunction } from "./jsx-runtime.ts";
+import type { ActivatedClientFunction, JSX } from "./jsx-runtime.ts";
 import type { InstanceSignal } from "./signals.ts";
 import { tryGetContext } from "hono/context-storage";
 
@@ -55,7 +55,8 @@ export type SignalReferences<TSignals> = {
   readonly [Name in keyof TSignals]:
     & HandlerReference<Name & string, TSignals[Name]>
     // deno-lint-ignore no-explicit-any
-    & (TSignals[Name] extends (...args: any[]) => infer Signal ? Signal
+    & (TSignals[Name] extends (...args: any[]) => infer Signal
+      ? Signal & RenderableSignal<Signal>
       : never);
 } & {
   /**
@@ -77,10 +78,54 @@ export type InstanceScopedSignals<TSignals> = {
     : never;
 };
 
+/**
+ * Rendering helpers on a signal reference from `tiny.imports()`. Placed as a
+ * JSX child (`<p>Total: {signal.total}</p>`), the reference itself renders as
+ * live text: an inline `<signal-text>` holding the initial value, subscribed
+ * to the signal so each change replaces its text.
+ */
+export type RenderableSignal<Signal> = {
+  /**
+   * The value the signal starts with, as `evaluateUsingInitialValues()`
+   * reports it (a per-instance signal's is a fresh instance's), for
+   * initial markup such as an input's `value`.
+   */
+  readonly initial: Signal extends
+    // deno-lint-ignore no-explicit-any
+    InstanceSignal<infer Value, any, any> ? Value
+    : Signal extends { readonly value: infer Value } ? Value
+    : never;
+};
+
+/** What `tiny.imports()` gives signal references to implement `RenderableSignal`. */
+export type SignalRendering = {
+  initial(name: string): unknown;
+  text(reference: object, name: string): JSX.Element;
+};
+
 const referenceDetails = new WeakMap<
   object,
   { name: string; resolved: string }
 >();
+
+/** Each signal reference's live text, rendered when it is placed as a child. */
+const signalTexts = new WeakMap<object, () => JSX.Element>();
+
+/**
+ * What the JSX runtime renders for a child: a signal reference becomes its
+ * live text, other values are returned as they are. Arrays are searched, since a
+ * child expression may hold several.
+ */
+export function signalChild(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    const children = value.map(signalChild);
+    return children.some((child, index) => child !== value[index])
+      ? children
+      : value;
+  }
+  if (typeof value !== "object" || value === null) return value;
+  return signalTexts.get(value)?.() ?? value;
+}
 
 export function handlerReferenceAttributes(
   attributeName: string,
@@ -147,6 +192,7 @@ export function createHandlerReferences<TFunctions>(
 
 export function createSignalReferences<TSignals>(
   resolveHandler: (name: string) => unknown,
+  rendering?: SignalRendering,
 ): SignalReferences<TSignals> {
   return new Proxy({}, {
     get(_target, name) {
@@ -160,16 +206,37 @@ export function createSignalReferences<TSignals>(
       }
       const resolved = resolveHandler(name);
       if (typeof resolved !== "string") return undefined;
+      const renderingFor = (member: string) => {
+        if (!rendering) {
+          throw new Error(
+            `signal.${name} ${member} is only available on signals from tiny.imports().`,
+          );
+        }
+        return rendering;
+      };
       const unavailable = () => {
         throw new Error(
           `Signal '${name}' is only a handler reference while rendering. Read signal values in client handlers.`,
         );
       };
-      const reference = Object.freeze(Object.defineProperties({}, {
+      const reference: object = Object.freeze(Object.defineProperties({}, {
         value: { get: unavailable, set: unavailable },
         subscribe: { get: unavailable },
         unsubscribe: { get: unavailable },
+        initial: { get: () => renderingFor("used as .initial").initial(name) },
+        // A template literal (`${signal.x}`) would stringify the reference.
+        [Symbol.toPrimitive]: {
+          value: () => {
+            throw new Error(
+              `Signal '${name}' was turned into a string. Place it as a JSX child ({signal.${name}}) for live text, or use signal.${name}.initial for its initial value.`,
+            );
+          },
+        },
       }));
+      signalTexts.set(
+        reference,
+        () => renderingFor("as a JSX child").text(reference, name),
+      );
       referenceDetails.set(reference, { name, resolved });
       return reference;
     },
