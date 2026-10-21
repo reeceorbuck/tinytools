@@ -49,6 +49,7 @@ import {
   createSignalReferences,
   type Events,
   type HandlerReferences,
+  signalProperties,
   type SignalReferences,
   type SignalRendering,
 } from "./eventAttributes.ts";
@@ -3115,7 +3116,10 @@ async function signalRendering(
   ]);
   await signalTools.ensureBuilt();
   const fn = createHandlerReferences<
-    Record<"setTextContent" | "setValue", unknown>
+    Record<
+      "setTextContent" | "setValue" | "setChecked" | "setSelected",
+      unknown
+    >
   >(
     (name) =>
       resolveToolAccessFromChain([signalTools], "function", name, recordUsage),
@@ -3143,7 +3147,7 @@ async function signalRendering(
         children: `${initial(name)}`,
         // A JSXNode renders like the Element JSX expressions are typed as.
       }) as unknown as JSX.Element,
-    setValue: () => fn.setValue as object,
+    setter: (property) => fn[signalProperties[property].setter] as object,
   };
 }
 

@@ -319,6 +319,63 @@ Deno.test({
         TypeError,
         "Only an <input>",
       );
+      // A signal as checked renders checked only when its value is truthy.
+      const unchecked = unhashed(jsx("input", {
+        type: "checkbox",
+        checked: signal.filter,
+      }));
+      assertEquals(unchecked.includes("checked="), false);
+      assertStringIncludes(
+        unchecked,
+        'tt-checked-signal="signalImports_test.filter"',
+      );
+      assertStringIncludes(
+        unchecked,
+        `${onSignal} tt-handler-signal="signals.setChecked"`,
+      );
+      // Both bound to one signal: subscribed once, each setter run.
+      // Deno's precompile writes `checked={x}` as `x ? "checked" : ""`, so an
+      // input binding checked must be skipped (jsxPrecompileSkipElements).
+      const both = unhashed(jsx("input", {
+        type: "checkbox",
+        value: signal.query,
+        checked: signal.query,
+      }));
+      for (
+        const part of [
+          'value="tea"',
+          'checked=""',
+          'tt-value-signal="signalImports_test.query"',
+          'tt-checked-signal="signalImports_test.query"',
+          `${handler} tt-handler-connect="signalImports_test.query"`,
+          `${onSignal} tt-handler-signal="signals.setValue signals.setChecked"`,
+        ]
+      ) assertStringIncludes(both, part);
+      assertEquals(both.match(/onconnect=/g)?.length, 1);
+      assertEquals(both.match(/onsignal=/g)?.length, 1);
+      // An option takes a signal as selected, and only an option does.
+      assertEquals(
+        unhashed(jsx("option", {
+          value: "tea",
+          selected: signal.query,
+          children: "Tea",
+        })),
+        `<option value="tea" selected="" tt-selected-signal="signalImports_test.query" ${handler} tt-handler-connect="signalImports_test.query" is="tt-option" ${onSignal} tt-handler-signal="signals.setSelected">Tea</option>`,
+      );
+      assertStringIncludes(
+        unhashed(jsx("option", { selected: signal.filter })),
+        "<option tt-selected-signal=",
+      );
+      assertThrows(
+        () => jsx("input", { selected: signal.query }),
+        TypeError,
+        "Only an <option> takes a signal as its selected",
+      );
+      assertThrows(
+        () => jsx("option", { checked: signal.query }),
+        TypeError,
+        "Only an <input> takes a signal as its checked",
+      );
     } finally {
       await Deno.remove(directory, { recursive: true }).catch(() => {});
       reset();

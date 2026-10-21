@@ -249,3 +249,78 @@ Deno.test("setValue writes only its bound signal, and only on a change", async (
     global.handlers = previous;
   }
 });
+
+Deno.test("setChecked writes only its bound signal, and only on a change", async () => {
+  const setChecked = await loadHandler("setChecked");
+  const { Signal } = signalClasses();
+  const done = new Signal<boolean>(false);
+  const count = new Signal<number>(3);
+  const writes: boolean[] = [];
+  const element = {
+    current: false,
+    get checked() {
+      return this.current;
+    },
+    set checked(checked: boolean) {
+      writes.push(checked);
+      this.current = checked;
+    },
+    bound: null as string | null,
+    getAttribute(name: string) {
+      return name === "tt-checked-signal" ? this.bound : null;
+    },
+  };
+  const global = globalThis as { handlers?: unknown };
+  const previous = global.handlers;
+  try {
+    // Unbound, any signal is written as truthy or not.
+    setChecked.call(element, { signal: count });
+    assertEquals(writes, [true]);
+    element.bound = "bundle.done";
+    global.handlers = { bundle: { done: () => done } };
+    // Bound, other signals are ignored and an unchanged value is not written.
+    count.value = 0;
+    setChecked.call(element, { signal: count });
+    done.value = true;
+    setChecked.call(element, { signal: done });
+    done.value = false;
+    setChecked.call(element, { signal: done });
+    assertEquals(writes, [true, false]);
+  } finally {
+    global.handlers = previous;
+  }
+});
+
+Deno.test("setSelected writes only its bound signal, and only on a change", async () => {
+  const setSelected = await loadHandler("setSelected");
+  const { Signal } = signalClasses();
+  const isDental = new Signal<boolean>(false);
+  const other = new Signal<string>("x");
+  const writes: boolean[] = [];
+  const element = {
+    current: false,
+    get selected() {
+      return this.current;
+    },
+    set selected(selected: boolean) {
+      writes.push(selected);
+      this.current = selected;
+    },
+    getAttribute(name: string) {
+      return name === "tt-selected-signal" ? "bundle.isDental" : null;
+    },
+  };
+  const global = globalThis as { handlers?: unknown };
+  const previous = global.handlers;
+  try {
+    global.handlers = { bundle: { isDental: () => isDental } };
+    setSelected.call(element, { signal: other });
+    setSelected.call(element, { signal: isDental });
+    isDental.value = true;
+    setSelected.call(element, { signal: isDental });
+    setSelected.call(element, { signal: isDental });
+    assertEquals(writes, [true]);
+  } finally {
+    global.handlers = previous;
+  }
+});

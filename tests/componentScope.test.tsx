@@ -175,3 +175,30 @@ Deno.test("component scope - unmarked precompiled templates contain no sentinels
   );
   assertEquals(html, '<div id="a">x</div><span></span>');
 });
+
+Deno.test("component scope - precompiled templates mark skipped top-level elements", async () => {
+  // `jsxPrecompileSkipElements` leaves these to jsx: values beside the top
+  // level of the template rather than static tags.
+  const Skipped = () =>
+    tpl(
+      ["", "<p>two</p>", ""],
+      jsx("input", { name: "a" }),
+      [jsx("option", { value: "b" }), "text"],
+    );
+  assertEquals(
+    await render(jsx(Skipped, {})),
+    '<input data-tc="Skipped" name="a"/><p data-tc="Skipped">two</p><option data-tc="Skipped" value="b"></option>text',
+  );
+  // An element passed in as children still belongs to the caller.
+  const Slot = ({ children }: { children?: Child }) =>
+    tpl(["<p>own</p>", ""], children);
+  assertEquals(
+    await render(jsx(Slot, { children: jsx("input", { name: "c" }) })),
+    '<p data-tc="Slot">own</p><input name="c"/>',
+  );
+  // Unmarked, the sentinel attribute is still stripped.
+  assertEquals(
+    String(tpl(["<div>", "</div>", ""], jsx("input", {}), jsx("input", {}))),
+    "<div><input/></div><input/>",
+  );
+});

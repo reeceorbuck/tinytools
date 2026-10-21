@@ -562,7 +562,7 @@ const formHandlers = new tiny.Handlers(import.meta.url, async () => {
 Changing a value changes the bundle filename, like any edit to the code.
 
 The `signalTools` collection from `tinytools/handlers` provides `effect`,
-`setTextContent`, `setValue` and `setCssProperty` (which writes
+`setTextContent`, `setValue`, `setChecked` and `setCssProperty` (which writes
 `--<signal name>`).
 
 An input given a signal as its `value` renders the signal's initial value and
@@ -579,6 +579,39 @@ It expands to `value={signal.query.initial}`, `onConnect={signal.query}` and
 element can bind more signals of its own, and writes the value only when it
 differs, so typing is not interrupted. Only `<input>` takes one: a textarea's or
 select's `value` attribute is not what it shows.
+
+A checkbox or radio given a signal as its `checked` works the same way, through
+`setChecked` and a `tt-checked-signal` attribute. It is checked while the
+signal's value is truthy:
+
+```tsx
+<input type="checkbox" checked={signal.isEven} onChange={fn.updateIsEven} />;
+```
+
+An input can bind both; a signal given as both is subscribed once.
+
+An option given a signal as its `selected` is selected while the signal's value
+is truthy, through `setSelected` and a `tt-selected-signal` attribute:
+
+```tsx
+<select onChange={fn.chooseSection}>
+  <option value="dental" selected={signal.isDental}>Dental</option>
+  <option value="office" selected={signal.isOffice}>Office</option>
+</select>;
+```
+
+With `"jsx": "precompile"`, Deno writes a boolean attribute such as `checked` or
+`selected` straight into the template (`x ? "checked" : ""`), so the signal
+never reaches the runtime and the element is simply rendered checked. Have
+inputs and options rendered through `jsx` instead:
+
+```json
+"compilerOptions": {
+  "jsx": "precompile",
+  "jsxImportSource": "tinytools",
+  "jsxPrecompileSkipElements": ["input", "option"]
+}
+```
 
 ### Per-instance signals
 

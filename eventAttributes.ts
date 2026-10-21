@@ -90,38 +90,60 @@ export type RenderableSignal<Signal> = {
    * reports it (a per-instance signal's is a fresh instance's), for
    * initial markup such as an input's `value`.
    */
-  readonly initial: Signal extends
-    // deno-lint-ignore no-explicit-any
-    InstanceSignal<infer Value, any, any> ? Value
+  readonly initial: Signal extends // deno-lint-ignore no-explicit-any
+  InstanceSignal<infer Value, any, any> ? Value
     : Signal extends { readonly value: infer Value } ? Value
     : never;
 };
 
-/** A signal reference from `tiny.imports()`, given as an element's `value`. */
-export type SignalValueReference =
+/**
+ * A signal reference from `tiny.imports()`, given as an element property such
+ * as an input's `value` or an option's `selected`.
+ */
+export type BoundSignalReference =
   & HandlerReference<string, unknown>
   & { readonly initial: unknown };
+
+/**
+ * The element properties a signal reference can be given as, each with the
+ * only tag that takes it and the `signalTools` handler that writes the signal
+ * into it.
+ */
+export const signalProperties = {
+  value: { tag: "input", setter: "setValue" },
+  checked: { tag: "input", setter: "setChecked" },
+  selected: { tag: "option", setter: "setSelected" },
+} as const;
+
+export type SignalProperty = keyof typeof signalProperties;
+
+/** Whether `name` is a property a signal reference can be given as. */
+export function isSignalProperty(name: unknown): name is SignalProperty {
+  return typeof name === "string" && Object.hasOwn(signalProperties, name);
+}
 
 /** What `tiny.imports()` gives signal references to implement `RenderableSignal`. */
 export type SignalRendering = {
   initial(name: string): unknown;
   text(reference: object, name: string): JSX.Element;
-  /** `fn.setValue`, which an element given a signal as `value` runs. */
-  setValue(): object;
+  /** The handler an element given a signal as `property` runs. */
+  setter(property: SignalProperty): object;
 };
 
-/** The attribute naming the signal an element's `value` follows. */
-export const SIGNAL_VALUE_ATTRIBUTE = "tt-value-signal";
+/** The attribute naming the signal `property` follows (`tt-value-signal`). */
+export function signalPropertyAttribute(property: SignalProperty): string {
+  return `tt-${property}-signal`;
+}
 
-/** What a signal reference given as an element's `value` binds. */
-type SignalValueBinding = {
-  /** The initial value, written as `setValue` writes it. */
-  value: string;
-  /** `<bundle>.<name>`, which `setValue` checks each signal event against. */
+/** What a signal reference given as an element property binds. */
+type SignalPropertyBinding = {
+  /** The initial value, written as the property's setter writes it. */
+  initial: string | boolean;
+  /** `<bundle>.<name>`, which the setter checks each signal event against. */
   signal: string;
   /** The signal reference, subscribed by `onConnect`. */
   onConnect: object;
-  /** `fn.setValue`, run by `onSignal`. */
+  /** The property's setter, run by `onSignal`. */
   onSignal: object;
 };
 
@@ -149,58 +171,78 @@ export function signalChild(value: unknown): unknown {
   return signalTexts.get(value)?.() ?? value;
 }
 
-/** Each signal reference's binding as an element's `value`. */
-const signalValues = new WeakMap<object, () => SignalValueBinding>();
+/** Each signal reference's binding as an element property. */
+const signalBindings = new WeakMap<
+  object,
+  (property: SignalProperty) => SignalPropertyBinding
+>();
 
-/** Whether `value` is a signal reference, which `value` binds as live. */
-export function isSignalValue(value: unknown): boolean {
-  return typeof value === "object" && value !== null && signalValues.has(value);
+/** Whether `value` is a signal reference, which an element property binds as live. */
+export function isBoundSignal(value: unknown): boolean {
+  return typeof value === "object" && value !== null &&
+    signalBindings.has(value);
 }
 
 /**
- * An input's props with a signal reference given as `value` (`<input
- * value={signal.query} />`) expanded to what keeps it live: the initial
- * value, `onConnect` subscribing the signal and `onSignal` running
- * `setValue`, each placed first among the handlers the element already binds.
- * `tt-value-signal` names the signal, so `setValue` ignores the other signals
- * the element subscribes to. Other props are returned as they are.
+ * An element's props with signal references given as properties (`<input
+ * value={signal.query} />`, `<option selected={signal.isDental}>`) expanded
+ * to what keeps them live: each initial value, `onConnect` subscribing each
+ * signal and `onSignal` running each property's setter, all placed first
+ * among the handlers the element already binds. A `tt-<property>-signal`
+ * attribute names each property's signal, so its setter ignores the other
+ * signals the element subscribes to. Other props are returned as they are.
  */
-export function signalValueProps(
+export function signalPropertyProps(
   props: Record<string, unknown>,
   tag?: string,
 ): Record<string, unknown> {
-  const value = props.value;
-  if (!isSignalValue(value)) return props;
+  const bound = (Object.keys(signalProperties) as SignalProperty[])
+    .filter((property) => isBoundSignal(props[property]));
+  if (bound.length === 0) return props;
   // A textarea's or select's `value` attribute is not what it shows.
-  if (tag !== undefined && tag.toLowerCase() !== "input") {
+  const misplaced = tag === undefined
+    ? undefined
+    : bound.find((property) =>
+      signalProperties[property].tag !== tag.toLowerCase()
+    );
+  if (misplaced) {
+    const { tag: owner, setter } = signalProperties[misplaced];
     throw new TypeError(
-      `Only an <input> takes a signal as its value, not <${tag}>. Bind onConnect={signal.name} and onSignal={fn.setValue} instead.`,
+      `Only an <${owner}> takes a signal as its ${misplaced}, not <${tag}>. Bind onConnect={signal.name} and onSignal={fn.${setter}} instead.`,
     );
   }
-  const binding = signalValues.get(value as object)!();
-  const expanded: Record<string, unknown> = {
-    ...props,
-    value: binding.value,
-    [SIGNAL_VALUE_ATTRIBUTE]: binding.signal,
-  };
+  const expanded: Record<string, unknown> = { ...props };
+  /** Each signal's reference, by `<bundle>.<name>`. */
+  const connects = new Map<string, object>();
+  const setters: object[] = [];
+  for (const property of bound) {
+    const binding = signalBindings.get(props[property] as object)!(property);
+    expanded[property] = binding.initial;
+    expanded[signalPropertyAttribute(property)] = binding.signal;
+    // A signal bound to two properties is subscribed once.
+    if (!connects.has(binding.signal)) {
+      connects.set(binding.signal, binding.onConnect);
+    }
+    setters.push(binding.onSignal);
+  }
   for (
-    const [attribute, reference] of [
-      ["onConnect", binding.onConnect],
-      ["onSignal", binding.onSignal],
+    const [attribute, references] of [
+      ["onConnect", [...connects.values()]],
+      ["onSignal", setters],
     ] as const
   ) {
     // An event attribute matches whatever its case (`onconnect` too).
     const name = Object.keys(expanded).find((key) =>
       key.toLowerCase() === attribute.toLowerCase()
     ) ?? attribute;
-    const bound = expanded[name];
+    const existing = expanded[name];
     expanded[name] = [
-      reference,
-      ...(bound === undefined || bound === null
+      ...references,
+      ...(existing === undefined || existing === null
         ? []
-        : Array.isArray(bound)
-        ? bound
-        : [bound]),
+        : Array.isArray(existing)
+        ? existing
+        : [existing]),
     ];
   }
   return expanded;
@@ -316,17 +358,19 @@ export function createSignalReferences<TSignals>(
         reference,
         () => renderingFor("as a JSX child").text(reference, name),
       );
-      signalValues.set(reference, () => {
-        const rendering = renderingFor("as a value");
+      signalBindings.set(reference, (property) => {
+        const rendering = renderingFor(`as ${property}`);
         const initial = rendering.initial(name);
         const signal = handlerReferencePattern.exec(resolved)?.[1];
         if (!signal) throw new TypeError(`Invalid handler reference: ${name}`);
         return {
-          // Written as setValue writes it.
-          value: initial?.toString() ?? "",
+          // Written as the property's setter writes it.
+          initial: property !== "value"
+            ? Boolean(initial)
+            : initial?.toString() ?? "",
           signal,
           onConnect: reference,
-          onSignal: rendering.setValue(),
+          onSignal: rendering.setter(property),
         };
       });
       referenceDetails.set(reference, { name, resolved });

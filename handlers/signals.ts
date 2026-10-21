@@ -58,6 +58,56 @@ export const signalTools = new tiny.Handlers(import.meta.url, {
     const value = event.signal.value?.toString() ?? "";
     if (this.value !== value) this.value = value;
   },
+  /**
+   * Checks a checkbox or radio when the signal value is truthy. On an element
+   * given a signal as `checked` (`<input type="checkbox"
+   * checked={signal.done} />`), whose `tt-checked-signal` names it, any other
+   * signal the element subscribes to is ignored, as with `setValue`.
+   */
+  setChecked: function (this: HTMLInputElement, event: SignalEvent): void {
+    const bound = this.getAttribute("tt-checked-signal");
+    if (bound) {
+      const dot = bound.indexOf(".");
+      const handler = (globalThis as {
+        handlers?: Record<string, Record<string, (this: Element) => unknown>>;
+      }).handlers?.[bound.slice(0, dot)]?.[bound.slice(dot + 1)];
+      // Resolved as setValue resolves its signal.
+      const signal = handler?.call(this) as
+        | { forInstance?(element: Element): unknown }
+        | undefined;
+      const own = typeof signal?.forInstance === "function"
+        ? signal.forInstance(this)
+        : signal;
+      if (own !== event.signal) return;
+    }
+    const checked = Boolean(event.signal.value);
+    if (this.checked !== checked) this.checked = checked;
+  },
+  /**
+   * Selects an option when the signal value is truthy. On an option given a
+   * signal as `selected` (`<option selected={signal.isDental}>`), whose
+   * `tt-selected-signal` names it, any other signal the option subscribes to
+   * is ignored, as with `setValue`.
+   */
+  setSelected: function (this: HTMLOptionElement, event: SignalEvent): void {
+    const bound = this.getAttribute("tt-selected-signal");
+    if (bound) {
+      const dot = bound.indexOf(".");
+      const handler = (globalThis as {
+        handlers?: Record<string, Record<string, (this: Element) => unknown>>;
+      }).handlers?.[bound.slice(0, dot)]?.[bound.slice(dot + 1)];
+      // Resolved as setValue resolves its signal.
+      const signal = handler?.call(this) as
+        | { forInstance?(element: Element): unknown }
+        | undefined;
+      const own = typeof signal?.forInstance === "function"
+        ? signal.forInstance(this)
+        : signal;
+      if (own !== event.signal) return;
+    }
+    const selected = Boolean(event.signal.value);
+    if (this.selected !== selected) this.selected = selected;
+  },
   /** Sets the custom property `--<signal name>` to the signal value. */
   setCssProperty: function (this: HTMLElement, event: SignalEvent): void {
     const { name, value } = event.signal;

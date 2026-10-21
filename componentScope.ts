@@ -27,6 +27,7 @@ const TRANSPARENT = Symbol.for("tinytools.transparentComponent");
 const WRAPPED = Symbol.for("tinytools.wrappedComponent");
 const ELEMENT = Symbol.for("tinytools.elementNode");
 const TEMPLATE_ROOTS = Symbol.for("tinytools.templateRoots");
+const TEMPLATE_ROOT_SOURCES = Symbol.for("tinytools.templateRootSources");
 
 /**
  * @internal Set on a rendered element (a node, or a precompiled template with
@@ -101,7 +102,7 @@ function markRoots(
     return result.map((item) => markRoots(item, name, passedChildren));
   }
   if (result && typeof result === "object" && TEMPLATE_ROOTS in result) {
-    return markTemplateRoots(result as TemplateResult, name);
+    return markTemplateRoots(result as TemplateResult, name, passedChildren);
   }
   if (!isValidElement(result)) return result;
   const node = result as unknown as JSXNode;
@@ -142,6 +143,12 @@ function markRoots(
 
 type TemplateResult = HtmlEscapedString & {
   [TEMPLATE_ROOTS]: number[];
+  /**
+   * For each root, the value it was rendered from when that was an element
+   * node beside the top-level content (an element `jsxPrecompileSkipElements`
+   * left to `jsx`), so a component can leave its caller's children unmarked.
+   */
+  [TEMPLATE_ROOT_SOURCES]?: unknown[];
   [NEEDS_PROXY]?: ProxyNeed;
 };
 
@@ -310,9 +317,49 @@ function analyseTemplate(strings: readonly string[]): TemplateAnalysis {
   return analysis;
 }
 
-function stripSentinels(rendered: HtmlEscapedString): TemplateResult {
+/**
+ * Each element node beside a template's top-level content (`<>{node}</>`,
+ * where `node` came from `jsx` rather than a template) given a first,
+ * sentinel attribute numbering it among `sources`, so it renders right after
+ * the tag name as a root offset would. Undefined when there are none.
+ */
+function markValueRoots(
+  values: readonly unknown[],
+  slots: readonly ValueSlot[],
+): { values: unknown[]; sources: unknown[] } | undefined {
+  const sources: unknown[] = [];
+  const mark = (value: unknown): unknown => {
+    if (Array.isArray(value)) {
+      const items = value.map(mark);
+      return items.some((item, at) => item !== value[at]) ? items : value;
+    }
+    if (!isValidElement(value)) return value;
+    const node = value as unknown as JSXNode;
+    if (node.tag === Fragment || !isElementNode(node)) return value;
+    sources.push(value);
+    return cloneNode(node, {
+      [`${SENTINEL}v${sources.length - 1}`]: "",
+      ...node.props,
+    });
+  };
+  const marked = values.map((value, index) =>
+    slots[index]?.depth === 0 && slots[index].tag === undefined
+      ? mark(value)
+      : value
+  );
+  return sources.length > 0 ? { values: marked, sources } : undefined;
+}
+
+/** Matches a sentinel attribute from `markValueRoots`, capturing its number. */
+const SENTINEL_ATTRIBUTE = new RegExp(` ${SENTINEL}v(\\d+)=""`, "y");
+
+function stripSentinels(
+  rendered: HtmlEscapedString,
+  valueSources: readonly unknown[] = [],
+): TemplateResult {
   const text = String(rendered);
   const roots: number[] = [];
+  const sources: unknown[] = [];
   let output = "";
   let from = 0;
   for (
@@ -320,13 +367,20 @@ function stripSentinels(rendered: HtmlEscapedString): TemplateResult {
     at >= 0;
     at = text.indexOf(SENTINEL, from)
   ) {
-    output += text.slice(from, at);
+    SENTINEL_ATTRIBUTE.lastIndex = at - 1;
+    const attribute = SENTINEL_ATTRIBUTE.exec(text);
+    const start = attribute ? at - 1 : at;
+    output += text.slice(from, start);
     roots.push(output.length);
-    from = at + SENTINEL.length;
+    sources.push(attribute ? valueSources[Number(attribute[1])] : undefined);
+    from = start + (attribute ? attribute[0].length : SENTINEL.length);
   }
   output += text.slice(from);
   const result = raw(output, rendered.callbacks) as TemplateResult;
   result[TEMPLATE_ROOTS] = roots;
+  if (sources.some((source) => source !== undefined)) {
+    result[TEMPLATE_ROOT_SOURCES] = sources;
+  }
   return result;
 }
 
@@ -348,17 +402,23 @@ export function withTemplateRoots<
   return ((strings: TemplateStringsArray, ...values: unknown[]) => {
     const { plan, slots } = analyseTemplate(strings);
     const need = inspect?.(values, slots);
-    if (!plan && !need) return render(strings, ...values);
+    const valueRoots = markValueRoots(values, slots);
+    if (!plan && !need && !valueRoots) return render(strings, ...values);
+    const rendering = valueRoots?.values ?? values;
     const rendered = (plan
       ? render(
         plan.strings as unknown as TemplateStringsArray,
-        ...plan.slots.map((slot) => slot < 0 ? SENTINEL_VALUE : values[slot]),
+        ...plan.slots.map((slot) =>
+          slot < 0 ? SENTINEL_VALUE : rendering[slot]
+        ),
       )
-      : render(strings, ...values)) as
+      : render(strings, ...rendering)) as
         | HtmlEscapedString
         | Promise<HtmlEscapedString>;
     const finish = (output: HtmlEscapedString): HtmlEscapedString => {
-      const result = plan ? stripSentinels(output) : output;
+      const result = plan || valueRoots
+        ? stripSentinels(output, valueRoots?.sources)
+        : output;
       if (need && typeof result === "object") {
         (result as TemplateResult)[NEEDS_PROXY] = need;
       }
@@ -388,17 +448,21 @@ export function templateRootTags(value: unknown): string[] | undefined {
 function markTemplateRoots(
   template: TemplateResult,
   name: string,
+  passedChildren: Set<unknown>,
 ): HtmlEscapedString {
   const text = String(template);
   const attribute = ` ${COMPONENT_ROOT_ATTRIBUTE}="${
     name.replace(/[&"<>]/g, (ch) => `&#${ch.charCodeAt(0)};`)
   }"`;
+  const sources = template[TEMPLATE_ROOT_SOURCES];
   let output = "";
   let from = 0;
-  for (const at of template[TEMPLATE_ROOTS]) {
+  template[TEMPLATE_ROOTS].forEach((at, index) => {
+    // An element the caller passed in as children belongs to the caller.
+    if (passedChildren.has(sources?.[index])) return;
     output += text.slice(from, at) + attribute;
     from = at;
-  }
+  });
   // The new string carries no offsets, so outer components leave it alone.
   const result = raw(output + text.slice(from), template.callbacks) as
     & HtmlEscapedString
