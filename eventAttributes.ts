@@ -106,14 +106,40 @@ export type BoundSignalReference =
 
 /**
  * The element properties a signal reference can be given as, each with the
- * only tag that takes it and the `signalTools` handler that writes the signal
- * into it.
+ * tags that take it (any tag when omitted) and the `signalTools` handler that
+ * writes the signal into it.
  */
-export const signalProperties = {
-  value: { tag: "input", setter: "setValue" },
-  checked: { tag: "input", setter: "setChecked" },
-  selected: { tag: "option", setter: "setSelected" },
-} as const;
+export const signalProperties: {
+  readonly [
+    Property in
+      | "value"
+      | "checked"
+      | "selected"
+      | "disabled"
+      | "hidden"
+  ]: {
+    readonly tags?: readonly string[];
+    readonly setter: `set${Capitalize<Property>}`;
+  };
+} = {
+  // A textarea's or select's `value` attribute is not what it shows.
+  value: { tags: ["input"], setter: "setValue" },
+  checked: { tags: ["input"], setter: "setChecked" },
+  selected: { tags: ["option"], setter: "setSelected" },
+  disabled: {
+    tags: [
+      "button",
+      "fieldset",
+      "input",
+      "optgroup",
+      "option",
+      "select",
+      "textarea",
+    ],
+    setter: "setDisabled",
+  },
+  hidden: { setter: "setHidden" },
+};
 
 export type SignalProperty = keyof typeof signalProperties;
 
@@ -199,16 +225,19 @@ export function signalPropertyProps(
   const bound = (Object.keys(signalProperties) as SignalProperty[])
     .filter((property) => isBoundSignal(props[property]));
   if (bound.length === 0) return props;
-  // A textarea's or select's `value` attribute is not what it shows.
   const misplaced = tag === undefined
     ? undefined
     : bound.find((property) =>
-      signalProperties[property].tag !== tag.toLowerCase()
+      signalProperties[property].tags?.includes(tag.toLowerCase()) === false
     );
   if (misplaced) {
-    const { tag: owner, setter } = signalProperties[misplaced];
+    const { tags = [], setter } = signalProperties[misplaced];
+    const owners = tags.map((owner) => `<${owner}>`);
+    const list = owners.length > 1
+      ? `${owners.slice(0, -1).join(", ")} or ${owners.at(-1)}`
+      : owners[0];
     throw new TypeError(
-      `Only an <${owner}> takes a signal as its ${misplaced}, not <${tag}>. Bind onConnect={signal.name} and onSignal={fn.${setter}} instead.`,
+      `<${tag}> cannot take a signal as its ${misplaced}; only ${list} can. Bind onConnect={signal.name} and onSignal={fn.${setter}} instead.`,
     );
   }
   const expanded: Record<string, unknown> = { ...props };

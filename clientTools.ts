@@ -3117,7 +3117,8 @@ async function signalRendering(
   await signalTools.ensureBuilt();
   const fn = createHandlerReferences<
     Record<
-      "setTextContent" | "setValue" | "setChecked" | "setSelected",
+      | "setTextContent"
+      | (typeof signalProperties)[keyof typeof signalProperties]["setter"],
       unknown
     >
   >(

@@ -13,10 +13,49 @@ export interface SignalElement extends HTMLElement {
 }
 
 /**
+ * Writes the signal value into the element's `property`: as a string for
+ * `value`, as a boolean otherwise. When the element was given a signal as that
+ * property (`<input value={signal.query} />`), its `tt-<property>-signal`
+ * names that signal and any other signal the element subscribes to is
+ * ignored. The property is only written when it differs, so typing is not
+ * interrupted by its own signal coming back.
+ *
+ * Listed in `signalTools` so the setters below can call it: each handler is
+ * a function of the same bundle module.
+ */
+function setBoundProperty(
+  this: Element,
+  event: SignalEvent,
+  property: string,
+): void {
+  const bound = this.getAttribute(`tt-${property}-signal`);
+  if (bound) {
+    const dot = bound.indexOf(".");
+    const handler = (globalThis as {
+      handlers?: Record<string, Record<string, (this: Element) => unknown>>;
+    }).handlers?.[bound.slice(0, dot)]?.[bound.slice(dot + 1)];
+    // Run without an event, a signal's handler returns the signal; a
+    // per-instance one then resolves the instance enclosing this element.
+    const signal = handler?.call(this) as
+      | { forInstance?(element: Element): unknown }
+      | undefined;
+    const own = typeof signal?.forInstance === "function"
+      ? signal.forInstance(this)
+      : signal;
+    if (own !== event.signal) return;
+  }
+  const { value } = event.signal;
+  const next = property === "value" ? value?.toString() ?? "" : Boolean(value);
+  const element = this as unknown as Record<string, unknown>;
+  if (element[property] !== next) element[property] = next;
+}
+
+/**
  * Helpers for consuming `tiny.Signals` values in the browser. Bind them to the
  * `onSignal` event of an element subscribed with `onConnect={signal.name}`.
  */
 export const signalTools = new tiny.Handlers(import.meta.url, {
+  setBoundProperty,
   /**
    * Runs the element's `onSignal` handler once for each signal it has
    * subscribed to so far, with that signal's current value. Subscribing alone
@@ -31,82 +70,25 @@ export const signalTools = new tiny.Handlers(import.meta.url, {
   setTextContent: function (this: SignalElement, event: SignalEvent): void {
     this.textContent = `${event.signal.value}`;
   },
-  /**
-   * Writes the signal value into an input. On an element given a signal as
-   * `value` (`<input value={signal.query} />`), whose `tt-value-signal` names
-   * it, any other signal the element subscribes to is ignored. The value is
-   * only written when it differs, so typing is not interrupted by its own
-   * signal coming back.
-   */
+  /** Writes the signal value into an input (see `setBoundProperty`). */
   setValue: function (this: HTMLInputElement, event: SignalEvent): void {
-    const bound = this.getAttribute("tt-value-signal");
-    if (bound) {
-      const dot = bound.indexOf(".");
-      const handler = (globalThis as {
-        handlers?: Record<string, Record<string, (this: Element) => unknown>>;
-      }).handlers?.[bound.slice(0, dot)]?.[bound.slice(dot + 1)];
-      // Run without an event, a signal's handler returns the signal; a
-      // per-instance one then resolves the instance enclosing this element.
-      const signal = handler?.call(this) as
-        | { forInstance?(element: Element): unknown }
-        | undefined;
-      const own = typeof signal?.forInstance === "function"
-        ? signal.forInstance(this)
-        : signal;
-      if (own !== event.signal) return;
-    }
-    const value = event.signal.value?.toString() ?? "";
-    if (this.value !== value) this.value = value;
+    setBoundProperty.call(this, event, "value");
   },
-  /**
-   * Checks a checkbox or radio when the signal value is truthy. On an element
-   * given a signal as `checked` (`<input type="checkbox"
-   * checked={signal.done} />`), whose `tt-checked-signal` names it, any other
-   * signal the element subscribes to is ignored, as with `setValue`.
-   */
+  /** Checks a checkbox or radio while the signal value is truthy. */
   setChecked: function (this: HTMLInputElement, event: SignalEvent): void {
-    const bound = this.getAttribute("tt-checked-signal");
-    if (bound) {
-      const dot = bound.indexOf(".");
-      const handler = (globalThis as {
-        handlers?: Record<string, Record<string, (this: Element) => unknown>>;
-      }).handlers?.[bound.slice(0, dot)]?.[bound.slice(dot + 1)];
-      // Resolved as setValue resolves its signal.
-      const signal = handler?.call(this) as
-        | { forInstance?(element: Element): unknown }
-        | undefined;
-      const own = typeof signal?.forInstance === "function"
-        ? signal.forInstance(this)
-        : signal;
-      if (own !== event.signal) return;
-    }
-    const checked = Boolean(event.signal.value);
-    if (this.checked !== checked) this.checked = checked;
+    setBoundProperty.call(this, event, "checked");
   },
-  /**
-   * Selects an option when the signal value is truthy. On an option given a
-   * signal as `selected` (`<option selected={signal.isDental}>`), whose
-   * `tt-selected-signal` names it, any other signal the option subscribes to
-   * is ignored, as with `setValue`.
-   */
+  /** Selects an option while the signal value is truthy. */
   setSelected: function (this: HTMLOptionElement, event: SignalEvent): void {
-    const bound = this.getAttribute("tt-selected-signal");
-    if (bound) {
-      const dot = bound.indexOf(".");
-      const handler = (globalThis as {
-        handlers?: Record<string, Record<string, (this: Element) => unknown>>;
-      }).handlers?.[bound.slice(0, dot)]?.[bound.slice(dot + 1)];
-      // Resolved as setValue resolves its signal.
-      const signal = handler?.call(this) as
-        | { forInstance?(element: Element): unknown }
-        | undefined;
-      const own = typeof signal?.forInstance === "function"
-        ? signal.forInstance(this)
-        : signal;
-      if (own !== event.signal) return;
-    }
-    const selected = Boolean(event.signal.value);
-    if (this.selected !== selected) this.selected = selected;
+    setBoundProperty.call(this, event, "selected");
+  },
+  /** Disables a form control while the signal value is truthy. */
+  setDisabled: function (this: HTMLInputElement, event: SignalEvent): void {
+    setBoundProperty.call(this, event, "disabled");
+  },
+  /** Hides the element while the signal value is truthy. */
+  setHidden: function (this: HTMLElement, event: SignalEvent): void {
+    setBoundProperty.call(this, event, "hidden");
   },
   /** Sets the custom property `--<signal name>` to the signal value. */
   setCssProperty: function (this: HTMLElement, event: SignalEvent): void {

@@ -308,7 +308,7 @@ Deno.test({
       assertThrows(
         () => jsx("textarea", { value: signal.query }),
         TypeError,
-        "Only an <input>",
+        "only <input> can",
       );
       assertThrows(
         () =>
@@ -317,7 +317,7 @@ Deno.test({
             jsxAttr("value", signal.query),
           ),
         TypeError,
-        "Only an <input>",
+        "only <input> can",
       );
       // A signal as checked renders checked only when its value is truthy.
       const unchecked = unhashed(jsx("input", {
@@ -369,13 +369,54 @@ Deno.test({
       assertThrows(
         () => jsx("input", { selected: signal.query }),
         TypeError,
-        "Only an <option> takes a signal as its selected",
+        "<input> cannot take a signal as its selected; only <option> can",
       );
       assertThrows(
         () => jsx("option", { checked: signal.query }),
         TypeError,
-        "Only an <input> takes a signal as its checked",
+        "<option> cannot take a signal as its checked; only <input> can",
       );
+      // Any element takes a signal as hidden; form controls as disabled.
+      for (
+        const [tag, property, setter] of [
+          ["div", "hidden", "setHidden"],
+          ["button", "disabled", "setDisabled"],
+          ["select", "disabled", "setDisabled"],
+        ]
+      ) {
+        const html = unhashed(jsx(tag, { [property]: signal.query }));
+        assertStringIncludes(
+          html,
+          `<${tag} ${property}="" tt-${property}-signal=`,
+        );
+        assertStringIncludes(html, `tt-handler-signal="signals.${setter}"`);
+        assertEquals(
+          unhashed(jsx(tag, { [property]: signal.filter })).includes(
+            `${property}=""`,
+          ),
+          false,
+        );
+      }
+      assertThrows(
+        () => jsx("div", { disabled: signal.query }),
+        TypeError,
+        "only <button>, <fieldset>, <input>, <optgroup>, <option>, <select> or <textarea> can",
+      );
+      // Precompile passes hidden to jsxAttr: false leaves it out, not "false".
+      for (
+        const [bound, expected] of [[signal.filter, ""], [
+          signal.query,
+          'hidden=""',
+        ]] as const
+      ) {
+        const html = unhashed(jsxTemplate(
+          strings("<div ", "></div>"),
+          jsxAttr("hidden", bound),
+        ));
+        assertEquals(html.includes('hidden="false"'), false);
+        if (expected) assertStringIncludes(html, expected);
+        assertStringIncludes(html, `tt-handler-signal="signals.setHidden"`);
+      }
     } finally {
       await Deno.remove(directory, { recursive: true }).catch(() => {});
       reset();

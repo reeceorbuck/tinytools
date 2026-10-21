@@ -324,3 +324,38 @@ Deno.test("setSelected writes only its bound signal, and only on a change", asyn
     global.handlers = previous;
   }
 });
+
+Deno.test("setBoundProperty writes booleans and strings, only for its bound signal", async () => {
+  const setHidden = await loadHandler("setHidden");
+  const setDisabled = await loadHandler("setDisabled");
+  const setValue = await loadHandler("setValue");
+  const { Signal } = signalClasses();
+  const open = new Signal<boolean>(false);
+  const other = new Signal<number>(1);
+  const element: Record<string, unknown> & {
+    getAttribute(name: string): string | null;
+  } = {
+    hidden: false,
+    disabled: false,
+    value: "",
+    getAttribute: (name: string) =>
+      name === "tt-hidden-signal" ? "bundle.open" : null,
+  };
+  const global = globalThis as { handlers?: unknown };
+  const previous = global.handlers;
+  try {
+    global.handlers = { bundle: { open: () => open } };
+    // Bound: hidden ignores other signals.
+    setHidden.call(element, { signal: other });
+    assertEquals(element.hidden, false);
+    open.value = true;
+    setHidden.call(element, { signal: open });
+    assertEquals(element.hidden, true);
+    // Unbound: disabled and value follow any signal.
+    setDisabled.call(element, { signal: other });
+    setValue.call(element, { signal: other });
+    assertEquals([element.disabled, element.value], [true, "1"]);
+  } finally {
+    global.handlers = previous;
+  }
+});

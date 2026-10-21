@@ -562,8 +562,10 @@ const formHandlers = new tiny.Handlers(import.meta.url, async () => {
 Changing a value changes the bundle filename, like any edit to the code.
 
 The `signalTools` collection from `tinytools/handlers` provides `effect`,
-`setTextContent`, `setValue`, `setChecked` and `setCssProperty` (which writes
-`--<signal name>`).
+`setTextContent`, `setValue`, `setChecked`, `setSelected`, `setDisabled`,
+`setHidden` and `setCssProperty` (which writes `--<signal name>`). The property
+handlers share `setBoundProperty`, which writes `value` as a string and every
+other property as a boolean.
 
 An input given a signal as its `value` renders the signal's initial value and
 follows each change:
@@ -600,10 +602,21 @@ is truthy, through `setSelected` and a `tt-selected-signal` attribute:
 </select>;
 ```
 
-With `"jsx": "precompile"`, Deno writes a boolean attribute such as `checked` or
-`selected` straight into the template (`x ? "checked" : ""`), so the signal
-never reaches the runtime and the element is simply rendered checked. Have
-inputs and options rendered through `jsx` instead:
+Any element given a signal as its `hidden` is hidden while the signal's value is
+truthy, and a form control (`<button>`, `<fieldset>`, `<input>`, `<optgroup>`,
+`<option>`, `<select>`, `<textarea>`) given one as its `disabled` is disabled
+while it is truthy:
+
+```tsx
+<section hidden={signal.isCollapsed}>...</section>
+<button type="submit" disabled={signal.isInvalid}>Save</button>;
+```
+
+With `"jsx": "precompile"`, Deno writes a boolean attribute such as `checked`,
+`selected` or `disabled` straight into the template (`x ? "checked" : ""`), so
+the signal never reaches the runtime and the element is simply rendered checked.
+`hidden` is not affected. Have the elements that bind one rendered through `jsx`
+instead:
 
 ```json
 "compilerOptions": {

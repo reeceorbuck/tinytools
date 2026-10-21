@@ -31,6 +31,7 @@ import {
   isBoundSignal,
   isSignalProperty,
   signalChild,
+  type SignalProperty,
   signalPropertyAttribute,
   signalPropertyProps,
 } from "./eventAttributes.ts";
@@ -74,10 +75,20 @@ function joinAttributes(parts: unknown[]): ReturnType<typeof honoJsxTemplate> {
   );
 }
 
+/**
+ * An attribute as `jsxAttr` renders it, except that a boolean (a signal
+ * property's initial value, such as `hidden`) is present when true and left
+ * out when false, as `jsx` renders it, rather than `hidden="false"`.
+ */
+function initialAttribute(name: string, value: unknown): unknown {
+  if (typeof value !== "boolean") return jsxAttr(name, value as never);
+  return value ? honoJsxAttr(name, "") : honoJsxTemplate``;
+}
+
 /** Renders `entries` as one value, marked if one binds a lifecycle event. */
 function renderAttributes(entries: [string, unknown][]): unknown {
   const joined = joinAttributes(
-    entries.map(([name, part]) => jsxAttr(name, part as never)),
+    entries.map(([name, part]) => initialAttribute(name, part)),
   );
   const event = entries.map(([name]) => lifecycleEvent(name)).find(Boolean);
   return event ? markLifecycleAttribute(joined, event) : joined;
@@ -283,7 +294,7 @@ export const jsxAttr = (
   if (isSignalProperty(name) && isBoundSignal(value)) {
     // Alone it is the initial value; `bindSignalProperties` makes it live.
     const rendered = honoJsxTemplate`${
-      jsxAttr(name, signalPropertyProps({ [name]: value })[name] as never)
+      initialAttribute(name, signalPropertyProps({ [name]: value })[name])
     }`;
     attributeSources.set(rendered, [name, value]);
     return rendered;
@@ -608,22 +619,36 @@ type ElementEventOverridesStrict =
     onUnmount?: never;
   };
 
+/** The tags that take a signal as each property, as `signalProperties` lists. */
+type SignalPropertyTags = {
+  [Property in SignalProperty]: Property extends "value" | "checked" ? "input"
+    : Property extends "selected" ? "option"
+    : Property extends "disabled" ?
+        | "button"
+        | "fieldset"
+        | "input"
+        | "optgroup"
+        | "option"
+        | "select"
+        | "textarea"
+    : string;
+};
+
 /**
- * A signal from `tiny.imports()` as an input's `value` or `checked`, or an
- * option's `selected`, keeps it live.
+ * A signal from `tiny.imports()` as one of the element's `signalProperties`
+ * (an input's `value`, any element's `hidden`) keeps it live.
  */
-type SignalPropertyOverride<Tag> = Tag extends "input" ? {
-    value?: HonoJSX.IntrinsicElements["input"]["value"] | BoundSignalReference;
-    checked?:
-      | HonoJSX.IntrinsicElements["input"]["checked"]
-      | BoundSignalReference;
-  }
-  : Tag extends "option" ? {
-      selected?:
-        | HonoJSX.IntrinsicElements["option"]["selected"]
-        | BoundSignalReference;
-    }
-  : unknown;
+type SignalPropertyOverride<Tag extends keyof HonoJSX.IntrinsicElements> = {
+  [
+    Property in SignalProperty as Tag extends SignalPropertyTags[Property]
+      ? Property
+      : never
+  ]?:
+    | (Property extends keyof HonoJSX.IntrinsicElements[Tag]
+      ? HonoJSX.IntrinsicElements[Tag][Property]
+      : never)
+    | BoundSignalReference;
+};
 
 type ApplyOverrides<TBase, TOverrides> =
   & Omit<TBase, keyof TOverrides>
