@@ -14,11 +14,13 @@ export interface SignalElement extends HTMLElement {
 
 /**
  * Writes the signal value into the element's `property`: as a string for
- * `value`, as a boolean otherwise. When the element was given a signal as that
- * property (`<input value={signal.query} />`), its `tt-<property>-signal`
- * names that signal and any other signal the element subscribes to is
- * ignored. The property is only written when it differs, so typing is not
- * interrupted by its own signal coming back.
+ * `value`, as a boolean for other properties, and as the text of a `data-*`
+ * or `aria-*` attribute (removed when the value is `null` or `undefined`).
+ * When the element was given a signal as that property (`<input
+ * value={signal.query} />`), its `tt-<property>-signal` names that signal and
+ * any other signal the element subscribes to is ignored. The property is only
+ * written when it differs, so typing is not interrupted by its own signal
+ * coming back.
  *
  * Listed in `signalTools` so the setters below can call it: each handler is
  * a function of the same bundle module.
@@ -45,6 +47,13 @@ function setBoundProperty(
     if (own !== event.signal) return;
   }
   const { value } = event.signal;
+  if (/^(data|aria)-./.test(property)) {
+    const text = value?.toString() ?? null;
+    if (this.getAttribute(property) === text) return;
+    if (text === null) this.removeAttribute(property);
+    else this.setAttribute(property, text);
+    return;
+  }
   const next = property === "value" ? value?.toString() ?? "" : Boolean(value);
   const element = this as unknown as Record<string, unknown>;
   if (element[property] !== next) element[property] = next;
@@ -56,6 +65,18 @@ function setBoundProperty(
  */
 export const signalTools = new tiny.Handlers(import.meta.url, {
   setBoundProperty,
+  /**
+   * Writes the signal into each `data-*` and `aria-*` attribute the element
+   * was given it as (`<div data-status={signal.status}>`), found by their
+   * `tt-<attribute>-signal` attributes; attributes bound to other signals are
+   * left alone.
+   */
+  setBoundAttributes: function (this: Element, event: SignalEvent): void {
+    for (const { name } of [...this.attributes]) {
+      const attribute = /^tt-((?:data|aria)-.+)-signal$/.exec(name)?.[1];
+      if (attribute) setBoundProperty.call(this, event, attribute);
+    }
+  },
   /**
    * Runs the element's `onSignal` handler once for each signal it has
    * subscribed to so far, with that signal's current value. Subscribing alone

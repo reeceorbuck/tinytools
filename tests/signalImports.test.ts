@@ -417,6 +417,32 @@ Deno.test({
         if (expected) assertStringIncludes(html, expected);
         assertStringIncludes(html, `tt-handler-signal="signals.setHidden"`);
       }
+      // data-* and aria-* attributes take a signal on any element, as text
+      // (0 stays "0"); setBoundAttributes runs once for all of them.
+      const attributeParts = [
+        'data-status="tea"',
+        'aria-expanded="0"',
+        'tt-data-status-signal="signalImports_test.query"',
+        'tt-aria-expanded-signal="signalImports_test.filter"',
+        `${handler} tt-handler-connect="signalImports_test.query signalImports_test.filter"`,
+        `${onSignal} tt-handler-signal="signals.setBoundAttributes signals.setHidden"`,
+      ];
+      const attributesFromJsx = unhashed(jsx("div", {
+        "data-status": signal.query,
+        "aria-expanded": signal.filter,
+        hidden: signal.filter,
+      }));
+      const attributesPrecompiled = unhashed(jsxTemplate(
+        strings("<div ", " ", " ", "></div>"),
+        jsxAttr("data-status", signal.query),
+        jsxAttr("aria-expanded", signal.filter),
+        jsxAttr("hidden", signal.filter),
+      ));
+      for (const html of [attributesFromJsx, attributesPrecompiled]) {
+        for (const part of attributeParts) assertStringIncludes(html, part);
+        assertEquals(html.match(/onsignal=/g)?.length, 1);
+        assertEquals(html.includes("hidden="), false);
+      }
     } finally {
       await Deno.remove(directory, { recursive: true }).catch(() => {});
       reset();

@@ -359,3 +359,51 @@ Deno.test("setBoundProperty writes booleans and strings, only for its bound sign
     global.handlers = previous;
   }
 });
+
+Deno.test("setBoundAttributes writes each data-* and aria-* attribute bound to the signal", async () => {
+  const setBoundAttributes = await loadHandler("setBoundAttributes");
+  const { Signal } = signalClasses();
+  const status = new Signal<string | null>("open");
+  const expanded = new Signal<boolean>(false);
+  const values = new Map<string, string>([
+    ["tt-data-status-signal", "bundle.status"],
+    ["tt-aria-expanded-signal", "bundle.expanded"],
+    ["tt-value-signal", "bundle.status"],
+  ]);
+  const writes: string[] = [];
+  const element = {
+    get attributes() {
+      return [...values.keys()].map((name) => ({ name }));
+    },
+    getAttribute: (name: string) => values.get(name) ?? null,
+    setAttribute(name: string, value: string) {
+      writes.push(`${name}=${value}`);
+      values.set(name, value);
+    },
+    removeAttribute(name: string) {
+      writes.push(`-${name}`);
+      values.delete(name);
+    },
+  };
+  const global = globalThis as { handlers?: unknown };
+  const previous = global.handlers;
+  try {
+    global.handlers = {
+      bundle: { status: () => status, expanded: () => expanded },
+    };
+    // Only the attributes bound to the event's signal are written; false is
+    // text, an unchanged value is not rewritten, and null removes it.
+    setBoundAttributes.call(element, { signal: expanded });
+    setBoundAttributes.call(element, { signal: expanded });
+    setBoundAttributes.call(element, { signal: status });
+    status.value = null;
+    setBoundAttributes.call(element, { signal: status });
+    assertEquals(writes, [
+      "aria-expanded=false",
+      "data-status=open",
+      "-data-status",
+    ]);
+  } finally {
+    global.handlers = previous;
+  }
+});

@@ -563,9 +563,9 @@ Changing a value changes the bundle filename, like any edit to the code.
 
 The `signalTools` collection from `tinytools/handlers` provides `effect`,
 `setTextContent`, `setValue`, `setChecked`, `setSelected`, `setDisabled`,
-`setHidden` and `setCssProperty` (which writes `--<signal name>`). The property
-handlers share `setBoundProperty`, which writes `value` as a string and every
-other property as a boolean.
+`setHidden`, `setBoundAttributes` and `setCssProperty` (which writes
+`--<signal name>`). They share `setBoundProperty`, which writes `value` as a
+string, other properties as booleans and `data-*`/`aria-*` attributes as text.
 
 An input given a signal as its `value` renders the signal's initial value and
 follows each change:
@@ -611,6 +611,19 @@ while it is truthy:
 <section hidden={signal.isCollapsed}>...</section>
 <button type="submit" disabled={signal.isInvalid}>Save</button>;
 ```
+
+Any element also takes a signal as a `data-*` or `aria-*` attribute. The value
+is written as the attribute's text, so `false` becomes `"false"` (which
+`aria-expanded` relies on), and `null` or `undefined` removes the attribute. One
+`setBoundAttributes` handler writes all of an element's bound attributes, each
+found by its `tt-<attribute>-signal`:
+
+```tsx
+<li data-status={signal.status} aria-busy={signal.isSaving}>...</li>;
+```
+
+Style the variants with attribute selectors (`[data-status="overdue"]`) rather
+than a handler that swaps classes.
 
 With `"jsx": "precompile"`, Deno writes a boolean attribute such as `checked`,
 `selected` or `disabled` straight into the template (`x ? "checked" : ""`), so

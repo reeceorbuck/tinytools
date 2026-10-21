@@ -29,7 +29,7 @@ import {
   type HandlerReference,
   handlerReferenceAttributes,
   isBoundSignal,
-  isSignalProperty,
+  isSignalBinding,
   signalChild,
   type SignalProperty,
   signalPropertyAttribute,
@@ -78,9 +78,11 @@ function joinAttributes(parts: unknown[]): ReturnType<typeof honoJsxTemplate> {
 /**
  * An attribute as `jsxAttr` renders it, except that a boolean (a signal
  * property's initial value, such as `hidden`) is present when true and left
- * out when false, as `jsx` renders it, rather than `hidden="false"`.
+ * out when false, as `jsx` renders it, rather than `hidden="false"`, and
+ * undefined (a bound attribute's) leaves it out.
  */
 function initialAttribute(name: string, value: unknown): unknown {
+  if (value === undefined) return honoJsxTemplate``;
   if (typeof value !== "boolean") return jsxAttr(name, value as never);
   return value ? honoJsxAttr(name, "") : honoJsxTemplate``;
 }
@@ -95,9 +97,9 @@ function renderAttributes(entries: [string, unknown][]): unknown {
 }
 
 /**
- * Expands the signals given as properties in a precompiled template as
- * `signalPropertyProps` does for `jsx`, once per element: each attribute
- * renders on its own, so the tag's `onConnect` and `onSignal` are rendered
+ * Expands the signals given as properties or attributes in a precompiled
+ * template as `signalPropertyProps` does for `jsx`, once per element: each
+ * attribute renders on its own, so the tag's `onConnect` and `onSignal` are rendered
  * again with the bindings' handlers first, each property's slot renders the
  * property and the attribute naming its signal, and the first such slot
  * renders the `onConnect` and `onSignal` the tag had none of.
@@ -110,7 +112,7 @@ function bindSignalProperties(
   const elements = new Map<number, number[]>();
   values.forEach((value, index) => {
     const element = slots[index]?.element;
-    if (element === undefined || !isSignalProperty(sourceOf(value)?.[0])) {
+    if (element === undefined || !isSignalBinding(sourceOf(value)?.[0])) {
       return;
     }
     elements.set(element, [...elements.get(element) ?? [], index]);
@@ -291,7 +293,7 @@ export const jsxAttr = (
     | HandlerReference<string, unknown>
     | readonly HandlerReference<string, unknown>[],
 ): ReturnType<typeof honoJsxAttr> => {
-  if (isSignalProperty(name) && isBoundSignal(value)) {
+  if (isSignalBinding(name) && isBoundSignal(value)) {
     // Alone it is the initial value; `bindSignalProperties` makes it live.
     const rendered = honoJsxTemplate`${
       initialAttribute(name, signalPropertyProps({ [name]: value })[name])

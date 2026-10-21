@@ -143,28 +143,66 @@ export const signalProperties: {
 
 export type SignalProperty = keyof typeof signalProperties;
 
+/**
+ * A `data-*` or `aria-*` attribute, which any element takes a signal as: the
+ * signal's value is written as the attribute's text (`false` as `"false"`,
+ * which `aria-expanded` relies on), and `null` or `undefined` removes it.
+ */
+export type SignalAttribute = `data-${string}` | `aria-${string}`;
+
+/** A property or attribute a signal reference can be given as. */
+export type SignalBinding = SignalProperty | SignalAttribute;
+
 /** Whether `name` is a property a signal reference can be given as. */
 export function isSignalProperty(name: unknown): name is SignalProperty {
   return typeof name === "string" && Object.hasOwn(signalProperties, name);
 }
 
+/** Whether `name` is a `data-*` or `aria-*` attribute. */
+export function isSignalAttribute(name: unknown): name is SignalAttribute {
+  return typeof name === "string" && /^(data|aria)-./.test(name);
+}
+
+/** Whether `name` is a property or attribute a signal reference can be given as. */
+export function isSignalBinding(name: unknown): name is SignalBinding {
+  return isSignalProperty(name) || isSignalAttribute(name);
+}
+
+/**
+ * The `signalTools` handler that writes a signal into `binding`: one per
+ * property, and `setBoundAttributes` for every `data-*` and `aria-*`
+ * attribute an element binds.
+ */
+export function signalSetter(
+  binding: SignalBinding,
+): SignalProperties[SignalProperty]["setter"] | "setBoundAttributes" {
+  return isSignalProperty(binding)
+    ? signalProperties[binding].setter
+    : "setBoundAttributes";
+}
+
+type SignalProperties = typeof signalProperties;
+
 /** What `tiny.imports()` gives signal references to implement `RenderableSignal`. */
 export type SignalRendering = {
   initial(name: string): unknown;
   text(reference: object, name: string): JSX.Element;
-  /** The handler an element given a signal as `property` runs. */
-  setter(property: SignalProperty): object;
+  /** The handler an element given a signal as `binding` runs. */
+  setter(binding: SignalBinding): object;
 };
 
-/** The attribute naming the signal `property` follows (`tt-value-signal`). */
-export function signalPropertyAttribute(property: SignalProperty): string {
-  return `tt-${property}-signal`;
+/** The attribute naming the signal `binding` follows (`tt-value-signal`). */
+export function signalPropertyAttribute(binding: SignalBinding): string {
+  return `tt-${binding}-signal`;
 }
 
-/** What a signal reference given as an element property binds. */
+/** What a signal reference given as an element property or attribute binds. */
 type SignalPropertyBinding = {
-  /** The initial value, written as the property's setter writes it. */
-  initial: string | boolean;
+  /**
+   * The initial value, written as the setter writes it: undefined leaves an
+   * attribute out.
+   */
+  initial: string | boolean | undefined;
   /** `<bundle>.<name>`, which the setter checks each signal event against. */
   signal: string;
   /** The signal reference, subscribed by `onConnect`. */
@@ -197,10 +235,10 @@ export function signalChild(value: unknown): unknown {
   return signalTexts.get(value)?.() ?? value;
 }
 
-/** Each signal reference's binding as an element property. */
+/** Each signal reference's binding as an element property or attribute. */
 const signalBindings = new WeakMap<
   object,
-  (property: SignalProperty) => SignalPropertyBinding
+  (binding: SignalBinding) => SignalPropertyBinding
 >();
 
 /** Whether `value` is a signal reference, which an element property binds as live. */
@@ -210,26 +248,29 @@ export function isBoundSignal(value: unknown): boolean {
 }
 
 /**
- * An element's props with signal references given as properties (`<input
- * value={signal.query} />`, `<option selected={signal.isDental}>`) expanded
- * to what keeps them live: each initial value, `onConnect` subscribing each
- * signal and `onSignal` running each property's setter, all placed first
- * among the handlers the element already binds. A `tt-<property>-signal`
- * attribute names each property's signal, so its setter ignores the other
- * signals the element subscribes to. Other props are returned as they are.
+ * An element's props with signal references given as properties or
+ * attributes (`<input value={signal.query} />`, `<div
+ * data-status={signal.status}>`) expanded to what keeps them live: each
+ * initial value, `onConnect` subscribing each signal and `onSignal` running
+ * each setter once, all placed first among the handlers the element already
+ * binds. A `tt-<name>-signal` attribute names each binding's signal, so its
+ * setter ignores the other signals the element subscribes to. Other props
+ * are returned as they are.
  */
 export function signalPropertyProps(
   props: Record<string, unknown>,
   tag?: string,
 ): Record<string, unknown> {
-  const bound = (Object.keys(signalProperties) as SignalProperty[])
-    .filter((property) => isBoundSignal(props[property]));
+  const bound = Object.keys(props).filter((name): name is SignalBinding =>
+    isSignalBinding(name) && isBoundSignal(props[name])
+  );
   if (bound.length === 0) return props;
-  const misplaced = tag === undefined
-    ? undefined
-    : bound.find((property) =>
-      signalProperties[property].tags?.includes(tag.toLowerCase()) === false
-    );
+  const misplaced = tag === undefined ? undefined : bound.find((
+    binding,
+  ): binding is SignalProperty =>
+    isSignalProperty(binding) &&
+    signalProperties[binding].tags?.includes(tag.toLowerCase()) === false
+  );
   if (misplaced) {
     const { tags = [], setter } = signalProperties[misplaced];
     const owners = tags.map((owner) => `<${owner}>`);
@@ -243,21 +284,25 @@ export function signalPropertyProps(
   const expanded: Record<string, unknown> = { ...props };
   /** Each signal's reference, by `<bundle>.<name>`. */
   const connects = new Map<string, object>();
-  const setters: object[] = [];
-  for (const property of bound) {
-    const binding = signalBindings.get(props[property] as object)!(property);
-    expanded[property] = binding.initial;
-    expanded[signalPropertyAttribute(property)] = binding.signal;
-    // A signal bound to two properties is subscribed once.
+  /** Each setter's reference, by handler name. */
+  const setters = new Map<string, object>();
+  for (const name of bound) {
+    const binding = signalBindings.get(props[name] as object)!(name);
+    expanded[name] = binding.initial;
+    expanded[signalPropertyAttribute(name)] = binding.signal;
+    // A signal bound twice is subscribed once, and `setBoundAttributes`
+    // writes every attribute, so it runs once.
     if (!connects.has(binding.signal)) {
       connects.set(binding.signal, binding.onConnect);
     }
-    setters.push(binding.onSignal);
+    if (!setters.has(signalSetter(name))) {
+      setters.set(signalSetter(name), binding.onSignal);
+    }
   }
   for (
     const [attribute, references] of [
       ["onConnect", [...connects.values()]],
-      ["onSignal", setters],
+      ["onSignal", [...setters.values()]],
     ] as const
   ) {
     // An event attribute matches whatever its case (`onconnect` too).
@@ -387,19 +432,21 @@ export function createSignalReferences<TSignals>(
         reference,
         () => renderingFor("as a JSX child").text(reference, name),
       );
-      signalBindings.set(reference, (property) => {
-        const rendering = renderingFor(`as ${property}`);
+      signalBindings.set(reference, (binding) => {
+        const rendering = renderingFor(`as ${binding}`);
         const initial = rendering.initial(name);
         const signal = handlerReferencePattern.exec(resolved)?.[1];
         if (!signal) throw new TypeError(`Invalid handler reference: ${name}`);
         return {
-          // Written as the property's setter writes it.
-          initial: property !== "value"
-            ? Boolean(initial)
-            : initial?.toString() ?? "",
+          // Written as the setter writes it.
+          initial: isSignalAttribute(binding)
+            ? initial?.toString()
+            : binding === "value"
+            ? initial?.toString() ?? ""
+            : Boolean(initial),
           signal,
           onConnect: reference,
-          onSignal: rendering.setter(property),
+          onSignal: rendering.setter(binding),
         };
       });
       referenceDetails.set(reference, { name, resolved });
