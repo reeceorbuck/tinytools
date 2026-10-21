@@ -31,9 +31,32 @@ export const signalTools = new tiny.Handlers(import.meta.url, {
   setTextContent: function (this: SignalElement, event: SignalEvent): void {
     this.textContent = `${event.signal.value}`;
   },
-  /** Writes the signal value into an input. */
+  /**
+   * Writes the signal value into an input. On an element given a signal as
+   * `value` (`<input value={signal.query} />`), whose `tt-value-signal` names
+   * it, any other signal the element subscribes to is ignored. The value is
+   * only written when it differs, so typing is not interrupted by its own
+   * signal coming back.
+   */
   setValue: function (this: HTMLInputElement, event: SignalEvent): void {
-    this.value = event.signal.value?.toString() ?? "";
+    const bound = this.getAttribute("tt-value-signal");
+    if (bound) {
+      const dot = bound.indexOf(".");
+      const handler = (globalThis as {
+        handlers?: Record<string, Record<string, (this: Element) => unknown>>;
+      }).handlers?.[bound.slice(0, dot)]?.[bound.slice(dot + 1)];
+      // Run without an event, a signal's handler returns the signal; a
+      // per-instance one then resolves the instance enclosing this element.
+      const signal = handler?.call(this) as
+        | { forInstance?(element: Element): unknown }
+        | undefined;
+      const own = typeof signal?.forInstance === "function"
+        ? signal.forInstance(this)
+        : signal;
+      if (own !== event.signal) return;
+    }
+    const value = event.signal.value?.toString() ?? "";
+    if (this.value !== value) this.value = value;
   },
   /** Sets the custom property `--<signal name>` to the signal value. */
   setCssProperty: function (this: HTMLElement, event: SignalEvent): void {

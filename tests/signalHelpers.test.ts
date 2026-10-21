@@ -187,3 +187,65 @@ Deno.test("fireSelfSignal sends every subscribed signal once", () => {
   unrelated.value = "y";
   assertEquals(seen, ["a", 2]);
 });
+
+Deno.test("setValue writes only its bound signal, and only on a change", async () => {
+  const setValue = await loadHandler("setValue");
+  const { Signal } = signalClasses();
+  const query = new Signal<string>("tea");
+  const other = new Signal<number>(2);
+  const writes: string[] = [];
+  const element = {
+    current: "tea",
+    get value() {
+      return this.current;
+    },
+    set value(value: string) {
+      writes.push(value);
+      this.current = value;
+    },
+    bound: null as string | null,
+    getAttribute(name: string) {
+      return name === "tt-value-signal" ? this.bound : null;
+    },
+  };
+  const global = globalThis as { handlers?: unknown };
+  const previous = global.handlers;
+  try {
+    // Unbound, any signal is written.
+    setValue.call(element, { signal: other });
+    assertEquals(writes, ["2"]);
+    // Bound, a signal's handler run without an event returns the signal.
+    element.bound = "bundle.query";
+    global.handlers = {
+      bundle: {
+        // As the collection's bundle defines it.
+        query(this: unknown, event?: Event) {
+          return (query as unknown as {
+            handleEvent(target: unknown, event?: Event): unknown;
+          }).handleEvent(this, event);
+        },
+      },
+    };
+    query.value = "coffee";
+    setValue.call(element, { signal: other });
+    setValue.call(element, { signal: query });
+    // The same value is not written again.
+    setValue.call(element, { signal: query });
+    assertEquals(writes, ["2", "coffee"]);
+    // A per-instance signal resolves the instance enclosing the element.
+    const instance = new Signal<string>("milk");
+    global.handlers = {
+      bundle: {
+        query: () => ({
+          forInstance: (target: unknown) =>
+            target === element ? instance : null,
+        }),
+      },
+    };
+    setValue.call(element, { signal: query });
+    setValue.call(element, { signal: instance });
+    assertEquals(writes, ["2", "coffee", "milk"]);
+  } finally {
+    global.handlers = previous;
+  }
+});

@@ -27,7 +27,10 @@ import {
 import {
   type HandlerReference,
   handlerReferenceAttributes,
+  isSignalValue,
   signalChild,
+  signalValueProps,
+  type SignalValueReference,
 } from "./eventAttributes.ts";
 import {
   markElementNode,
@@ -48,6 +51,72 @@ import {
 } from "./lifecycleBindings.ts";
 
 /**
+ * What each attribute `jsxAttr` rendered from a handler reference or a
+ * signal `value` was given, so a signal `value` can merge its handlers with
+ * those the same tag binds.
+ */
+const attributeSources = new WeakMap<object, [name: string, value: unknown]>();
+
+function sourceOf(value: unknown): [string, unknown] | undefined {
+  return value && typeof value === "object"
+    ? attributeSources.get(value)
+    : undefined;
+}
+
+/** Rendered attributes joined by spaces, as one value of the template. */
+function joinAttributes(parts: unknown[]): ReturnType<typeof honoJsxTemplate> {
+  const strings = ["", ...parts.slice(1).map(() => " "), ""];
+  return honoJsxTemplate(
+    Object.assign(strings, { raw: strings }) as TemplateStringsArray,
+    ...parts,
+  );
+}
+
+/**
+ * Expands each signal given as `value` in a precompiled template as
+ * `signalValueProps` does for `jsx`: each attribute renders on its own, so
+ * the tag's `onConnect` and `onSignal` are rendered again with the binding's
+ * handler first, and the binding's own slot renders the rest.
+ */
+function bindSignalValues(
+  values: unknown[],
+  slots: readonly ValueSlot[],
+): void {
+  values.forEach((value, index) => {
+    const source = sourceOf(value);
+    const element = slots[index]?.element;
+    if (source?.[0] !== "value" || element === undefined) return;
+    /** The tag's other attributes `signalValueProps` merges, by name. */
+    const merged = new Map<string, number>();
+    values.forEach((other, at) => {
+      const name = sourceOf(other)?.[0];
+      if (
+        at !== index && slots[at]?.element === element &&
+        /^on(connect|signal)$/i.test(name ?? "")
+      ) merged.set(name!, at);
+    });
+    const props = signalValueProps(
+      Object.fromEntries([
+        source,
+        ...[...merged].map(([name, at]) => [name, sourceOf(values[at])![1]]),
+      ]),
+      slots[index].tag,
+    );
+    for (const [name, at] of merged) {
+      values[at] = jsxAttr(name, props[name] as never);
+      delete props[name];
+    }
+    const rest = Object.entries(props);
+    const joined = joinAttributes(
+      rest.map(([name, part]) => jsxAttr(name, part as never)),
+    );
+    // Its own onConnect, if the tag had none, binds its lifecycle.
+    const event = rest.map(([name]) => lifecycleEvent(name)).find(Boolean);
+    values[index] = event ? markLifecycleAttribute(joined, event) : joined;
+  });
+}
+
+/**
  * Applies the lifecycle rules to a precompiled template's values: each
  * attribute value from `jsxAttr` is bound to the open tag it sits in, and a
  * child value still waiting for a proxy may only sit beside the top-level
@@ -57,6 +126,7 @@ function inspectTemplate(
   values: unknown[],
   slots: readonly ValueSlot[],
 ): ProxyNeed | undefined {
+  bindSignalValues(values, slots);
   let need: ProxyNeed | undefined;
   /** The `is` added to each element that had none, by element index. */
   const added = new Map<number, string>();
@@ -124,6 +194,7 @@ export const jsx: typeof honoJsx = (tag, props, key) => {
     if (children !== props.children) props = { ...props, children };
   }
   if (!props) return markElementNode(honoJsx(tag, props, key));
+  props = signalValueProps(props, tag);
   let expanded = props;
   let need: ProxyNeed | undefined;
   for (const [name, value] of Object.entries(props)) {
@@ -184,17 +255,30 @@ export const jsxAttr = (
     | HandlerReference<string, unknown>
     | readonly HandlerReference<string, unknown>[],
 ): ReturnType<typeof honoJsxAttr> => {
+  if (name === "value" && isSignalValue(value)) {
+    // Alone it is the initial value; `bindSignalValues` makes it live.
+    const rendered = honoJsxTemplate`${
+      honoJsxAttr(name, signalValueProps({ value }).value as string)
+    }`;
+    attributeSources.set(rendered, [name, value]);
+    return rendered;
+  }
   const attributes = handlerReferenceAttributes(name, value);
   if (!attributes) {
     return honoJsxAttr(name, value as Parameters<typeof honoJsxAttr>[1]);
   }
   const [eventAttribute, handlerAttribute] = Object.entries(attributes);
-  if (!eventAttribute) return honoJsxTemplate``;
-  const rendered = handlerAttribute
+  const rendered = !eventAttribute
+    ? honoJsxTemplate``
+    : handlerAttribute
     ? honoJsxTemplate`${honoJsxAttr(...eventAttribute as [string, string])} ${
       honoJsxAttr(...handlerAttribute as [string, string])
     }`
     : honoJsxAttr(...eventAttribute as [string, string]);
+  if (typeof rendered === "object") {
+    attributeSources.set(rendered, [name, value]);
+  }
+  if (!eventAttribute) return rendered;
   const event = lifecycleEvent(name);
   return event ? markLifecycleAttribute(rendered, event) : rendered;
 };
@@ -499,6 +583,12 @@ type ElementEventOverridesStrict =
     onUnmount?: never;
   };
 
+/** On an input, a signal from `tiny.imports()` as `value` keeps it live. */
+type ValueOverride<Tag> = Tag extends "input" ? {
+    value?: HonoJSX.IntrinsicElements["input"]["value"] | SignalValueReference;
+  }
+  : unknown;
+
 type ApplyOverrides<TBase, TOverrides> =
   & Omit<TBase, keyof TOverrides>
   & TOverrides;
@@ -512,7 +602,8 @@ export namespace JSX {
   export type IntrinsicElements = {
     [K in keyof HonoJSX.IntrinsicElements]: ApplyOverrides<
       HonoJSX.IntrinsicElements[K],
-      ElementEventOverridesStrict
+      & ElementEventOverridesStrict
+      & ValueOverride<K>
     >;
   };
 }
