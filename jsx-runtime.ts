@@ -317,7 +317,7 @@ export const jsxAttr = (
     return honoJsxAttr(name, value as Parameters<typeof honoJsxAttr>[1]);
   }
   // The event attribute, its `tt-handler-*` and, for an instance's
-  // references, `instancefor`.
+  // references, `tt-link`.
   const [first, ...more] = Object.entries(attributes) as [string, string][];
   const rendered = !first ? honoJsxTemplate`` : more.reduce<
     ReturnType<typeof honoJsxAttr>

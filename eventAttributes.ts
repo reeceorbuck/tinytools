@@ -245,8 +245,8 @@ const referenceDetails = new WeakMap<
   {
     name: string;
     resolved: string;
-    /** The key of the component instance a reference from `instance.signal` acts on. */
-    instance?: string;
+    /** The `tt-link` of the component instance a reference from `instance.signal` acts on. */
+    links?: string;
   }
 >();
 
@@ -405,9 +405,10 @@ export function handlerReferenceAttributes(
     return details.resolved;
   });
   if (!handlerNames.length) return {};
-  // An instance's references name its root for the runtime to resolve.
+  // An instance's references link the element into that instance, as its
+  // own parts are, so it resolves wherever (and whether) they are rendered.
   const instances = new Set(
-    references.flatMap((details) => details?.instance ?? []),
+    references.flatMap((details) => details?.links ?? []),
   );
   if (instances.size > 1) {
     throw new TypeError(
@@ -421,7 +422,7 @@ export function handlerReferenceAttributes(
       [`on${eventName}`]: eventHandlerBody,
     }),
     [`tt-handler-${eventName}`]: handlerNames.join(" "),
-    ...(instances.size ? { instancefor: [...instances][0] } : {}),
+    ...(instances.size ? { "tt-link": [...instances][0] } : {}),
   };
 }
 
@@ -443,8 +444,8 @@ export function createHandlerReferences<TFunctions>(
 export function createSignalReferences<TSignals>(
   resolveHandler: (name: string) => unknown,
   rendering?: SignalRendering,
-  /** Binds every reference to the root of this component instance key. */
-  instance?: string,
+  /** Binds every reference to the component instance with this `tt-link`. */
+  links?: string,
 ): SignalReferences<TSignals> {
   return new Proxy({}, {
     get(_target, name) {
@@ -518,7 +519,7 @@ export function createSignalReferences<TSignals>(
             onSignal: rendering.setter(),
           };
         });
-        referenceDetails.set(reference, { name, resolved, instance });
+        referenceDetails.set(reference, { name, resolved, links });
         return reference;
       };
       return createReference(() =>

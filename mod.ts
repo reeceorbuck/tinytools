@@ -112,6 +112,14 @@ export type { ActivateScopedStyles } from "./scopedStyles.ts";
 // Performance utilities
 export { logStartupPerformanceSummary } from "./startupPerformanceSummary.ts";
 
+// Development utilities
+export { checkDefinitionImportsNow } from "./clientTools.ts";
+export {
+  logUnusedImports,
+  type UnusedImports,
+  unusedImports,
+} from "./importUsage.ts";
+
 // Server-sent event utilities
 export {
   type SendUpdateOptions,

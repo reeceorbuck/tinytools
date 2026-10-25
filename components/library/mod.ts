@@ -4,11 +4,18 @@
  *
  * ```tsx
  * const { component } = await tiny.imports(CounterSignalComponent);
- * const { CounterDisplay, Increment } = component.instance();
+ * const counter = component.instance();
+ *
+ * <counter.Increment by={1} />
+ * <counter.CounterDisplay />
  * ```
  *
  * @module
  */
 
 export { CounterSignalComponent } from "./Counter.tsx";
+export { DatePickerSignalComponent } from "./DatePicker.tsx";
+export { DialogSignalComponent } from "./Dialog.tsx";
+export { DisclosureSignalComponent } from "./Disclosure.tsx";
 export { ListSignalComponent } from "./List.tsx";
+export { SearchFilterSignalComponent } from "./SearchFilter.tsx";

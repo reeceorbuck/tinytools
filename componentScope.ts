@@ -56,6 +56,11 @@ export function transparent<T extends AnyFunction>(component: T): T {
   return component;
 }
 
+/** @internal Whether `transparent()` opted this component out of scoping. */
+export function isTransparent(component: unknown): boolean {
+  return !!(component as Record<symbol, boolean> | undefined)?.[TRANSPARENT];
+}
+
 /** @internal Flags a node created from an intrinsic (string) tag. */
 export function markElementNode<T>(node: T): T {
   if (node && typeof node === "object") {

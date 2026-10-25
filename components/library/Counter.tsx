@@ -3,11 +3,11 @@
  *
  * ```tsx
  * const { component } = await tiny.imports(CounterSignalComponent);
- * const { CounterDisplay, Increment } = component.instance();
+ * const counter = component.instance();
  *
- * <Increment by={-1} />
- * <CounterDisplay />
- * <Increment by={1} />
+ * <counter.Increment by={-1} />
+ * <counter.CounterDisplay />
+ * <counter.Increment by={1} />
  * ```
  *
  * @module

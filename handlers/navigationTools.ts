@@ -37,7 +37,7 @@ export interface FetchReport {
 export const performFetchAndUpdateTools = new Handlers(
   import.meta.url,
   async () => {
-    const { fn } = await imports(processIncomingDataTools, navigationUrlTools);
+    const { fn } = await imports(processIncomingDataTools);
     return {
       performFetchAndUpdate: async function (
         destinationUrl: URL,

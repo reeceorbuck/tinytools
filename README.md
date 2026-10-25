@@ -929,19 +929,39 @@ parts anywhere and link them with `component.instance()`:
 import { ListSignalComponent } from "tinytools/library";
 
 const { component } = await tiny.imports(ListSignalComponent);
-const { List, Item, AddItem } = component.instance();
+const tasks = component.instance();
 
-<List label="Tasks">
-  <Item dismissable>Order stock</Item>
-  <Item label="Call back patients">
+<tasks.List label="Tasks">
+  <tasks.Item dismissable>Order stock</tasks.Item>
+  <tasks.Item label="Call back patients">
     <a href="/recalls">Call back patients</a>
-  </Item>
-</List>
-<AddItem placeholder="New task" dismissable />;
+  </tasks.Item>
+</tasks.List>
+<tasks.AddItem placeholder="New task" dismissable />;
 ```
 
 - `CounterSignalComponent`: `CounterDisplay` and `Increment` (`by`), sharing one
   count. Both expose `signal.count`.
+- `DatePickerSignalComponent`: `DateInput` (`name`, `value`, `type` of `date` or
+  `week`, `skipWeekends`, `onChange`) with any of `Step` (`by`, and `unit` of
+  `day` or `week`, by default the input's own; children for its content),
+  `Today` and `Weekday` (`value`, so the day is named before the script runs). A
+  step or today sets the input as an edit would, firing `input` and `change`.
+  `DateInput` exposes `signal.date` and `signal.weekday`.
+- `DialogSignalComponent`: `Panel` (`label`, `modeless`, `open` to show it as
+  the page loads) is a `<dialog>`, modal by default, opened by `Open` and closed
+  by `Close` (children for either's content), Escape, a click on its backdrop or
+  a form inside it submitting (unless prevented, or marked `data-keep-open`).
+  All three expose `signal.open`. `Confirm` (`message`, `confirmLabel`,
+  `cancelLabel`) stands alone: it wraps a submit button of your own, and its
+  dialog asks before the button's form submits, in place of `confirm()`; without
+  the script the button submits at once. It is your markup, not a component
+  boundary, so your styles still reach the button.
+- `DisclosureSignalComponent`: `Details` (`summary`, `open`, `name`, `remember`)
+  is a `<details>`, and `Toggle` a button opening and closing it from elsewhere,
+  keeping its `aria-expanded` in step. Sections sharing a `name` open one at a
+  time. `remember` keeps the open state in the viewer's browser under that key
+  and restores it as the page loads. Both expose `signal.open`.
 - `ListSignalComponent`: `List` holds the `Item`s written inside it, as an
   `<ol>`; given `Row`s instead, it is a `<tbody>`, for a table the page writes
   around it (with its own `<thead>`) and styles like its others. `AddItem`
@@ -961,6 +981,16 @@ const { List, Item, AddItem } = component.instance();
   a × button that removes it. `AddItem` and `AddButton` take `dismissable` for
   the items they add. Set `--list-surface`, `--list-border`, `--list-text`,
   `--list-muted` and `--list-accent` to recolour `Item`s.
+- `SearchFilterSignalComponent`: `FilterInput` (`name`, `label`, `placeholder`,
+  `value`, `onInput`) filters, as it is typed, the elements marked `data-filter`
+  inside `Results` (`as` for its element: `div`, `ul`, `ol`, `section` or
+  `tbody`). Each must hold every word typed, matched against the attribute's
+  value or else the element's text, ignoring case and accents. A
+  `data-filter-group` is hidden while none of its matches shows. `MatchCount`
+  shows "3 of 40" while a query filters, and `NoMatches` its children while
+  nothing matches. Results are filtered as `Results` connects and as the query
+  changes. `FilterInput` exposes `signal.query`; `Results` and `MatchCount`
+  expose `signal.shown`, `signal.total` and `signal.summary`.
 
 ## Components
 
@@ -1338,6 +1368,25 @@ it, the `<update>` head links it, and the browser appended the link.
 
 Private fields such as `_styleFilenames` and `_styles` are internal; register
 styles through `tiny.imports()` rather than reading them.
+
+### Unused imports
+
+Outside prod mode, `tiny.imports()` notes which of its arguments are read, to
+find collections a refactor left behind (a page still loads their bundles).
+
+- In a `Handlers` or `Signals` definition, the shipped source is checked once it
+  is defined, and a collection none of whose names it reads (`fn.name`, or `fn`
+  passed along whole) is warned about at once, with the call's location.
+- Elsewhere, each call site's `fn`, `styled`, `signal`, `template`, `constants`
+  and `component` record which collection every name read came from, across all
+  requests. `logUnusedImports()` prints the collections no render has read, by
+  call site, and `unusedImports()` returns them. A collection read only on some
+  branch counts as unused until a render takes that branch, so visit the pages
+  and their variants first.
+
+Definitions are lazy under `--lazy`, so their warnings appear as pages load
+them. Call `checkDefinitionImportsNow()` once the app is imported to define
+every collection and warn about them all at startup (a no-op in prod mode).
 
 ## Development
 

@@ -91,45 +91,12 @@ Deno.test("per-instance signals resolve to the enclosing instance root", () => {
   }
 });
 
-Deno.test("instancefor resolves to the instance of the element it names", () => {
-  const byId = installDocument(`
-    <fieldset id="one" ${root}><span id="inside-one"></span></fieldset>
-    <fieldset id="two" ${root}><select id="b"></select></fieldset>
-    <select id="for-one" instancefor="one"></select>
-    <select id="for-inside" instancefor="inside-one"></select>
-    <fieldset ${root}><select id="for-two" instancefor="two"></select></fieldset>
-    <select id="for-missing" instancefor="nowhere"></select>`);
-  try {
-    const { material } = layerGraph();
-    (material as unknown as {
-      handleEvent(target: unknown, event: Event): unknown;
-    }).handleEvent(byId("for-one"), change("flow"));
-
-    assertEquals(material.forInstance(byId("one")).value, "flow");
-    // Naming an element inside a root resolves that root.
-    assertEquals(material.forInstance(byId("for-inside")).value, "flow");
-    // `instancefor` wins over the element's own enclosing root.
-    assertEquals(
-      material.forInstance(byId("for-two")),
-      material.forInstance(byId("b")),
-    );
-    assertThrows(
-      () => material.forInstance(byId("for-missing")),
-      Error,
-      "instance root",
-    );
-  } finally {
-    uninstallDocument();
-  }
-});
-
 Deno.test("tt-link shares an enclosing level between roots anywhere on the page", () => {
   const byId = installDocument(`
     <p id="a" tt-instance="${key}-own" tt-link="${key}=g1"></p>
     <p id="b" tt-instance="${key}-own" tt-link="${key}=g1"></p>
     <p id="c" tt-instance="${key}-own" tt-link="${key}=g2"></p>
-    <section ${root}><p id="d" tt-instance="${key}-own"></p></section>
-    <button id="for-b" instancefor="b"></button>`);
+    <section ${root}><p id="d" tt-instance="${key}-own"></p></section>`);
   try {
     const { Signal, Computed, perInstance } = signalClasses(true, key);
     const { tint, count, label } = perInstance(() => {
@@ -154,8 +121,6 @@ Deno.test("tt-link shares an enclosing level between roots anywhere on the page"
     // Another link, and a root enclosed the usual way, are separate.
     assertEquals(tint.forInstance(byId("c")).value, "grey");
     assertEquals(tint.forInstance(byId("d")).value, "grey");
-    // `instancefor` reaches a linked root's instances too.
-    assertEquals(label.forInstance(byId("for-b")).value, "red 0");
     // A linked group counts once in `.all`.
     assertEquals(tint.all.value, ["red", "grey", "grey"]);
   } finally {

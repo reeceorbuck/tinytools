@@ -622,21 +622,15 @@ export class InstanceGroup {
   }
 
   /**
-   * The graph of the instance enclosing `element`, or, when `element` has an
-   * `instancefor` attribute, of the instance enclosing the element with that
-   * id (as `commandfor` names its target), so a control outside a
-   * component can drive one of its instances. An element whose `tt-link`
+   * The graph of the instance enclosing `element`. An element whose `tt-link`
    * names this group (`<key>=<link id>`) belongs to that linked instance
-   * instead, shared by every element naming the same link wherever it sits.
+   * instead, shared by every element naming the same link wherever it sits,
+   * so a control outside a component can drive one of its instances.
    */
   instanceFor(element: Element): Graph {
-    const forId = element?.getAttribute?.("instancefor");
-    const target = forId
-      ? element.ownerDocument.getElementById(forId)
-      : element;
     const selector =
       `[tt-instance~="${this.#key}"], [tt-link*="${this.#key}="]`;
-    let root = target?.closest?.(selector);
+    let root = element?.closest?.(selector);
     while (root && !root.matches(`[tt-instance~="${this.#key}"]`)) {
       const link = this.#linkOf(root);
       if (link) return this.#linkedGraph(link, root);

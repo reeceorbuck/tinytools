@@ -205,7 +205,7 @@ Deno.test({
 
 Deno.test({
   name:
-    "an imported component's instance() renders it and binds its signals by instancefor",
+    "an imported component's instance() renders it and binds its signals by tt-link",
   sanitizeOps: false,
   sanitizeResources: false,
   async fn() {
@@ -239,16 +239,20 @@ Deno.test({
       const { component, signal } = await imports(BoxComponent, boxSignals);
       const one = component.Box.instance();
       const two = component.Box.instance();
-      assertEquals(one.key === two.key, false);
       assertEquals(one.name, "Box");
-      const root =
-        `<output data-tc="Box" tt-instance="${boxSignals.instanceKey}"`;
-      // An instance makes its root that instance's root, in
-      // both JSX modes.
+      const linkOf = (html: string) => /tt-link="([^"]+)"/.exec(html)?.[1];
+      const oneLink = linkOf(String(await one({ label: "b" })))!;
+      assertEquals(oneLink.startsWith(`${boxSignals.instanceKey}=link-`), true);
+      assertEquals(
+        linkOf(String(await two({ label: "b" }))) === oneLink,
+        false,
+      );
+      // An instance links its root into that instance, with no id to
+      // repeat, in both JSX modes.
       for (const precompiled of [false, true]) {
         assertEquals(
           String(await one({ label: "b", precompiled })),
-          `${root} id="${one.key}">b</output>`,
+          `<output data-tc="Box" tt-link="${oneLink}">b</output>`,
         );
         // A class joins the root's own, each class once, and the component
         // never sees it.
@@ -265,20 +269,25 @@ Deno.test({
 
       const clean = (html: string) =>
         html.replace(/(\w+)_[0-9a-f]{5}\./g, "$1.");
+      // An instance's reference links the element using it into the
+      // instance, as its root is.
       assertStringIncludes(
         clean(String(jsx("button", { onClick: one.signal.press }))),
-        `tt-handler-click="signalImports_test.press" instancefor="${one.key}"`,
+        `tt-handler-click="signalImports_test.press" tt-link="${oneLink}"`,
       );
       // Precompiled attributes render the same.
       assertStringIncludes(
         clean(String(jsxAttr("onClick", two.signal.press))),
-        `instancefor="${two.key}"`,
+        `tt-link="${linkOf(String(await two({ label: "b" })))}"`,
+      );
+      // So does live text.
+      assertStringIncludes(
+        String(jsx("output", { children: one.signal.press })),
+        `tt-link="${oneLink}"`,
       );
       // References from tiny.imports() still resolve by ancestry.
       assertEquals(
-        String(jsx("button", { onClick: signal.press })).includes(
-          "instancefor",
-        ),
+        String(jsx("button", { onClick: signal.press })).includes("tt-link"),
         false,
       );
       assertThrows(
@@ -317,14 +326,20 @@ Deno.test({
       );
       assertEquals(grouped.Box.scopeKey, nested.instanceKey);
       const inGroup = grouped.Box.instance();
+      const inGroupLink = linkOf(String(await inGroup({ label: "c" })))!;
+      assertEquals(
+        inGroupLink.startsWith(`${nested.instanceKeyFor("box")}=link-`),
+        true,
+      );
+      // The outer level is the enclosing element's, for its references too.
       assertStringIncludes(
-        String(await inGroup({ label: "c" })),
-        `tt-instance="${nested.instanceKeyFor("box")}" id="${inGroup.key}"`,
+        String(jsx("button", { onClick: inGroup.signal.recolor })),
+        `tt-link="${inGroupLink}"`,
       );
       // Without an instance, exposed signals resolve by ancestry.
       assertEquals(
         String(jsx("button", { onClick: grouped.Box.signal.recolor }))
-          .includes("instancefor"),
+          .includes("tt-link"),
         false,
       );
       assertEquals(component.Box.scopeKey, "");
@@ -350,12 +365,10 @@ Deno.test({
       assertEquals(first[outer], second[outer]);
       assertEquals(first[inner] === second[inner], false);
       assertEquals(first[outer] === alone[outer], false);
-      assertEquals(copies[0].Box.key === copies[1].Box.key, false);
-      // A single component's instance() is not linked.
+      // A single component's instance() links only its own level.
       assertEquals(
-        String(await grouped.Box.instance()({ label: "f" }))
-          .includes("tt-link"),
-        false,
+        Object.keys(await linksOf(grouped.Box.instance())),
+        [inner],
       );
       assertThrows(() => grouped.instance(1.5), TypeError, "whole number");
       // With a single level, a copy's parts share it: its roots carry the
@@ -391,7 +404,6 @@ Deno.test({
       );
       assertEquals(pair.Box.instance().name, "Box");
       const quiet = pair.Quiet.instance();
-      assertEquals(quiet.key.startsWith("Quiet-"), true);
       // @ts-expect-error Quiet exposes no signals
       assertEquals(quiet.signal.press, undefined);
       // A plain function is a component that exposes no signals.
@@ -399,7 +411,7 @@ Deno.test({
         new SignalComponent(() => ({ Box })),
       );
       const plainBox = plain.instance().Box;
-      // Nothing to reach by `instancefor`, so no id to repeat.
+      // No component's root has an id to repeat.
       const plainHtml = String(await plainBox({ label: "h" }));
       assertStringIncludes(plainHtml, ">h</output>");
       assertEquals(plainHtml.includes(" id="), false);
@@ -427,7 +439,7 @@ Deno.test({
       }
       assertStringIncludes(
         String(jsx("button", { onClick: fromMarkup.Exposing.signal.press })),
-        `instancefor="${fromMarkup.Exposing.key}"`,
+        `tt-link="${linkOf(String(await fromMarkup.Exposing({})))}"`,
       );
       await assertRejects(
         // @ts-expect-error a component is a function, JSX or from instanced(...)

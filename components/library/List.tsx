@@ -4,27 +4,29 @@
  *
  * ```tsx
  * const { component } = await tiny.imports(ListSignalComponent);
- * const { List, Item, AddItem } = component.instance();
+ * const tasks = component.instance();
  *
- * <List label="Tasks">
- *   <Item dismissable>Order stock</Item>
- *   <Item label="Call back patients">
+ * <tasks.List label="Tasks">
+ *   <tasks.Item dismissable>Order stock</tasks.Item>
+ *   <tasks.Item label="Call back patients">
  *     <a href="/recalls" onMouseOver={fn.preview}>Call back patients</a>
- *   </Item>
- * </List>
- * <AddItem placeholder="New task" dismissable />
+ *   </tasks.Item>
+ * </tasks.List>
+ * <tasks.AddItem placeholder="New task" dismissable />
  * ```
  *
  * A `List` of `Row`s is a table body, inside a table the page writes:
  *
  * ```tsx
+ * const costs = component.instance();
+ *
  * <table>
  *   <thead><tr><th>Item</th><th>Cost</th></tr></thead>
- *   <List reorderable={false} newItem={template.costCells}>
- *     <Row>{template.costCells()}</Row>
- *   </List>
+ *   <costs.List reorderable={false} newItem={template.costCells}>
+ *     <costs.Row>{template.costCells()}</costs.Row>
+ *   </costs.List>
  * </table>
- * <AddButton label="Add another cost">+</AddButton>
+ * <costs.AddButton label="Add another cost">+</costs.AddButton>
  * ```
  *
  * Items' colours come from custom properties a caller may set on the list or

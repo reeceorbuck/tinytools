@@ -64,11 +64,19 @@ import {
 import {
   COMPONENT_ROOT_ATTRIBUTE,
   isMarkup,
+  isTransparent,
   markedComponent,
   markResult,
 } from "./componentScope.ts";
 import { lifecycleRuntimePath } from "./lifecycleElement.ts";
 import { signalToolsPrelude } from "./signalModules.ts";
+import {
+  checkDefinitionImports,
+  importCallSite,
+  type ImportedCollection,
+  trackImports,
+  unusedImports,
+} from "./importUsage.ts";
 import {
   mkdirSync,
   readFileSync,
@@ -938,6 +946,11 @@ type HandlerDefinitionScope = {
    * circular definition checks.
    */
   rendering?: boolean;
+  /**
+   * Each `tiny.imports()` of the definition and what it imported, checked
+   * against the shipped source once it is defined. Absent in prod mode.
+   */
+  imports?: { site: string; collections: ImportedCollection[] }[];
 };
 
 const handlerDefinitionScope = new AsyncLocalStorage<HandlerDefinitionScope>();
@@ -1317,6 +1330,12 @@ class ClientToolsClass<
       ) {
         throw new TypeError(
           "Handlers factory must return an object of handler functions.",
+        );
+      }
+      if (scope.imports) {
+        checkDefinitionImports(
+          scope.imports,
+          Object.values(functions).map(String).join("\n"),
         );
       }
       this._constantsPrelude = constantsDeclaration(scope.constants);
@@ -2059,6 +2078,11 @@ class SignalsClass extends HandlersClass {
             "An async Signals definition must resolve to a synchronous factory: return ({ Signal }) => ({ ... }).",
           );
         }
+        if (scope.imports) {
+          checkDefinitionImports(scope.imports, factory.toString());
+          // Checked: the accessors this returns are generated, not shipped.
+          scope.imports = undefined;
+        }
         compiled.factory = compileSignalFactory(factory, {
           references: serverReferences(scope.dependencies),
           constants: scope.constants,
@@ -2559,16 +2583,15 @@ type AnySignalsCollection = AnyClientToolsInstance & {
 
 /**
  * One instance of an imported signal component: the component itself, to
- * render as `<Box />`, with its `key` (that root's id, when the component
- * exposes signals) and `signal`
- * references that act on it from anywhere on the page. A `class` is added
- * to its root's own (`<Box class={styled.wide} />`); the component never
- * sees it.
+ * render as `<Box />`, with `signal` references that act on it from anywhere
+ * on the page, whether or not `<Box />` itself is rendered: an element using
+ * one carries the instance's `tt-link`, as its own root does. A `class` is
+ * added to its root's own (`<Box class={styled.wide} />`); the component
+ * never sees it.
  */
 export type Instance<TSignals, Props, Result> =
   & ((props: Props & { class?: string }) => Result)
   & {
-    readonly key: string;
     readonly signal: SignalReferences<TSignals>;
   };
 
@@ -2609,8 +2632,9 @@ export type ComponentLinker<TComponents> = {
   /**
    * One copy of the imported components: an instance of each, by name,
    * all sharing one instance of their signals wherever they sit on the
-   * page, so a box and its button are parts of one box.
-   * `const { Box, Button } = component.instance()`.
+   * page, so a box and its button are parts of one box. Name the copy and
+   * use its parts by dot, so go-to-definition reaches them:
+   * `const box = component.instance()`, then `<box.Box />`.
    */
   instance(): ComponentInstances<TComponents>;
   /**
@@ -2679,8 +2703,11 @@ function renderOf(value: unknown): InstancedParts["render"] | undefined {
   if (isMarkup(value)) return () => value;
 }
 
-/** Binds the signals of one request's `tiny.imports()` to an instance. */
-type SignalSource = (instanceKey?: string) => SignalReferences<unknown>;
+/**
+ * Binds the signals of one request's `tiny.imports()` to the instance with
+ * these `tt-link` tokens.
+ */
+type SignalSource = (links?: string) => SignalReferences<unknown>;
 
 /** Each signal reference from a request's `tiny.imports()`, by its name. */
 const signalSources = new WeakMap<
@@ -2739,8 +2766,8 @@ const signalComponentTools: SignalComponentTools = {
  * sharing only the factory's imports. `tiny.imports()` of it runs the
  * factory for the request and returns `component.ColorBox`,
  * whose `instance()` gives one instance to render as `<Instance />`
- * (its root becomes the instance root of every collection the factory
- * imported) and drive through `instance.signal`.
+ * (its root links into that instance of the innermost level of every
+ * collection the factory imported) and drive through `instance.signal`.
  */
 export class SignalComponent<TComponents extends AnyInstancedComponents> {
   readonly factory: (
@@ -2789,8 +2816,17 @@ type ExtractComponents<T> = T extends SignalComponent<infer TComponents> ? {
   }
   : Empty;
 
-let instanceCount = 0;
-let linkCount = 0;
+/**
+ * A new link id. Random, not counted per request: cached routes share one
+ * document, where a repeated id would join unrelated instances, and a
+ * server-wide count would show how much the server has rendered.
+ */
+function newLinkId(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(8));
+  return `link-${
+    Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")
+  }`;
+}
 
 type AnyInstance = Instance<unknown, Record<string, unknown>, unknown>;
 
@@ -2815,23 +2851,21 @@ function linkableComponents(
       }
       const leaves = instanceKeys.split(" ").filter(Boolean);
       const make = (link?: CopyLink) => {
-        const key = `${name}-${++instanceCount}`;
+        // A copy's parts share every level, and the copies made together
+        // share the outer ones. Alone, an instance links only the innermost
+        // levels, and takes the outer ones from the element it sits in.
+        const copy = link?.copy ?? newLinkId();
+        const links = [
+          ...(link ? enclosing.map((level) => `${level}=${link.group}`) : []),
+          ...leaves.map((level) => `${level}=${copy}`),
+        ].join(" ") || undefined;
+        // A transparent part is the caller's markup, so its styles reach in.
         const attributes: Record<string, string> = {
-          [COMPONENT_ROOT_ATTRIBUTE]: name,
-          // Alone, the root is its own instance of the innermost levels.
-          ...(link ? {} : { "tt-instance": instanceKeys }),
-          // Only `instancefor` needs the id, so a component exposing nothing
-          // can render as often as it likes without repeating one.
-          ...(exposed.size ? { id: key } : {}),
+          ...(isTransparent(render)
+            ? {}
+            : { [COMPONENT_ROOT_ATTRIBUTE]: name }),
+          ...(links ? { "tt-link": links } : {}),
         };
-        if (link && (enclosing.length || leaves.length)) {
-          // Linked, a copy's parts share every level, and the copies made
-          // together share the outer ones.
-          attributes["tt-link"] = [
-            ...enclosing.map((level) => `${level}=${link.group}`),
-            ...leaves.map((level) => `${level}=${link.copy}`),
-          ].join(" ");
-        }
         // Named after the component, for stack traces and devtools.
         const component = {
           [name]: ({ class: className, ...props }: Record<string, unknown>) =>
@@ -2844,8 +2878,7 @@ function linkableComponents(
             ),
         }[name];
         return Object.assign(markedComponent(component), {
-          key,
-          signal: instanceSignals(exposed, key),
+          signal: instanceSignals(exposed, links),
         });
       };
       const component: AnyImportedComponent = {
@@ -2866,7 +2899,7 @@ function linkableComponents(
     );
   return Object.assign(imported, {
     instance: ((repeat?: number) => {
-      const group = `link-${++linkCount}`;
+      const group = newLinkId();
       if (repeat === undefined) return instances(group, 0);
       if (!Number.isInteger(repeat) || repeat < 0) {
         throw new TypeError(
@@ -2882,22 +2915,81 @@ function linkableComponents(
 }
 
 /**
- * One instance's references to the signals its component exposes, or, with
- * no `key`, references resolving by ancestry.
+ * One instance's references to the signals its component exposes, carrying
+ * its `links`, or, with none, references resolving by ancestry.
  */
 function instanceSignals(
   exposed: Map<string, SignalSource>,
-  key?: string,
+  links?: string,
 ): SignalReferences<unknown> {
   const bound = new Map<SignalSource, SignalReferences<unknown>>();
   return new Proxy({}, {
     get(_target, name) {
       const source = typeof name === "string" ? exposed.get(name) : undefined;
       if (!source) return undefined;
-      if (!bound.has(source)) bound.set(source, source(key));
+      if (!bound.has(source)) bound.set(source, source(links));
       return (bound.get(source) as Record<string, unknown>)[name as string];
     },
   }) as SignalReferences<unknown>;
+}
+
+/**
+ * A `tiny.imports()` argument as the unused-import report names it, with the
+ * names it provides (a signal component's once its factory has run).
+ */
+function describeImport(
+  item: object,
+  componentNames: readonly string[] = [],
+): ImportedCollection {
+  const fileOf = (url: string) =>
+    decodeURIComponent(url.split(/[?#]/)[0].split("/").pop() ?? url);
+  let kind: string;
+  let names: string[];
+  let file: string | undefined;
+  let accessor: string | undefined;
+  if (item instanceof ConstantsClass) {
+    [kind, names, accessor] = [
+      "Constants",
+      Object.keys(item.values),
+      "constants",
+    ];
+  } else if (item instanceof SignalComponent) {
+    [kind, names] = ["SignalComponent", [...componentNames]];
+  } else {
+    const tool = item as AnyClientToolsInstance;
+    [kind, accessor] = tool instanceof SignalsClass
+      ? ["Signals", "signal"]
+      : tool instanceof TemplatesClass
+      ? ["Templates", "template"]
+      : tool instanceof StylesClass
+      ? ["Styles", "styled"]
+      : ["Handlers", "fn"];
+    names = [
+      ...(tool instanceof StylesClass
+        ? tool._styles.keys()
+        : tool._handlerDefinitions.keys()),
+    ];
+    file = fileOf(
+      (tool as unknown as { sourceFileUrl: string }).sourceFileUrl ?? "",
+    );
+  }
+  const shown = names.slice(0, 4).join(", ") + (names.length > 4 ? ", …" : "");
+  return {
+    key: item,
+    label: `${kind}${file ? ` in ${file}` : ""} (${shown || "nothing"})`,
+    names,
+    accessor,
+  };
+}
+
+/** The tool in `chain` that provides `name`, as the proxies resolve it: the last. */
+function providerOf<Tool extends ToolResolutionTarget>(
+  chain: readonly Tool[],
+  filenames: (tool: Tool) => ReadonlyMap<string, string>,
+  name: PropertyKey,
+): Tool | undefined {
+  if (typeof name !== "string") return undefined;
+  return chain.findLast((tool) => filenames(tool).has(name));
 }
 
 /** Values for `tiny.imports()`, read as `constants`. See {@link ConstantsClass}. */
@@ -2925,6 +3017,9 @@ export async function imports(
 ): Promise<
   ImportedTools<unknown, unknown, unknown, unknown, unknown, unknown>
 > {
+  // Where the call is, for the unused-import report: taken before the first
+  // await, while the caller is still on the stack.
+  const site = cache.trustCache ? undefined : importCallSite();
   const evaluations = new Map<SignalsClass, SignalEvaluation>();
   const components = given.filter((item) => item instanceof SignalComponent);
   const imported = [
@@ -2959,6 +3054,12 @@ export async function imports(
       mergeConstants(definition.constants ??= {}, constantSets);
     }
     await Promise.all(tools.map((tool) => tool.ensureDefined()));
+    if (site) {
+      (definition.imports ??= []).push({
+        site,
+        collections: imported.map((item) => describeImport(item)),
+      });
+    }
     const references: Record<string, AnyFunction> = Object.create(null);
     const signalReferences: Record<string, unknown> = Object.create(null);
     const templateReferences: Record<string, AnyFunction> = Object.create(
@@ -3055,6 +3156,8 @@ export async function imports(
     );
   }
   await Promise.all(tools.map((tool) => tool.ensureBuilt()));
+  /** Marks a collection as read, once the call's collections are known. */
+  let use: (key: object | undefined) => void = () => {};
   const recordUsage = (type: ToolUsageType, filename: string) => {
     if (!context) {
       recordNoContextUsage(type, filename);
@@ -3066,16 +3169,19 @@ export async function imports(
     const files = context.get(key) as Set<string> | undefined;
     files?.add(filename + (type === "handler" ? ".js" : ".css"));
   };
+  const handlerTools = tools.filter((tool) =>
+    !(tool instanceof SignalsClass) && !(tool instanceof TemplatesClass)
+  );
   const handlers = new Proxy({}, {
-    get: (_target, property) =>
-      resolveToolAccessFromChain(
-        tools.filter((tool) =>
-          !(tool instanceof SignalsClass) && !(tool instanceof TemplatesClass)
-        ),
+    get: (_target, property) => {
+      use(providerOf(handlerTools, (tool) => tool._handlerFilenames, property));
+      return resolveToolAccessFromChain(
+        handlerTools,
         "function",
         property,
         recordUsage,
-      ),
+      );
+    },
   });
   const signals = tools.filter((tool) => tool instanceof SignalsClass);
   const templates = tools.filter((tool) => tool instanceof TemplatesClass);
@@ -3091,6 +3197,7 @@ export async function imports(
         const rendered = templates[i].rendered(property);
         const instance = templates[i]._handlerDefinitions.get(property);
         if (!rendered || !instance) continue;
+        use(templates[i]);
         const clone = (params?: TemplateParams) => {
           for (const file of rendered.handlerFiles) recordHandlerFile(file);
           for (const file of rendered.styleFiles) {
@@ -3112,8 +3219,10 @@ export async function imports(
     },
   });
   const styled = new Proxy({}, {
-    get: (_target, property) =>
-      resolveToolAccessFromChain(tools, "style", property, recordUsage),
+    get: (_target, property) => {
+      use(providerOf(tools, (tool) => tool._styleFilenames, property));
+      return resolveToolAccessFromChain(tools, "style", property, recordUsage);
+    },
   });
   const resolveSignal = (name: string) => {
     // Unlike handlers, a signal name in two collections is never an
@@ -3126,6 +3235,7 @@ export async function imports(
         }. Import those collections in separate tiny.imports() calls.`,
       );
     }
+    use(owners[0]);
     return resolveToolAccessFromChain(signals, "function", name, recordUsage);
   };
   const levels = signalComponentScope.getStore();
@@ -3134,8 +3244,8 @@ export async function imports(
     leaves.forEach((key) => levels!.leaves.add(key));
     enclosing.forEach((key) => levels!.enclosing.add(key));
   }
-  const source: SignalSource = (key) =>
-    createSignalReferences(resolveSignal, rendering, key);
+  const source: SignalSource = (links) =>
+    createSignalReferences(resolveSignal, rendering, links);
   const references = createSignalReferences(resolveSignal, rendering);
   // Remembers where each reference came from, for `instanced()`.
   const signal = new Proxy(references, {
@@ -3176,6 +3286,7 @@ export async function imports(
           return {
             ...parts,
             name,
+            owner: component,
             instanceKeys: [...levels.leaves].join(" "),
             enclosing: [...levels.enclosing],
           };
@@ -3183,14 +3294,58 @@ export async function imports(
       });
     }),
   ).then((lists) => lists.flat());
+  let constants = mergeConstants({}, constantSets);
+  let component = linkableComponents(instancedComponents);
+  if (site) {
+    const componentOwners = new Map<string, object>(
+      instancedComponents.map(({ name, owner }) => [name, owner]),
+    );
+    use = trackImports(site, [
+      ...imported.map((item) => describeImport(item)),
+      ...components.map((owner) =>
+        describeImport(
+          owner,
+          instancedComponents.filter((part) => part.owner === owner)
+            .map(({ name }) => name),
+        )
+      ),
+    ]);
+    constants = new Proxy(constants, {
+      get(target, name, receiver) {
+        if (typeof name === "string") {
+          use(constantSets.find((set) => Object.hasOwn(set.values, name)));
+        }
+        return Reflect.get(target, name, receiver);
+      },
+    });
+    // A part read from the linker, or from the copies it makes, is a read
+    // of the component that defines it.
+    const parts = <Parts extends object>(made: Parts): Parts =>
+      new Proxy(made, {
+        get(target, name, receiver) {
+          if (typeof name === "string") use(componentOwners.get(name));
+          return Reflect.get(target, name, receiver);
+        },
+      });
+    const linker = component;
+    component = parts(
+      {
+        ...linker,
+        instance: ((repeat?: number) => {
+          const made = linker.instance(repeat as number);
+          return Array.isArray(made) ? made.map(parts) : parts(made);
+        }) as ComponentLinker<unknown>["instance"],
+      } as typeof linker,
+    );
+  }
   return {
-    constants: mergeConstants({}, constantSets),
+    constants,
     signal,
     fn: createHandlerReferences((name) =>
       (handlers as Record<string, unknown>)[name]
     ),
     template,
-    component: linkableComponents(instancedComponents),
+    component,
     styled: styled as ActivateScopedStyles<unknown>,
     get c(): Context {
       if (!context) {
@@ -3199,6 +3354,25 @@ export async function imports(
       return context;
     },
   };
+}
+
+/**
+ * Defines every registered collection now, so each definition's unused
+ * `tiny.imports()` arguments are warned about at startup rather than when a
+ * page first loads it (`--lazy` defines on demand). Does nothing in prod mode.
+ * Call it in the background once the app's modules are imported.
+ */
+export async function checkDefinitionImportsNow(): Promise<void> {
+  if (cache.trustCache) return;
+  for (const tools of [...registeredClientTools]) {
+    await tools.ensureDefined();
+  }
+  const found = unusedImports().filter(({ definition }) => definition);
+  console.log(
+    found.length
+      ? `[tiny-tools] ${found.length} definition(s) import what they never use (warned above).`
+      : "[tiny-tools] No unused tiny.imports() in definitions.",
+  );
 }
 
 /**
