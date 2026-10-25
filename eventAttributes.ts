@@ -86,10 +86,23 @@ export type HandlerReferences<TFunctions> = {
 export type SignalReferences<TSignals> = {
   readonly [Name in keyof TSignals]:
     & HandlerReference<Name & string, TSignals[Name]>
+    & SignalOrigin<Pick<TSignals, Name>>
     // deno-lint-ignore no-explicit-any
     & (TSignals[Name] extends (...args: any[]) => infer Signal
       ? Signal & RenderableSignal<Signal>
       : never);
+};
+
+declare const signalOriginBrand: unique symbol;
+
+/**
+ * Type-only: the signal's entry in the collection it came from. A `Pick`
+ * keeps the link to where the signal is declared, so types rebuilt from a
+ * list of references (`instanced(render, [signal.press])`) still go to
+ * its definition in the editor.
+ */
+export type SignalOrigin<TEntry> = {
+  readonly [signalOriginBrand]?: TEntry;
 };
 
 /**

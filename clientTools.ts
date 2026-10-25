@@ -47,6 +47,7 @@ import {
   createSignalReferences,
   type HandlerReference,
   type HandlerReferences,
+  type SignalOrigin,
   type SignalReferences,
   type SignalRendering,
 } from "./eventAttributes.ts";
@@ -2635,14 +2636,17 @@ export type Instanced<TSignals, Props, Result> = {
   };
 };
 
-/** The signals named by an `instanced()` list, by name. */
-type ExposedSignals<References extends readonly unknown[]> = {
-  [
-    Reference in References[number] as Reference extends
-      HandlerReference<infer Name, unknown> ? Name : never
-  ]: Reference extends HandlerReference<string, infer Signal> ? Signal
-    : never;
-};
+/**
+ * The signals named by an `instanced()` list, by name: each reference's own
+ * entry in its collection, so the editor still goes to its definition.
+ */
+type ExposedSignals<References extends readonly unknown[]> =
+  [References[number]] extends [never] ? Empty
+    : UnionToIntersection<
+      References[number] extends SignalOrigin<infer Entry>
+        ? Exclude<Entry, undefined>
+        : never
+    >;
 
 /** The tools a `tiny.SignalComponent` factory receives. */
 export type SignalComponentTools = {
@@ -2766,13 +2770,21 @@ type AnySignalComponent = SignalComponent<AnyInstancedComponents>;
 
 /** The `component` of a `tiny.imports()` of signal components. */
 type ExtractComponents<T> = T extends SignalComponent<infer TComponents> ? {
-    readonly [Name in keyof TComponents & string]: TComponents[Name] extends
+    readonly [
+      // `keyof TComponents` alone (not `& string`) keeps each name linked to
+      // the factory's entry, for the editor's go to definition.
+      Name in keyof TComponents
+    ]: TComponents[Name] extends
       Instanced<infer TSignals, infer Props, infer Result>
-      ? ImportedComponent<Name, TSignals, Props, Result>
+      ? ImportedComponent<Name & string, TSignals, Props, Result>
       : TComponents[Name] extends (props: infer Props) => infer Result
-        ? ImportedComponent<Name, ExposedSignals<[]>, Props, Result>
-      : TComponents[Name] extends JSX.Element
-        ? ImportedComponent<Name, ExposedSignals<[]>, Empty, JSX.Element>
+        ? ImportedComponent<Name & string, ExposedSignals<[]>, Props, Result>
+      : TComponents[Name] extends JSX.Element ? ImportedComponent<
+          Name & string,
+          ExposedSignals<[]>,
+          Empty,
+          JSX.Element
+        >
       : never;
   }
   : Empty;
