@@ -14,7 +14,6 @@ import {
   imports,
   registeredClientTools,
   Signals,
-  Store,
   Styles,
 } from "../clientTools.ts";
 import { buildScriptFiles } from "../build.ts";
@@ -26,14 +25,11 @@ import {
 import type { JSX } from "../jsx-runtime.ts";
 import { handlerReferenceAttributes } from "../eventAttributes.ts";
 
-declare const stored: { count?: number };
-
 /** Compile a single-handler bundle; `dependencies` maps key -> [path, export]. */
 function compileOne(
   source: string,
   dependencies: [string, string, string?][] = [],
   name = "consumer",
-  stored: string | false = false,
 ) {
   return compileHandlerBundle({
     functions: new Map([[name, source]]),
@@ -44,7 +40,6 @@ function compileOne(
           (key.startsWith("signal:") ? key.slice(7) : key),
       }]),
     ),
-    stored,
   });
 }
 
@@ -120,60 +115,6 @@ Deno.test({
   },
 });
 
-Deno.test({
-  name:
-    "signal.filterByInstance keeps every signal and resolves each from the element",
-  sanitizeOps: false,
-  sanitizeResources: false,
-  async fn() {
-    try {
-      // `layered` is per-instance (it has forInstance); `shared` is not.
-      const signals = `data:text/javascript,${
-        encodeURIComponent(
-          'const layered = { forInstance: (element) => ({ value: "for " + element.id }) };' +
-            'const shared = { value: "everywhere" };' +
-            "export const layeredSignal = () => layered;" +
-            "export const sharedSignal = () => shared;" +
-            "export const unusedSignal = () => { throw new Error('read'); };",
-        )
-      }`;
-      const result = await compileOne(
-        "function () { const scoped = signal.filterByInstance(this); return [scoped.layered.value, scoped.shared.value, Object.keys(scoped)]; }",
-        [
-          ["signal:layered", signals, "layeredSignal"],
-          ["signal:shared", signals, "sharedSignal"],
-          ["signal:unused", signals, "unusedSignal"],
-        ],
-      );
-      assertEquals(result.dependencies.sort(), [
-        "signal:layered",
-        "signal:shared",
-        "signal:unused",
-      ]);
-      assertStringIncludes(result.code, "filterByInstance(element)");
-      const module = await loadCode(result.code);
-      // Properties resolve on read, so the throwing signal never runs.
-      assertEquals(module.consumer.call({ id: "root-a" }), [
-        "for root-a",
-        "everywhere",
-        ["layered", "shared", "unused"],
-      ]);
-
-      const without = await compileOne(
-        "function () { return signal.shared.value; }",
-        [
-          ["signal:shared", signals, "sharedSignal"],
-          ["signal:unused", signals, "unusedSignal"],
-        ],
-      );
-      assertEquals(without.dependencies, ["signal:shared"]);
-      assertEquals(without.code.includes("filterByInstance"), false);
-    } finally {
-      (await getEsbuild()).stop();
-    }
-  },
-});
-
 function reset() {
   (cache as { trustCache: boolean }).trustCache = false;
   handlers.clear();
@@ -216,7 +157,7 @@ Deno.test({
           pathToFileURL(`${Deno.cwd()}/${directory}/handlers/${filename}.js`)
             .href
         );
-      // One bundle per Signals instance, plus one shared signal runtime.
+      // One bundle per Signals instance, plus the runtime modules they use.
       assertEquals(
         new Set(
           ["count", "empty", "doubled", "text"].map((name) =>
@@ -225,27 +166,36 @@ Deno.test({
         ).size,
         1,
       );
+      // Package bundles registered by other test files are built too.
       const built = [...Deno.readDirSync(`${directory}/handlers`)].map((
         entry,
-      ) => entry.name).sort();
+      ) => entry.name).filter((name) =>
+        name.startsWith("newHandlers_") || name.startsWith("tt-")
+      ).sort();
       assertEquals(
         built,
         [
           `${consumer._handlerFilenames.get("read")}.js`,
           `${first._handlerFilenames.get("count")}.js`,
           `${second._handlerFilenames.get("count")}.js`,
-          built.find((name) => name.startsWith("signals_"))!,
+          built.find((name) => name.startsWith("tt-signal_"))!,
+          built.find((name) => name.startsWith("tt-computed_"))!,
         ].sort(),
       );
       const signalCode = await Deno.readTextFile(
         `${directory}/handlers/${first._handlerFilenames.get("count")}.js`,
       );
-      assertStringIncludes(signalCode, "import { signalClasses } from");
-      assertStringIncludes(signalCode, "const fn = { signalClasses };");
+      // Only the runtime modules the factory's parameter names are imported.
       assertStringIncludes(
         signalCode,
-        'const { Signal, Computed } = fn.signalClasses(true, "newHandlers_',
+        'import { SignalInstance as Signal } from "./tt-signal_',
       );
+      assertStringIncludes(
+        signalCode,
+        'import { ComputedInstance as Computed } from "./tt-computed_',
+      );
+      assertEquals(signalCode.includes("tt-trigger_"), false);
+      assertEquals(signalCode.includes("tt-instance_"), false);
       assertStringIncludes(
         signalCode,
         "const signals = (() => {",
@@ -263,6 +213,11 @@ Deno.test({
       assertEquals(count.value, 1);
       assertEquals(doubled.value, 2);
       assertEquals(empty.value, null);
+      // Signals without a name are named after their keys.
+      assertEquals(
+        [count.name, doubled.name, empty.name],
+        ["count", "doubled", "empty"],
+      );
       assertEquals(module.read()[0], count);
       const target = new EventTarget();
       const values: number[] = [];
@@ -404,14 +359,14 @@ Deno.test({
       const plainBundle = await load(plain);
       assertStringIncludes(
         plainBundle.code,
-        'const tools = fn.signalClasses(true, "newHandlers_',
+        "const tools = { Signal: __tiny_Signal,",
       );
       assertStringIncludes(plainBundle.code, "const signals = (() =>");
       assertEquals(plainBundle.module.total().value, 2);
       const expressionBundle = await load(expression);
       assertStringIncludes(
         expressionBundle.code,
-        'const { Signal } = fn.signalClasses(true, "newHandlers_',
+        'import { SignalInstance as Signal } from "./tt-signal_',
       );
       assertStringIncludes(
         expressionBundle.code,
@@ -421,7 +376,7 @@ Deno.test({
       const clashingBundle = await load(clashing);
       assertStringIncludes(
         clashingBundle.code,
-        'const signals = defineSignals(fn.signalClasses(true, "newHandlers_',
+        "const signals = defineSignals({ Signal: __tiny_Signal,",
       );
       assertEquals(clashingBundle.module.Signal().value, 3);
     } finally {
@@ -508,25 +463,6 @@ Deno.test("Signals reject non-signal outputs and definition-time value access", 
       TypeError,
       "synchronously",
     );
-    const reservedName = new Signals(
-      import.meta.url,
-      ({ Signal }) => ({ filterByInstance: new Signal(1) }),
-    );
-    await assertRejects(
-      () => reservedName.ensureDefined(),
-      TypeError,
-      "'filterByInstance' is reserved",
-    );
-    const readsValue = new Signals(import.meta.url, ({ Signal }) => {
-      const value = new Signal(1);
-      void value.value;
-      return { value };
-    });
-    await assertRejects(
-      () => readsValue.ensureDefined(),
-      Error,
-      "only available in client handlers",
-    );
   } finally {
     reset();
   }
@@ -601,228 +537,6 @@ Deno.test("Handlers.run requires factory definitions to be ready", async () => {
   } finally {
     reset();
   }
-});
-
-Deno.test({
-  name:
-    "stateful handler modules retain private state until a fresh module loads",
-  sanitizeOps: false,
-  sanitizeResources: false,
-  async fn() {
-    const registry = globalThis as typeof globalThis & {
-      handlers?: Record<string, unknown>;
-    };
-    const previousHandlers = registry.handlers;
-    try {
-      registry.handlers = {};
-      const compile = () =>
-        compileOne(
-          "function() { stored.count ??= 0; return ++stored.count; }",
-          [],
-          "counter",
-          "stored",
-        );
-      const first = await compile();
-      const second = await compile();
-      const load = (code: string, filename: string) =>
-        import(`data:text/javascript,${encodeURIComponent(code)}#${filename}`);
-      const firstModule = await load(first.code, "first_store");
-      assertEquals(firstModule.counter(), 1);
-      assertEquals(firstModule.counter(), 2);
-      assertEquals((await load(first.code, "first_store")).counter(), 3);
-      assertEquals((await load(second.code, "second_store")).counter(), 1);
-      assertEquals(first.dependencies, []);
-      assertEquals(Object.hasOwn(globalThis, "stored"), false);
-    } finally {
-      if (previousHandlers === undefined) delete registry.handlers;
-      else registry.handlers = previousHandlers;
-      (await getEsbuild()).stop();
-    }
-  },
-});
-
-Deno.test({
-  name: "Store factories emit typed private state and work through fn imports",
-  sanitizeOps: false,
-  sanitizeResources: false,
-  async fn() {
-    reset();
-    let definitions = 0;
-    const create = () =>
-      new Store(import.meta.url, (stored: { count?: number }) => {
-        definitions++;
-        return {
-          counter: function (step = 1) {
-            stored.count ??= 0;
-            return stored.count += step;
-          },
-          other: function () {
-            return stored.count;
-          },
-        };
-      });
-    const first = create();
-    const second = create();
-    const consumer = new Handlers(import.meta.url, async () => {
-      const { fn } = await imports(first);
-      return {
-        increment: function () {
-          return fn.counter(2);
-        },
-      };
-    });
-    const registry = globalThis as typeof globalThis & {
-      handlers?: Record<string, unknown>;
-    };
-    const previousHandlers = registry.handlers;
-    try {
-      registry.handlers = {};
-      await Promise.all([
-        consumer.ensureDefined(),
-        first.ensureDefined(),
-        second.ensureDefined(),
-      ]);
-      assertEquals(definitions, 2);
-      const firstHandler = first._handlerDefinitions.get("counter")!;
-      const secondHandler = second._handlerDefinitions.get("counter")!;
-      assertNotEquals(firstHandler.filename, secondHandler.filename);
-      const load = async (collection: typeof first) => {
-        const bundle = collection._handlerDefinitions.get("counter")!.bundle;
-        const code = await bundle.buildCode();
-        return await import(
-          `data:text/javascript,${encodeURIComponent(code)}#${bundle.filename}`
-        );
-      };
-      const firstModule = await load(first);
-      assertEquals(firstModule.counter(), 1);
-      assertEquals(firstModule.counter(2), 3);
-      assertEquals((await load(second)).counter(), 1);
-      // Handlers of one Store share its state.
-      assertEquals((await load(first)).other(), 3);
-      const createWithoutUrl = () =>
-        new Store({
-          counter: function () {
-            stored.count ??= 0;
-            return ++stored.count;
-          },
-        });
-      assertNotEquals(
-        createWithoutUrl()._handlerFilenames.get("counter"),
-        createWithoutUrl()._handlerFilenames.get("counter"),
-      );
-      const consumerCode = await consumer._handlerDefinitions.get("increment")!
-        .buildCode();
-      assertStringIncludes(consumerCode, firstHandler.filename);
-      assertEquals(consumerCode.includes("Object.create(null)"), false);
-    } finally {
-      if (previousHandlers === undefined) delete registry.handlers;
-      else registry.handlers = previousHandlers;
-      reset();
-      (await getEsbuild()).stop();
-    }
-  },
-});
-
-Deno.test({
-  name:
-    "Store builds share state across consumers and isolate object-form stores",
-  sanitizeOps: false,
-  sanitizeResources: false,
-  async fn() {
-    reset();
-    const directory = "./.test-build-output/stores";
-    const create = () =>
-      new Store(import.meta.url, {
-        counter: function () {
-          stored.count ??= 0;
-          return ++stored.count;
-        },
-      });
-    const first = create();
-    const second = create();
-    const ordinary = new Handlers(import.meta.url, {
-      counter: function () {
-        stored.count ??= 0;
-        return ++stored.count;
-      },
-    });
-    const wrapper = new Store(
-      import.meta.url,
-      async (stored: { calls?: number }) => {
-        const { fn } = await imports(first);
-        return {
-          next: function () {
-            stored.calls ??= 0;
-            return [++stored.calls, fn.counter()];
-          },
-        };
-      },
-    );
-    const consumer = new Handlers(import.meta.url, async () => {
-      const { fn } = await imports(first);
-      return {
-        next: function () {
-          return fn.counter();
-        },
-      };
-    });
-    const registry = globalThis as typeof globalThis & {
-      handlers?: Record<string, unknown>;
-    };
-    const previousHandlers = registry.handlers;
-    try {
-      registry.handlers = {};
-      await buildScriptFiles({ fresh: true, publicDir: directory });
-      assertNotEquals(
-        first._handlerFilenames.get("counter"),
-        second._handlerFilenames.get("counter"),
-      );
-      assertNotEquals(
-        first._handlerFilenames.get("counter"),
-        ordinary._handlerFilenames.get("counter"),
-      );
-      const load = (filename: string) =>
-        import(
-          pathToFileURL(`${Deno.cwd()}/${directory}/handlers/${filename}.js`)
-            .href
-        );
-      const wrapperModule = await load(wrapper._handlerFilenames.get("next")!);
-      const consumerModule = await load(
-        consumer._handlerFilenames.get("next")!,
-      );
-      assertEquals(wrapperModule.next(), [1, 1]);
-      assertEquals(consumerModule.next(), 2);
-      assertEquals(wrapperModule.next(), [2, 3]);
-      assertEquals(
-        (await load(second._handlerFilenames.get("counter")!)).counter(),
-        1,
-      );
-      const initialName = wrapper._handlerFilenames.get("next")!;
-      const rebuild = async () => {
-        cache.beginChangeDetectionPass();
-        await wrapper._handlerDefinitions.get("next")!.bundle.ensureWritten(
-          `${directory}/handlers`,
-        );
-        cache.commitPendingSourceMtimes();
-      };
-      await rebuild();
-      assertEquals(wrapper._handlerFilenames.get("next"), initialName);
-      first._handlerDefinitions.get("counter")!.fn = function () {
-        stored.count ??= 100;
-        return ++stored.count;
-      };
-      await rebuild();
-      const changedName = wrapper._handlerFilenames.get("next")!;
-      assertNotEquals(changedName, initialName);
-      assertEquals((await load(changedName)).next(), [1, 101]);
-    } finally {
-      if (previousHandlers === undefined) delete registry.handlers;
-      else registry.handlers = previousHandlers;
-      await Deno.remove(directory, { recursive: true });
-      reset();
-      (await getEsbuild()).stop();
-    }
-  },
 });
 
 Deno.test({
@@ -1017,7 +731,6 @@ Deno.test({
           ["not-an-identifier", "function() { return 'ok'; }"],
         ]),
         dependencies: new Map(),
-        stored: false,
       });
       const siblingModule = await loadCode(siblings.code);
       assertEquals(siblingModule.quadruple(3), 12);
@@ -1096,8 +809,7 @@ Deno.test({
 });
 
 Deno.test({
-  name:
-    "Handlers keeps concurrent same-file collections isolated and supports legacy consumers",
+  name: "Handlers keeps concurrent same-file collections isolated",
   sanitizeOps: false,
   sanitizeResources: false,
   async fn() {
@@ -1129,16 +841,10 @@ Deno.test({
         },
       };
     });
-    const legacy = new Handlers(import.meta.url, { imports: [left] }, {
-      own: function () {
-        return "legacy";
-      },
-    });
     try {
       await Promise.all([
         left.ensureDefined(),
         right.ensureDefined(),
-        legacy.ensureDefined(),
       ]);
       const leftCode = await left._handlerDefinitions.get("consumer")!
         .buildCode();
@@ -1153,11 +859,6 @@ Deno.test({
       assertEquals(
         rightCode.includes(first._handlerFilenames.get("shared")!),
         false,
-      );
-      assertEquals([...legacy._handlerFilenames.keys()], ["consumer", "own"]);
-      assertEquals(
-        legacy._handlerDefinitions.get("consumer"),
-        left._handlerDefinitions.get("consumer"),
       );
     } finally {
       reset();
@@ -1240,7 +941,7 @@ Deno.test({
       },
     }));
     try {
-      const { fn, handlers: legacy } = await imports(collection);
+      const { fn } = await imports(collection);
       const click: NonNullable<JSX.IntrinsicElements["button"]["onClick"]> =
         fn.click;
       const submit: NonNullable<JSX.IntrinsicElements["form"]["onSubmit"]> =
@@ -1251,7 +952,6 @@ Deno.test({
       assertEquals(typeof click, "object");
       assertEquals(typeof submit, "object");
       assertEquals(typeof incorrect, "object");
-      assertEquals(typeof legacy.click, "string");
       assertEquals(collection._handlerFilenames.size, 2);
     } finally {
       mutableCache.trustCache = previousTrust;

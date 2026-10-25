@@ -1,5 +1,5 @@
 /** Hono middleware and request rendering for TinyTools. */
-import { component, transparent } from "./componentScope.ts";
+import { component } from "./componentScope.ts";
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
 import { h } from "./jsx-runtime.ts";
 import { Hono as HonoBase } from "hono";
@@ -22,8 +22,8 @@ import {
   setGeneratedFilenameHashLength,
   setGeneratedHandlerHashLength,
   setGeneratedStyleHashLength,
+  SignalComponent,
   Signals,
-  Store,
   Styles,
   Templates,
 } from "./clientTools.ts";
@@ -38,16 +38,18 @@ import {
   compactSource,
   defineLifecycleElement,
   lifecycleRuntimeFiles,
+  lifecycleRuntimePath,
   lifecycleRuntimeScript,
 } from "./lifecycleElement.ts";
 import { NewPartial } from "./components/NewPartial.tsx";
-import { CSP_ENABLED_KEY, eventHandlerBody } from "./eventAttributes.ts";
+import { signalRuntimeFiles } from "./signalModules.ts";
+import { eventHandlerBody } from "./eventAttributes.ts";
 
 const ROUTE_LAYOUT_APPLIED_KEY = "tinyToolsRouteLayoutApplied";
 /**
- * The dispatcher script every page loads at the end of its head. The
- * lifecycle runtime is included only when a page uses lifecycle tags (see
- * `lifecycleElement.ts`).
+ * The dispatcher script a page loads at the end of its head once it binds a
+ * handler. The lifecycle runtime follows it only when the page uses
+ * lifecycle tags (see `lifecycleElement.ts`).
  */
 export const runHandlerScript = [
   compactSource(runHandler.toString()),
@@ -96,7 +98,7 @@ function createRouteLayout(
 }
 
 export type ClientToolsOptions = {
-  /** Enable CSP and JSX reference transforms. Defaults to true. */
+  /** Send a Content-Security-Policy header. Defaults to true. */
   csp?: boolean;
   /** Generated filename hash length, clamped to 1-8. */
   generatedFilenameHashLength?: number;
@@ -243,13 +245,10 @@ function createCoreMiddleware(
   performance.mark("startup:appCreated");
   let staticMiddleware: MiddlewareHandler | undefined;
   return [
-    async (context, next) => {
-      context.set(CSP_ENABLED_KEY, options.csp !== false);
-      await next();
-    },
     ...(options.csp === false ? [] : [createCspMiddleware()]),
     async (context, next) => {
-      const runtimeFile = lifecycleRuntimeFiles.get(context.req.path);
+      const runtimeFile = lifecycleRuntimeFiles.get(context.req.path) ??
+        signalRuntimeFiles.get(context.req.path);
       if (runtimeFile !== undefined) {
         context.header("Content-Type", "application/javascript; charset=utf-8");
         context.header("Cache-Control", "public, max-age=31536000, immutable");
@@ -364,24 +363,21 @@ function createCoreMiddleware(
       return (
         <html>
           <head>
-            <title>{title}</title>
+            {title !== undefined && <title>{title}</title>}
             <meta
               name="viewport"
               content="width=device-width, initial-scale=1"
             />
-            <style>
-              @layer global, unscoped, limited, normal, important, debug;
-            </style>
             <AssetTags
               accessedHandlerFiles={handlerFiles}
               accessedStyleFiles={styleFiles}
               accessedLifecycleTags={lifecycleTags}
               defineWith="meta"
             />
-            <script src={runtimeScriptPath()}></script>
-            {lifecycleTags.length > 0 && (
-              <script>{raw(lifecycleRuntimeScript)}</script>
+            {(handlerFiles.length > 0 || lifecycleTags.length > 0) && (
+              <script src={runtimeScriptPath()} />
             )}
+            {lifecycleTags.length > 0 && <script src={lifecycleRuntimePath} />}
           </head>
           {routeLayoutApplied ? body : <body>{body}</body>}
         </html>
@@ -470,8 +466,6 @@ export type TinyApi = {
   readonly Hono: typeof TinyHono;
   readonly Handlers: typeof Handlers;
   readonly Constants: typeof Constants;
-  /** @deprecated Use tiny.Signals instead. Retained for compatibility. */
-  readonly Store: typeof Store;
   readonly Signals: typeof Signals;
   readonly Templates: typeof Templates;
   readonly runHandler: typeof runHandler;
@@ -481,42 +475,32 @@ export type TinyApi = {
   readonly css: typeof css;
   readonly imports: typeof imports;
   readonly component: typeof component;
-  readonly transparent: typeof transparent;
+  readonly SignalComponent: typeof SignalComponent;
   readonly middleware: {
     readonly core: (options?: ClientToolsOptions) => MiddlewareHandler[];
-    readonly csp: () => MiddlewareHandler;
     readonly layout: (component: RouteLayoutComponent) => MiddlewareHandler;
     readonly partialLayout: (
       component: RouteLayoutComponent,
     ) => MiddlewareHandler;
   };
-  readonly build: (
-    options?: import("./build.ts").BuildOptions,
-  ) => Promise<void>;
 };
 
 export const tiny: TinyApi = {
   Hono: TinyHono,
   Handlers,
   Constants,
-  Store,
   Signals,
   Templates,
   Styles,
   css,
   imports,
   component,
-  transparent,
+  SignalComponent,
   runHandler,
   defineLifecycleElement,
   middleware: {
     core: createCoreMiddleware,
-    csp: createCspMiddleware,
     layout: (component) => createRouteLayout(component, false),
     partialLayout: (component) => createRouteLayout(component, true),
-  },
-  async build(options) {
-    const { buildScriptFiles } = await import("./build.ts");
-    await buildScriptFiles(options);
   },
 };

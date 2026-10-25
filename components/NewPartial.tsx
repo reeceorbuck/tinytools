@@ -4,7 +4,7 @@ import type { HtmlEscapedString } from "hono/utils/html";
 import { Handlers } from "../clientTools.ts";
 import { tiny } from "../honoFactory.tsx";
 import { routeCacheTools } from "../handlers/routeCacheTools.ts";
-import type { ActivatedClientFunction, JSX } from "../jsx-runtime.ts";
+import type { JSX } from "../jsx-runtime.ts";
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
 import { Fragment, h } from "../jsx-runtime.ts";
 import type { HandlerReference } from "../eventAttributes.ts";
@@ -32,14 +32,10 @@ function passLoadEventHref(): string {
   return `/handlers/${partialLogic._handlerFilenames.get("passLoadEvent")}.js`;
 }
 
-type PartialInsertHandler =
-  | HandlerReference<
-    string,
-    (this: HTMLTemplateElement, event: Event) => void
-  >
-  | ActivatedClientFunction<
-    (this: HTMLTemplateElement, event: Event) => void
-  >;
+type PartialInsertHandler = HandlerReference<
+  string,
+  (this: HTMLTemplateElement, event: Event) => void
+>;
 
 export type PartialProps = PropsWithChildren<{
   /** Insertion handler run when the partial's template loads, e.g. `fn.partialReplace`. */

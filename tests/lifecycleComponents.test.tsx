@@ -52,7 +52,7 @@ Deno.test("UpgradeCustomElement declares each custom tag once, ahead of the head
   const metaAt = html.indexOf('<meta name="tt-define"');
   const scriptAt = html.indexOf(`<script src="${runtimeScriptPath()}">`);
   const lifecycleAt = html.indexOf(
-    `<script>${lifecycleRuntimeScript}</script>`,
+    `<script src="${lifecycleRuntimePath}"></script>`,
   );
   const bodyAt = html.indexOf("<body>");
   assertEquals(metaAt < scriptAt && scriptAt < lifecycleAt, true);
@@ -117,13 +117,15 @@ Deno.test("only pages using lifecycle tags carry the lifecycle runtime", async (
       </UpgradeCustomElement>,
     ));
   const plain = await (await app.request("/plain")).text();
-  assertEquals(plain.includes(lifecycleRuntimeScript), false);
+  assertEquals(plain.includes("tt-lifecycle"), false);
   const upgraded = await (await app.request("/upgraded")).text();
   const coreAt = upgraded.indexOf(
     `<script src="${runtimeScriptPath()}"></script>`,
   );
+  // A classic script, cached like the dispatcher, rather than inline.
+  assertEquals(upgraded.includes(lifecycleRuntimeScript), false);
   const runtimeAt = upgraded.indexOf(
-    `<script>${lifecycleRuntimeScript}</script>`,
+    `<script src="${lifecycleRuntimePath}"></script>`,
   );
   assertEquals(0 < coreAt && coreAt < runtimeAt, true);
   assertEquals(runtimeAt < upgraded.indexOf("<body>"), true);
@@ -132,7 +134,10 @@ Deno.test("only pages using lifecycle tags carry the lifecycle runtime", async (
 Deno.test("core middleware serves the lifecycle modules as immutable files", async () => {
   const app = new tiny.Hono({ tools: "core" });
   for (const [path, source] of lifecycleRuntimeFiles) {
-    assertMatch(path, /^\/tt-lifecycle(-fallback)?_[0-9a-f]{8}\.js$/);
+    assertMatch(
+      path,
+      /^\/handlers\/tt-lifecycle(-fallback)?_[0-9a-f]{8}\.js$/,
+    );
     const response = await app.request(path);
     assertEquals(response.status, 200);
     assertStringIncludes(
@@ -246,7 +251,7 @@ Deno.test("UpgradeCustomElement gives plain tags a proxy sibling", async () => {
   // Only the plain tag gets a proxy, which forwards connect and disconnect to it.
   assertMatch(
     html,
-    /<section>Two<\/section><upgrade-preceding onconnect="tiny\.runHandler\(this,event\)" tt-handler-connect="(\w+)\.forwardConnect" ondisconnect="tiny\.runHandler\(this,event\)" tt-handler-disconnect="\1\.forwardDisconnect"><\/upgrade-preceding>/,
+    /<section>Two<\/section><upgrade-preceding tt-handler-connect="(\w+)\.forwardConnect" tt-handler-disconnect="\1\.forwardDisconnect"><\/upgrade-preceding>/,
   );
   assertEquals([...html.matchAll(/<upgrade-preceding /g)].length, 1);
   assertEquals(html.includes("<link"), false);
@@ -304,7 +309,7 @@ Deno.test("ActivateParsedHandler runs onParsed once through a trigger after the 
   // preloads the bundle holding its own handler.
   assertMatch(
     html,
-    /<template onparsed="tiny\.runHandler\(this,event\)" tt-handler-parsed="\w+\.build">Content<\/template><link rel="modulepreload" href="\/handlers\/(\w+)\.js" tt-handler-load="\1\.referParsed" onLoad="tiny\.runHandler\(this,event\)"\/>/,
+    /<template tt-handler-parsed="\w+\.build">Content<\/template><link rel="modulepreload" href="\/handlers\/(\w+)\.js" tt-handler-load="\1\.referParsed" onLoad="tiny\.runHandler\(this,event\)"\/>/,
   );
   // `parsed` is not a DOM event, so the trigger dispatches it via runHandler.
   const code = await bundleByFilename(
@@ -340,7 +345,7 @@ Deno.test("BuildFromTemplate names a template clone and loads its bundle", async
   assertMatch(
     html,
     new RegExp(
-      `<template data-template="${bundle}\\.card" onparsed="tiny\\.runHandler\\(this,event\\)" tt-handler-parsed="\\w+\\.buildFromTemplate"><h2 slot="title">Hi</h2><p>Body</p></template><link rel="modulepreload"`,
+      `<template data-template="${bundle}\\.card" tt-handler-parsed="\\w+\\.buildFromTemplate"><h2 slot="title">Hi</h2><p>Body</p></template><link rel="modulepreload"`,
     ),
   );
   // Reading the reference recorded the template bundle for the page.
@@ -352,12 +357,13 @@ Deno.test("BuildFromTemplate names a template clone and loads its bundle", async
   assertEquals(template.card.reference, `${bundle}.card`);
 });
 
-Deno.test("Signals collections share one runtime bundle", async () => {
+Deno.test("Signals collections share the runtime modules they use", async () => {
   const first = new Signals(import.meta.url, ({ Signal }) => ({
     one: new Signal(1),
   }));
-  const second = new Signals(import.meta.url, ({ Signal }) => ({
+  const second = new Signals(import.meta.url, ({ Signal, Trigger }) => ({
     two: new Signal(2),
+    ping: new Trigger(),
   }));
   await Promise.all([first.ensureDefined(), second.ensureDefined()]);
   const runtimeOf = (
@@ -365,14 +371,11 @@ Deno.test("Signals collections share one runtime bundle", async () => {
       _handlerDefinitions: ReadonlyMap<string, ClientFunctionImpl>;
     },
   ) =>
-    [...collection._handlerDefinitions.values()][0].bundle.dependencies.get(
-      "signalClasses",
-    )!.bundle;
-  assertEquals(runtimeOf(first), runtimeOf(second));
-  assertEquals(
-    runtimeOf(first).sourceFileUrl?.endsWith("signals.ts"),
-    true,
-  );
+    [
+      ...[...collection._handlerDefinitions.values()][0].bundle.runtimeFiles,
+    ].map((file) => file.replace(/_\w+\.js$/, ""));
+  assertEquals(runtimeOf(first), ["tt-signal"]);
+  assertEquals(runtimeOf(second), ["tt-signal", "tt-trigger"]);
 });
 
 Deno.test("layouts may return their children unchanged", async () => {
@@ -449,7 +452,7 @@ Deno.test("precompiled markup binding a lifecycle handler declares its custom ta
   assertEquals(declaredInHead(html), ["x-panel"]);
   assertMatch(
     html,
-    /<section><x-panel onconnect="[^"]+" tt-handler-connect="\w+\.build">One<\/x-panel><\/section>/,
+    /<section><x-panel tt-handler-connect="\w+\.build">One<\/x-panel><\/section>/,
   );
 });
 
@@ -484,7 +487,7 @@ Deno.test("a plain tag binding onConnect without an is gets one", async () => {
   assertEquals(html.match(/is="tt-input"/g)?.length, 1);
   assertMatch(
     html,
-    /<div><textarea is="tt-textarea" onconnect="[^"]+" tt-handler-connect="\w+\.build" ondisconnect=/,
+    /<div><textarea is="tt-textarea" tt-handler-connect="\w+\.build" tt-handler-disconnect=/,
   );
   assertEquals(html.includes("upgrade-preceding"), false);
 });
@@ -588,11 +591,11 @@ Deno.test("a plain tag whose is has no hyphen inside the wrapper renders with it
   assertEquals(declaredInHead(html), ["upgrade-preceding"]);
   assertMatch(
     html,
-    /<input is="plain" onconnect="[^"]+" tt-handler-connect="\w+\.build"\/><upgrade-preceding /,
+    /<input is="plain" tt-handler-connect="\w+\.build"\/><upgrade-preceding /,
   );
   assertMatch(
     html,
-    /<textarea is="plain" onconnect="[^"]+" tt-handler-connect="\w+\.build"><\/textarea><upgrade-preceding /,
+    /<textarea is="plain" tt-handler-connect="\w+\.build"><\/textarea><upgrade-preceding /,
   );
 });
 
@@ -651,7 +654,7 @@ Deno.test("an is attribute makes a plain tag a customized built-in lifecycle ele
   assertEquals(html.includes("upgrade-preceding"), false);
   assertMatch(
     html,
-    /<button type="button" is="custom-button" onconnect="[^"]+" tt-handler-connect="\w+\.build"/,
+    /<button type="button" is="custom-button" tt-handler-connect="\w+\.build"/,
   );
   // Without a hyphen, `is` does not make a custom element.
   const { fn } = await tiny.imports(parsedHandlers);
@@ -695,7 +698,7 @@ Deno.test("a fragment-only template keeps a proxied element wrappable", async ()
   const html = await (await app.request("/")).text();
   assertMatch(
     html,
-    /<select is="plain" onconnect="[^"]+" tt-handler-connect="\w+\.build"><\/select><upgrade-preceding /,
+    /<select is="plain" tt-handler-connect="\w+\.build"><\/select><upgrade-preceding /,
   );
 });
 

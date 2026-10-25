@@ -16,7 +16,10 @@ import {
   Handlers,
   Styles,
 } from "../clientTools.ts";
-import { eventHandlerBody } from "../eventAttributes.ts";
+import {
+  eventHandlerBody,
+  handlerReferenceAttributes,
+} from "../eventAttributes.ts";
 
 const first = new Handlers(import.meta.url, {
   click() {
@@ -118,7 +121,7 @@ Deno.test("imports do not leak handlers or assets between calls and concurrent r
       context.req.param("collection") === "first" ? first : second,
     );
     const empty = await tiny.imports();
-    assertEquals(Reflect.get(empty.handlers, "click"), undefined);
+    assertEquals(Reflect.get(empty.fn, "click"), undefined);
     await Promise.resolve();
     return context.render(
       <button type="button" onClick={local.fn.click}>Click</button>,
@@ -145,21 +148,22 @@ Deno.test("explicit imports use last collection precedence without mutating coll
   const combined = await tiny.imports(first, second, styles);
   const original = await tiny.imports(first);
   const override = await tiny.imports(second);
-  assertEquals(combined.handlers.click, override.handlers.click);
-  assertEquals(combined.handlers.click === original.handlers.click, false);
-  assertEquals(typeof combined.handlers.unused, "string");
-  assertEquals(typeof combined.handlers.submit, "string");
+  /** The `<bundle>.<name>` a reference renders as. */
+  const handlerOf = (reference: unknown) =>
+    handlerReferenceAttributes("onClick", reference)?.["tt-handler-click"];
+  assertEquals(handlerOf(combined.fn.click), handlerOf(override.fn.click));
+  assertEquals(
+    handlerOf(combined.fn.click) === handlerOf(original.fn.click),
+    false,
+  );
+  assertEquals(typeof combined.fn.unused, "object");
+  assertEquals(typeof combined.fn.submit, "object");
   assertEquals(typeof combined.styled.panel, "string");
-  assertEquals(Reflect.get(original.handlers, "submit"), undefined);
+  assertEquals(Reflect.get(original.fn, "submit"), undefined);
 });
 
-Deno.test("imports retain inline composition and style merging", async () => {
-  const { handlers, styled } = await tiny.imports(first, second, styles);
-  const independent = handlers.multiHandler(handlers.click, handlers.submit);
-  const sequential = handlers.multiHandlerSync(handlers.click, handlers.submit);
-  assertStringIncludes(String(independent), ".call(this, event);handlers.");
-  assertStringIncludes(String(sequential), "if(await handlers.");
-  assertStringIncludes(String(sequential), "===false)return;");
+Deno.test("imports retain style merging", async () => {
+  const { styled } = await tiny.imports(first, second, styles);
   const merged = styled.mergeClasses(
     styled.panel,
     styled.alternate,
@@ -170,7 +174,7 @@ Deno.test("imports retain inline composition and style merging", async () => {
 
 Deno.test("imports outside requests expose tools but reject context access", async () => {
   const local = await tiny.imports(first);
-  assertEquals(typeof local.handlers.click, "string");
+  assertEquals(typeof local.fn.click, "object");
   assertThrows(() => local.c, Error, "no active Hono request context");
   await assertRejects(
     () => tiny.imports(),
@@ -179,35 +183,12 @@ Deno.test("imports outside requests expose tools but reject context access", asy
   );
 });
 
-Deno.test("handler constructor dependencies remain available through imports", async () => {
-  const combined = new Handlers(import.meta.url, { imports: [first] }, {
-    own() {
-      console.log("own");
-    },
-  });
-  const { handlers } = await tiny.imports(combined);
-  assertEquals(typeof handlers.click, "string");
-  assertEquals(typeof handlers.own, "string");
-  assertThrows(
-    () =>
-      new Handlers(import.meta.url, { imports: [first] }, {
-        click() {
-          console.log("duplicate");
-        },
-      }),
-    Error,
-    "click",
-  );
-});
-
 Deno.test("reserved handler and style names remain rejected", () => {
-  for (const name of ["multiHandler", "multiHandlerSync"]) {
-    assertThrows(
-      () => new Handlers(import.meta.url, { [name]() {} }),
-      Error,
-      name,
-    );
-  }
+  assertThrows(
+    () => new Handlers(import.meta.url, { run() {} }),
+    Error,
+    "run",
+  );
   assertThrows(
     () =>
       new Styles(import.meta.url, {

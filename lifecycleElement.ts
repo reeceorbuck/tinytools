@@ -2,12 +2,13 @@
  * The browser runtime behind lifecycle elements.
  *
  * It is not part of the core head script: a page only gets it once it uses a
- * lifecycle tag. A full page that declares tags in its head runs it inline
- * right after the core script, so `tiny.defineLifecycleElement` exists
- * before any body content is parsed. Content that arrives later (streamed
- * Suspense chunks, partial updates, pushed updates) carries it inline ahead
- * of its `<tt-define>` declarations, and template bundles import it as a
- * module; every copy after the first does nothing.
+ * lifecycle tag. A full page that declares tags in its head loads it as a
+ * cached classic script right after the core script, so
+ * `tiny.defineLifecycleElement` exists before any body content is parsed.
+ * Content that arrives later (streamed Suspense chunks, partial updates,
+ * pushed updates) carries it inline ahead of its `<tt-define>`
+ * declarations, and template bundles import it as a module; every copy
+ * after the first does nothing.
  *
  * Tags are declared by `AssetTags`: in a full page's head as
  * `<meta name="tt-define" content="note-entry">`, which the runtime defines
@@ -170,17 +171,28 @@ export function defineLifecycleTags(): void {
 }
 
 /**
- * Strips comment lines and indentation from a function's source for
- * inlining. Line-based, so inlined functions must not hold multi-line
- * strings or template literals.
+ * Strips comment lines, comment blocks that start a line, and indentation
+ * from a function's source for inlining. Line-based, so inlined functions
+ * must not hold multi-line strings or template literals.
  */
 export function compactSource(source: string): string {
-  return source.split("\n").map((line) => line.trim())
-    .filter((line) => line && !line.startsWith("//")).join("\n");
+  let inComment = false;
+  const lines: string[] = [];
+  for (let line of source.split("\n")) {
+    line = line.trim();
+    if (inComment || line.startsWith("/*")) {
+      // Code may follow the comment on its closing line.
+      const end = line.indexOf("*/", inComment ? 0 : 2);
+      inComment = end < 0;
+      line = inComment ? "" : line.slice(end + 2).trim();
+    }
+    if (line && !line.startsWith("//")) lines.push(line);
+  }
+  return lines.join("\n");
 }
 
 /** Short FNV-1a hash of `source`, for the runtime's immutable file names. */
-function sourceHash(source: string): string {
+export function sourceHash(source: string): string {
   let hash = 0x811c9dc5;
   for (let index = 0; index < source.length; index++) {
     hash = Math.imul(hash ^ source.charCodeAt(index), 0x01000193);
@@ -194,7 +206,7 @@ const fallbackSource = [
 ].join("\n");
 
 /** The path the observer fallback module is served at. */
-export const lifecycleFallbackPath = `/tt-lifecycle-fallback_${
+export const lifecycleFallbackPath = `/handlers/tt-lifecycle-fallback_${
   sourceHash(fallbackSource)
 }.js`;
 
@@ -222,8 +234,11 @@ export const lifecycleRuntimeScript = [
   "})();",
 ].join("\n");
 
-/** The path the lifecycle runtime is served at as a module, for template bundles. */
-export const lifecycleRuntimePath = `/tt-lifecycle_${
+/**
+ * The path the lifecycle runtime is served at: a classic script in a full
+ * page's head, after the dispatcher, and a module for template bundles.
+ */
+export const lifecycleRuntimePath = `/handlers/tt-lifecycle_${
   sourceHash(lifecycleRuntimeScript)
 }.js`;
 

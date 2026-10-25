@@ -8,7 +8,6 @@ import {
   withNoContextToolUsageTracker,
 } from "../clientTools.ts";
 import { eventHandlerBody } from "../eventAttributes.ts";
-import type { JSX } from "../jsx-runtime.ts";
 import type { NewPartial } from "../components/NewPartial.tsx";
 import { Hono } from "hono";
 import { contextStorage } from "hono/context-storage";
@@ -42,10 +41,11 @@ Deno.test("imports track explicit request assets without context tools", async (
     context.set("accessedStyleFiles", styleFiles);
     const local = await imports(handlers, styles);
     assertEquals(local.c, context);
-    const attributes = local.events({ click: local.fn.click });
-    assertEquals([...handlerFiles], [
-      attributes["tt-handler-click"].split(".")[0] + ".js",
-    ]);
+    const html = String(
+      <button type="button" onClick={local.fn.click}>Test</button>,
+    );
+    const handler = /tt-handler-click="(\w+)\.click"/.exec(html)?.[1];
+    assertEquals([...handlerFiles], [`${handler}.js`]);
     assertEquals(typeof local.styled.button, "string");
     assertEquals(styleFiles.size, 1);
     assertEquals((await imports()).c, context);
@@ -56,37 +56,24 @@ Deno.test("imports track explicit request assets without context tools", async (
   assertEquals(await response.text(), "OK");
 });
 
-Deno.test("imports events track only accessed assets without context", async () => {
+Deno.test("imports track only accessed assets without context", async () => {
   const tracker = {
     accessedHandlerFiles: new Set<string>(),
     accessedStyleFiles: new Set<string>(),
     accessedLifecycleTags: new Set<string>(),
   };
   await withNoContextToolUsageTracker(tracker, async () => {
-    const { events, fn: references } = await imports(handlers, styles);
-    const attributes = events({ click: references.click });
-    assertEquals(attributes, events({ click: "click" }));
-    const props: JSX.IntrinsicElements["button"] = attributes;
-    assertEquals(String(props.onclick), eventHandlerBody);
-    assertEquals(
-      [...tracker.accessedHandlerFiles],
-      [attributes["tt-handler-click"].split(".")[0] + ".js"],
-    );
+    const { fn } = await imports(handlers, styles);
+    const html = String(<button type="button" onClick={fn.click}>Test</button>);
+    const handler = /tt-handler-click="(\w+)\.click"/.exec(html)?.[1];
+    assertEquals(handler !== undefined, true);
+    assertEquals(html.includes(`onclick="${eventHandlerBody}"`), true);
+    assertEquals([...tracker.accessedHandlerFiles], [`${handler}.js`]);
     assertEquals(tracker.accessedStyleFiles.size, 0);
-    const html = String(<button {...attributes}>Test</button>);
-    assertEquals(/tt-handler-click="\w+\.click"/.test(html), true);
-    const expected = String(
-      <button {...events({ click: "click" })}>Test</button>,
-    );
-    assertEquals(html, expected);
   });
 });
 
 async function checkImportTypes() {
-  const { handlers: legacy, events, fn: references } = await imports(
-    handlers,
-    styles,
-  );
   type PartialOnLoad = Parameters<typeof NewPartial>[0]["onLoad"];
   const partialTools = new Handlers(import.meta.url, {
     load: function (this: HTMLTemplateElement, _event: Event) {},
@@ -94,32 +81,19 @@ async function checkImportTypes() {
   });
   const partial = await imports(partialTools);
   const referenceLoad: PartialOnLoad = partial.fn.load;
-  const legacyLoad: PartialOnLoad = partial.handlers.load;
   // @ts-expect-error Raw functions are not imported handler bindings.
   const rawLoad: PartialOnLoad = function (_event: Event) {};
   // @ts-expect-error Load events cannot satisfy keyboard handler requirements.
   const keyboardLoad: PartialOnLoad = partial.fn.keyboard;
-  void [referenceLoad, legacyLoad, rawLoad, keyboardLoad];
-  events({ click: references.click, keydown: references.keyboard });
-  // @ts-expect-error Event signatures remain checked for references.
-  events({ keydown: references.click });
-  const foreign = await imports(unrelated);
-  // @ts-expect-error Same-signature handlers with unimported names are rejected.
-  events({ click: foreign.fn.unrelatedClick });
-  events({ click: "click", keydown: "keyboard" });
-  // @ts-expect-error Names must come from the explicit imports.
-  events({ click: "unrelatedClick" });
-  // @ts-expect-error Keyboard handlers cannot handle mouse events.
-  events({ click: "keyboard" });
-  // @ts-expect-error Activated expressions are not handler names.
-  events({ click: legacy.click });
+  void [referenceLoad, rawLoad, keyboardLoad];
   const onlyStyles = await imports(styles);
   // @ts-expect-error Style imports expose no handler references.
   onlyStyles.fn.click;
-  // @ts-expect-error Styles do not import handlers.
-  onlyStyles.events({ click: "click" });
   const extended = await imports(handlers, unrelated);
-  extended.events({ click: "unrelatedClick", keydown: "keyboard" });
-  extended.events({ click: extended.fn.unrelatedClick });
+  <button
+    type="button"
+    onClick={extended.fn.unrelatedClick}
+    onKeyDown={extended.fn.keyboard}
+  />;
 }
 void checkImportTypes;

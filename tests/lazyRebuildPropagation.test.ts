@@ -24,7 +24,12 @@ import {
   handlers,
   resetImportRegistries,
 } from "../clientFunctions.ts";
-import { cache, Handlers, registeredClientTools } from "../clientTools.ts";
+import {
+  cache,
+  Handlers,
+  imports,
+  registeredClientTools,
+} from "../clientTools.ts";
 import {
   changedStyleKeys,
   scopedStylesRegistry,
@@ -79,8 +84,8 @@ async function lazyRevalidate(...tools: Tools[]): Promise<void> {
 }
 
 /** Swap a handler's function, as a reloaded module would. */
-function edit(tool: Tools, name: string, fn: () => void) {
-  tool._handlerDefinitions.get(name)!.fn = fn;
+function edit(tool: Tools, name: string, replacement: () => void) {
+  tool._handlerDefinitions.get(name)!.fn = replacement;
 }
 
 const filename = (tool: Tools, name: string) =>
@@ -105,27 +110,26 @@ async function helperAndConsumer() {
       console.log("v1");
     },
   });
-  const consumer = new Handlers(
-    await writeFakeSource("consumer"),
-    { imports: [helper] },
-    {
+  const consumer = new Handlers(await writeFakeSource("consumer"), async () => {
+    const { fn } = await imports(helper);
+    return {
       consumerFn(this: HTMLElement) {
-        // @ts-ignore - sharedFn is provided by the emitted import
-        sharedFn();
+        fn.sharedFn.call(this);
       },
-    },
-  );
+    };
+  });
+  await consumer.ensureDefined();
   return { helper, consumer };
 }
 
-function lazyTest(name: string, fn: () => Promise<void>) {
+function lazyTest(name: string, body: () => Promise<void>) {
   Deno.test({
     name: `lazy rebuild - ${name}`,
     async fn() {
       await cleanupTestDirs();
       resetRegistries();
       try {
-        await fn();
+        await body();
       } finally {
         await cleanupTestDirs();
       }
@@ -206,9 +210,11 @@ lazyTest("editing only the consumer does not rename the helper", async () => {
   const helperName = filename(helper, "sharedFn");
   const consumerName = filename(consumer, "consumerFn");
 
+  // Only the source text ships, where `fn` is the bundle's import of the
+  // helper. A free `fn` here would make the transpiler rename the factories'.
+  const fn = undefined as unknown as { sharedFn(): void };
   edit(consumer, "consumerFn", function consumerFn() {
-    // @ts-ignore - provided by the emitted import
-    sharedFn();
+    fn.sharedFn();
     console.log("edited consumer");
   });
   await lazyRevalidate(consumer);
@@ -225,26 +231,23 @@ lazyTest(
         return "leaf v1";
       },
     });
-    const middle = new Handlers(
-      await writeFakeSource("middle"),
-      { imports: [leaf] },
-      {
+    const middle = new Handlers(await writeFakeSource("middle"), async () => {
+      const { fn } = await imports(leaf);
+      return {
         middleFn() {
-          // @ts-ignore - provided by the emitted import
-          return leafFn();
+          return fn.leafFn();
         },
-      },
-    );
-    const root = new Handlers(
-      await writeFakeSource("root"),
-      { imports: [middle] },
-      {
+      };
+    });
+    const root = new Handlers(await writeFakeSource("root"), async () => {
+      const { fn } = await imports(middle);
+      return {
         rootFn() {
-          // @ts-ignore - provided by the emitted import
-          return middleFn();
+          return fn.middleFn();
         },
-      },
-    );
+      };
+    });
+    await root.ensureDefined();
     await lazyRevalidate(root);
     const before = {
       leaf: filename(leaf, "leafFn"),
@@ -273,15 +276,11 @@ lazyTest(
   "a consumer that does NOT import the helper is unaffected",
   async () => {
     const { helper, consumer } = await helperAndConsumer();
-    const bystander = new Handlers(
-      await writeFakeSource("bystander"),
-      { imports: [helper] },
-      {
-        bystanderFn() {
-          console.log("never calls the helper");
-        },
+    const bystander = new Handlers(await writeFakeSource("bystander"), {
+      bystanderFn() {
+        console.log("never calls the helper");
       },
-    );
+    });
     await lazyRevalidate(consumer, bystander);
     const bystanderName = filename(bystander, "bystanderFn");
 
@@ -320,14 +319,16 @@ lazyTest(
     });
     const external = new Handlers(
       await writeFakeSource("external"),
-      { imports: [middle] },
-      {
-        externalFn() {
-          // @ts-ignore - provided by the emitted import
-          return middleFn();
-        },
+      async () => {
+        const { fn } = await imports(middle);
+        return {
+          externalFn() {
+            return fn.middleFn();
+          },
+        };
       },
     );
+    await external.ensureDefined();
     await lazyRevalidate(external, unrelated);
     const before = {
       middle: filename(middle, "middleFn"),

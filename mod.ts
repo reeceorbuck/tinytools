@@ -50,14 +50,19 @@ export type { LifecycleElement } from "./lifecycleElement.ts";
 
 // Handlers & Styles exports
 export {
+  type ComponentInstances,
+  type ComponentLinker,
   Constants,
   Handlers,
-  type HandlersOptions,
+  type ImportedComponent,
   type ImportedTools,
   imports,
+  type Instance,
+  type Instanced,
   type RenderedTemplate,
+  SignalComponent,
+  type SignalComponentTools,
   Signals,
-  Store,
   Styles,
   type TemplateClones,
   type TemplateFragment,
@@ -83,13 +88,11 @@ export type {
 // Registry exports (used by build process)
 export {
   eventHandlerBody,
-  type Events,
   type HandlerProp,
   type HandlerReference,
   type HandlerReferences,
   type SignalProp,
 } from "./eventAttributes.ts";
-export { handlers } from "./clientFunctions.ts";
 export {
   css,
   mergeClassNames,
@@ -105,16 +108,6 @@ export {
 
 // Type exports for activated styles
 export type { ActivateScopedStyles } from "./scopedStyles.ts";
-
-// Type exports from JSX runtime
-export type {
-  ActivateClientFunction,
-  ActivateClientFunctions,
-  ActivatedClientFunction,
-  BrandAsClientFunction,
-  ClientFunction,
-  IsClientFunction,
-} from "./jsx-runtime.ts";
 
 // Performance utilities
 export { logStartupPerformanceSummary } from "./startupPerformanceSummary.ts";

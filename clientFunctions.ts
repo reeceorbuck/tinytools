@@ -12,6 +12,7 @@
 type AnyFunction = (...args: any[]) => any;
 
 import { mkdir, rm, stat as fsStat, writeFile } from "node:fs/promises";
+import { signalRuntimeSources } from "./signalModules.ts";
 import {
   cache,
   emptySourceFileCacheEntry,
@@ -52,8 +53,11 @@ export function handlerFileDependencies(files: Iterable<string>): string[] {
   for (const name of requested) {
     const bundle = bundlesByFilename.get(name);
     if (!bundle) continue;
-    for (const filename of bundle.reachableFilenames) {
-      if (!requested.has(filename)) dependencies.add(`${filename}.js`);
+    for (const reachable of bundle.reachable()) {
+      if (!requested.has(reachable.filename)) {
+        dependencies.add(`${reachable.filename}.js`);
+      }
+      for (const file of reachable.runtimeFiles) dependencies.add(file);
     }
   }
   return [...dependencies];
@@ -124,7 +128,7 @@ export const changedHandlerKeys = new Set<string>();
 export const filesWithChangedHandlers = new Set<string>();
 
 /** Bump when emitted bundle code changes shape, so stale files are not reused. */
-const BUNDLE_FORMAT_VERSION = 1;
+const BUNDLE_FORMAT_VERSION = 2;
 
 /** Cache key under `cache.files[source].handlers` for bundle filenames. */
 const BUNDLE_CACHE_KEY = "#bundle";
@@ -168,11 +172,6 @@ export class ClientFunctionImpl<
     return `${this.bundle.filename}.${this.fnName}`;
   }
 
-  /** Inline expression used by the `handlers` API and CSP-disabled output. */
-  get expression(): string {
-    return `handlers.${this.reference}.call(this, event)`;
-  }
-
   /** Bundle code with this handler as the default export (for tests/tools). */
   buildCode(): Promise<string> {
     return this.bundle.buildCode(this.fnName);
@@ -185,12 +184,13 @@ export type HandlerBundleOptions = {
   index: number;
   /** Stateful bundles are unique per instance even when sources match. */
   stateful: boolean;
-  storedBinding: string;
   /** Explicit `tiny.imports()` dependencies; absent for object-form bundles. */
   dependencies?: ReadonlyMap<string, ClientFunctionImpl>;
   prelude?: string;
   /** Stylesheets (`<bundle>.css`) the markup this bundle carries needs. */
   styleFiles?: Iterable<string>;
+  /** Runtime modules (`tt-*.js`) the prelude imports. */
+  runtimeFiles?: Iterable<string>;
 };
 
 /**
@@ -205,10 +205,11 @@ export class HandlerBundle {
   readonly sourceFileUrl?: string;
   readonly index: number;
   readonly stateful: boolean;
-  readonly storedBinding: string;
   readonly prelude: string;
   /** Stylesheets the markup this bundle carries needs (see `styleFileDependencies`). */
   readonly styleFiles: ReadonlySet<string>;
+  /** Runtime modules the prelude imports, preloaded beside the bundle. */
+  readonly runtimeFiles: ReadonlySet<string>;
   #explicitDependencies?: Map<string, ClientFunctionImpl>;
   #filename: string | undefined;
   /** Last filename written to disk, starting from the persisted cache entry. */
@@ -218,9 +219,9 @@ export class HandlerBundle {
     this.sourceFileUrl = normalizeSourceFileUrl(options.sourceFileUrl);
     this.index = options.index;
     this.stateful = options.stateful;
-    this.storedBinding = options.storedBinding;
     this.prelude = options.prelude ?? "";
     this.styleFiles = new Set(options.styleFiles);
+    this.runtimeFiles = new Set(options.runtimeFiles);
     this.#explicitDependencies = options.dependencies &&
       new Map(options.dependencies);
     handlerBundles.add(this);
@@ -287,7 +288,7 @@ export class HandlerBundle {
     return [
       `bundle-v${BUNDLE_FORMAT_VERSION}`,
       this.sourceFileUrl ?? "",
-      this.stateful ? `stateful:${this.index}:${this.storedBinding}` : "",
+      this.stateful ? `stateful:${this.index}` : "",
       this.prelude,
       ...[...this.functions].map(([name, impl]) =>
         `${name}=${impl.fn.toString()}`
@@ -361,7 +362,6 @@ export class HandlerBundle {
         ),
         prelude: this.prelude,
         dependencies,
-        stored: this.stateful && this.storedBinding,
         defaultExport,
         register: this.filename,
       })
@@ -433,6 +433,14 @@ export class HandlerBundle {
       if (memoryAssets.has(assetPath)) return false;
       memoryAssets.set(assetPath, await this.buildCode());
       return true;
+    }
+    // The runtime modules the prelude imports sit beside the bundle, so the
+    // handler directory holds everything its bundles import.
+    for (const file of this.runtimeFiles) {
+      const runtimePath = `${handlerDir}/${file}`;
+      if (await fsStat(runtimePath).then(() => true, () => false)) continue;
+      await mkdir(handlerDir, { recursive: true });
+      await writeFile(runtimePath, signalRuntimeSources.get(file)!);
     }
     const path = `${handlerDir}/${filename}.js`;
     // An edited source always rewrites its bundles, which also repairs files

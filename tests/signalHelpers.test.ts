@@ -7,32 +7,6 @@ import { loadHandler } from "./helpers/loadHandler.ts";
 
 void signalTools;
 
-Deno.test("effect runs for named and unnamed signals until aborted", async () => {
-  const effect = await loadHandler("effect");
-  const { Signal, Computed } = signalClasses();
-  const named = new Signal<number>(1);
-  named.name = "count";
-  const unnamed = new Signal<string>("a");
-  const doubled = new Computed(() => Number(named.value) * 2, [named]);
-
-  let runs = 0;
-  const controller = new AbortController();
-  effect(() => runs++, [named, unnamed], controller);
-
-  named.value = 2;
-  assertEquals(runs, 1);
-  assertEquals(doubled.value, 4);
-  unnamed.value = "b";
-  assertEquals(runs, 2);
-  // Equal values do not notify.
-  unnamed.value = "b";
-  assertEquals(runs, 2);
-
-  controller.abort();
-  named.value = 3;
-  assertEquals(runs, 2);
-});
-
 Deno.test("setCssProperty writes the signal's named custom property", async () => {
   const setCssProperty = await loadHandler("setCssProperty");
   const { Signal } = signalClasses();
@@ -89,7 +63,10 @@ Deno.test("a trigger fires on every event and on fire()", () => {
   addRow.subscribe(listener);
   addRow.handleEvent({}, { type: "click" } as Event);
   // A change event fires it too, rather than reading the control's value.
-  addRow.handleEvent({}, { type: "change", target: { value: "x" } } as unknown as Event);
+  addRow.handleEvent(
+    {},
+    { type: "change", target: { value: "x" } } as unknown as Event,
+  );
   addRow.fire();
   assertEquals(notifications, 3);
   assertThrows(() => (addRow.value = 1), TypeError, "fire()");
@@ -104,7 +81,7 @@ Deno.test("signals take their name from the input that writes them", () => {
   };
   signal.handleEvent(null, {
     type: "input",
-    target: { value: "typed", dataset: { bindName: "" }, name: "field" },
+    target: { value: "typed", name: "field" },
   } as unknown as Event);
   assertEquals(signal.value, "typed");
   assertEquals(signal.name, "field");
@@ -209,14 +186,13 @@ Deno.test("fireSelfSignal sends every subscribed signal once", () => {
   assertEquals(seen, ["a", 2]);
 });
 
-Deno.test("setValue writes only its bound signal, and only on a change", async () => {
+Deno.test("setValue writes any signal, only on a change", async () => {
   const setValue = await loadHandler("setValue");
   const { Signal } = signalClasses();
-  const query = new Signal<string>("tea");
-  const other = new Signal<number>(2);
+  const count = new Signal<number>(2);
   const writes: string[] = [];
   const element = {
-    current: "tea",
+    current: "",
     get value() {
       return this.current;
     },
@@ -224,177 +200,22 @@ Deno.test("setValue writes only its bound signal, and only on a change", async (
       writes.push(value);
       this.current = value;
     },
-    bound: null as string | null,
-    getAttribute(name: string) {
-      return name === "tt-value-signal" ? this.bound : null;
-    },
   };
-  const global = globalThis as { handlers?: unknown };
-  const previous = global.handlers;
-  try {
-    // Unbound, any signal is written.
-    setValue.call(element, { signal: other });
-    assertEquals(writes, ["2"]);
-    // Bound, a signal's handler run without an event returns the signal.
-    element.bound = "bundle.query";
-    global.handlers = {
-      bundle: {
-        // As the collection's bundle defines it.
-        query(this: unknown, event?: Event) {
-          return (query as unknown as {
-            handleEvent(target: unknown, event?: Event): unknown;
-          }).handleEvent(this, event);
-        },
-      },
-    };
-    query.value = "coffee";
-    setValue.call(element, { signal: other });
-    setValue.call(element, { signal: query });
-    // The same value is not written again.
-    setValue.call(element, { signal: query });
-    assertEquals(writes, ["2", "coffee"]);
-    // A per-instance signal resolves the instance enclosing the element.
-    const instance = new Signal<string>("milk");
-    global.handlers = {
-      bundle: {
-        query: () => ({
-          forInstance: (target: unknown) =>
-            target === element ? instance : null,
-        }),
-      },
-    };
-    setValue.call(element, { signal: query });
-    setValue.call(element, { signal: instance });
-    assertEquals(writes, ["2", "coffee", "milk"]);
-  } finally {
-    global.handlers = previous;
-  }
+  setValue.call(element, { signal: count });
+  setValue.call(element, { signal: count });
+  assertEquals(writes, ["2"]);
 });
 
-Deno.test("setChecked writes only its bound signal, and only on a change", async () => {
-  const setChecked = await loadHandler("setChecked");
-  const { Signal } = signalClasses();
-  const done = new Signal<boolean>(false);
-  const count = new Signal<number>(3);
-  const writes: boolean[] = [];
-  const element = {
-    current: false,
-    get checked() {
-      return this.current;
-    },
-    set checked(checked: boolean) {
-      writes.push(checked);
-      this.current = checked;
-    },
-    bound: null as string | null,
-    getAttribute(name: string) {
-      return name === "tt-checked-signal" ? this.bound : null;
-    },
-  };
-  const global = globalThis as { handlers?: unknown };
-  const previous = global.handlers;
-  try {
-    // Unbound, any signal is written as truthy or not.
-    setChecked.call(element, { signal: count });
-    assertEquals(writes, [true]);
-    element.bound = "bundle.done";
-    global.handlers = { bundle: { done: () => done } };
-    // Bound, other signals are ignored and an unchanged value is not written.
-    count.value = 0;
-    setChecked.call(element, { signal: count });
-    done.value = true;
-    setChecked.call(element, { signal: done });
-    done.value = false;
-    setChecked.call(element, { signal: done });
-    assertEquals(writes, [true, false]);
-  } finally {
-    global.handlers = previous;
-  }
-});
-
-Deno.test("setSelected writes only its bound signal, and only on a change", async () => {
-  const setSelected = await loadHandler("setSelected");
-  const { Signal } = signalClasses();
-  const isDental = new Signal<boolean>(false);
-  const other = new Signal<string>("x");
-  const writes: boolean[] = [];
-  const element = {
-    current: false,
-    get selected() {
-      return this.current;
-    },
-    set selected(selected: boolean) {
-      writes.push(selected);
-      this.current = selected;
-    },
-    getAttribute(name: string) {
-      return name === "tt-selected-signal" ? "bundle.isDental" : null;
-    },
-  };
-  const global = globalThis as { handlers?: unknown };
-  const previous = global.handlers;
-  try {
-    global.handlers = { bundle: { isDental: () => isDental } };
-    setSelected.call(element, { signal: other });
-    setSelected.call(element, { signal: isDental });
-    isDental.value = true;
-    setSelected.call(element, { signal: isDental });
-    setSelected.call(element, { signal: isDental });
-    assertEquals(writes, [true]);
-  } finally {
-    global.handlers = previous;
-  }
-});
-
-Deno.test("setBoundProperty writes booleans and strings, only for its bound signal", async () => {
-  const setHidden = await loadHandler("setHidden");
-  const setDisabled = await loadHandler("setDisabled");
-  const setValue = await loadHandler("setValue");
-  const { Signal } = signalClasses();
-  const open = new Signal<boolean>(false);
-  const other = new Signal<number>(1);
-  const element: Record<string, unknown> & {
-    getAttribute(name: string): string | null;
-  } = {
-    hidden: false,
-    disabled: false,
-    value: "",
-    getAttribute: (name: string) =>
-      name === "tt-hidden-signal" ? "bundle.open" : null,
-  };
-  const global = globalThis as { handlers?: unknown };
-  const previous = global.handlers;
-  try {
-    global.handlers = { bundle: { open: () => open } };
-    // Bound: hidden ignores other signals.
-    setHidden.call(element, { signal: other });
-    assertEquals(element.hidden, false);
-    open.value = true;
-    setHidden.call(element, { signal: open });
-    assertEquals(element.hidden, true);
-    // Unbound: disabled and value follow any signal.
-    setDisabled.call(element, { signal: other });
-    setValue.call(element, { signal: other });
-    assertEquals([element.disabled, element.value], [true, "1"]);
-  } finally {
-    global.handlers = previous;
-  }
-});
-
-Deno.test("setBoundAttributes writes each data-* and aria-* attribute bound to the signal", async () => {
-  const setBoundAttributes = await loadHandler("setBoundAttributes");
-  const { Signal } = signalClasses();
-  const status = new Signal<string | null>("open");
-  const expanded = new Signal<boolean>(false);
-  const values = new Map<string, string>([
-    ["tt-data-status-signal", "bundle.status"],
-    ["tt-aria-expanded-signal", "bundle.expanded"],
-    ["tt-value-signal", "bundle.status"],
-  ]);
+/** An element with the given attributes and properties, recording writes. */
+function boundElement(
+  attributes: Record<string, string>,
+  properties: Record<string, unknown> = {},
+) {
+  const values = new Map(Object.entries(attributes));
   const writes: string[] = [];
   const element = {
     get attributes() {
-      return [...values.keys()].map((name) => ({ name }));
+      return [...values].map(([name, value]) => ({ name, value }));
     },
     getAttribute: (name: string) => values.get(name) ?? null,
     setAttribute(name: string, value: string) {
@@ -406,24 +227,95 @@ Deno.test("setBoundAttributes writes each data-* and aria-* attribute bound to t
       values.delete(name);
     },
   };
+  for (const [name, initial] of Object.entries(properties)) {
+    let current = initial;
+    Object.defineProperty(element, name, {
+      get: () => current,
+      set(value) {
+        writes.push(`${name}:${value}`);
+        current = value;
+      },
+    });
+  }
+  return {
+    element: element as typeof element & Record<string, unknown>,
+    writes,
+  };
+}
+
+Deno.test("setBound writes each binding of the event's signal, only on a change", async () => {
+  const setBound = await loadHandler("setBound");
+  const { Signal } = signalClasses();
+  const status = new Signal<string | null>("open");
+  const expanded = new Signal<boolean>(false);
+  const done = new Signal<boolean>(true);
+  const { element, writes } = boundElement({
+    "tt-data-status-signal": "bundle.status",
+    "tt-aria-expanded-signal": "bundle.expanded",
+    "tt-value-signal": "bundle.status",
+    "tt-checked-signal": "bundle.done",
+    // The element's own handlers are not a binding.
+    "tt-handler-signal": "bundle.setBound",
+  }, { value: "", checked: false });
+  const global = globalThis as { handlers?: unknown };
+  const previous = global.handlers;
+  try {
+    // Run without an event, a signal's handler returns the signal.
+    global.handlers = {
+      bundle: {
+        status: () => status,
+        expanded: () => expanded,
+        done: () => done,
+        setBound: () => {
+          throw new Error("tt-handler-signal is not a binding");
+        },
+      },
+    };
+    // Only bindings of the event's signal are written; false is text for
+    // attributes, an unchanged value is not rewritten, and null removes an
+    // attribute and empties a value.
+    setBound.call(element, { signal: expanded });
+    setBound.call(element, { signal: expanded });
+    setBound.call(element, { signal: done });
+    setBound.call(element, { signal: status });
+    status.value = null;
+    setBound.call(element, { signal: status });
+    assertEquals(writes, [
+      "aria-expanded=false",
+      "checked:true",
+      "data-status=open",
+      "value:open",
+      "-data-status",
+      "value:",
+    ]);
+  } finally {
+    global.handlers = previous;
+  }
+});
+
+Deno.test("setBound resolves a per-instance signal for the element", async () => {
+  const setBound = await loadHandler("setBound");
+  const { Signal } = signalClasses();
+  const instance = new Signal<string>("milk");
+  const other = new Signal<string>("tea");
+  const { element, writes } = boundElement(
+    { "tt-value-signal": "bundle.query" },
+    { value: "" },
+  );
   const global = globalThis as { handlers?: unknown };
   const previous = global.handlers;
   try {
     global.handlers = {
-      bundle: { status: () => status, expanded: () => expanded },
+      bundle: {
+        query: () => ({
+          forInstance: (target: unknown) =>
+            target === element ? instance : null,
+        }),
+      },
     };
-    // Only the attributes bound to the event's signal are written; false is
-    // text, an unchanged value is not rewritten, and null removes it.
-    setBoundAttributes.call(element, { signal: expanded });
-    setBoundAttributes.call(element, { signal: expanded });
-    setBoundAttributes.call(element, { signal: status });
-    status.value = null;
-    setBoundAttributes.call(element, { signal: status });
-    assertEquals(writes, [
-      "aria-expanded=false",
-      "data-status=open",
-      "-data-status",
-    ]);
+    setBound.call(element, { signal: other });
+    setBound.call(element, { signal: instance });
+    assertEquals(writes, ["value:milk"]);
   } finally {
     global.handlers = previous;
   }

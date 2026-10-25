@@ -21,7 +21,6 @@ import {
   handlers,
   resetImportRegistries,
 } from "../clientFunctions.ts";
-import type { SignalTools } from "../signals.ts";
 
 function reset() {
   (cache as { trustCache: boolean }).trustCache = false;
@@ -193,14 +192,6 @@ Deno.test("constants must be JSON values, imported once each", async () => {
     const copied = new Constants(source);
     source.shade = "A3";
     assertEquals(copied.values.shade, "B1");
-
-    const factory = ({ Signal }: SignalTools) => ({ count: new Signal(1) });
-    assertThrows(
-      // @ts-expect-error the constants argument was removed
-      () => new Signals(import.meta.url, factory, { shade: "B1" }),
-      TypeError,
-      "no longer takes constants",
-    );
   } finally {
     reset();
   }

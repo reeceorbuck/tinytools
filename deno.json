@@ -9,10 +9,11 @@
     "./jsx-dev-runtime": "./jsx-dev-runtime.ts",
     "./build": "./build.ts",
     "./components": "./components/mod.ts",
+    "./library": "./components/library/mod.ts",
     "./handlers": "./handlers/mod.ts"
   },
   "tasks": {
-    "check": "deno check mod.ts build.ts components/mod.ts handlers/mod.ts jsx-runtime.ts jsx-dev-runtime.ts",
+    "check": "deno check mod.ts build.ts components/mod.ts components/library/mod.ts handlers/mod.ts jsx-runtime.ts jsx-dev-runtime.ts",
     "lint": "deno lint",
     "fmt": "deno fmt",
     "test": "deno test --check --allow-env --allow-read --allow-write=./.test-build-output,./.test-client-src,./.test-lazy-rebuild,./.test-style-bundle-hash,./public,./.cache --allow-run tests/",

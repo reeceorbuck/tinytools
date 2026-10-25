@@ -75,6 +75,9 @@ Deno.test("per-instance signals resolve to the enclosing instance root", () => {
     assertEquals(description.forInstance(b).value, "bulk A3");
     // The root itself belongs to its instance.
     assertEquals(material.forInstance(byId("one")).value, "flow");
+    // Each instance's signals are named after their keys.
+    assertEquals(description.forInstance(b).name, "description");
+    assertEquals(material.name, "material");
 
     assertThrows(
       () => material.forInstance(byId("outside")),
@@ -83,6 +86,118 @@ Deno.test("per-instance signals resolve to the enclosing instance root", () => {
     );
     // Instance signals have no single value.
     assertThrows(() => (material as unknown as { value: unknown }).value);
+  } finally {
+    uninstallDocument();
+  }
+});
+
+Deno.test("instancefor resolves to the instance of the element it names", () => {
+  const byId = installDocument(`
+    <fieldset id="one" ${root}><span id="inside-one"></span></fieldset>
+    <fieldset id="two" ${root}><select id="b"></select></fieldset>
+    <select id="for-one" instancefor="one"></select>
+    <select id="for-inside" instancefor="inside-one"></select>
+    <fieldset ${root}><select id="for-two" instancefor="two"></select></fieldset>
+    <select id="for-missing" instancefor="nowhere"></select>`);
+  try {
+    const { material } = layerGraph();
+    (material as unknown as {
+      handleEvent(target: unknown, event: Event): unknown;
+    }).handleEvent(byId("for-one"), change("flow"));
+
+    assertEquals(material.forInstance(byId("one")).value, "flow");
+    // Naming an element inside a root resolves that root.
+    assertEquals(material.forInstance(byId("for-inside")).value, "flow");
+    // `instancefor` wins over the element's own enclosing root.
+    assertEquals(
+      material.forInstance(byId("for-two")),
+      material.forInstance(byId("b")),
+    );
+    assertThrows(
+      () => material.forInstance(byId("for-missing")),
+      Error,
+      "instance root",
+    );
+  } finally {
+    uninstallDocument();
+  }
+});
+
+Deno.test("tt-link shares an enclosing level between roots anywhere on the page", () => {
+  const byId = installDocument(`
+    <p id="a" tt-instance="${key}-own" tt-link="${key}=g1"></p>
+    <p id="b" tt-instance="${key}-own" tt-link="${key}=g1"></p>
+    <p id="c" tt-instance="${key}-own" tt-link="${key}=g2"></p>
+    <section ${root}><p id="d" tt-instance="${key}-own"></p></section>
+    <button id="for-b" instancefor="b"></button>`);
+  try {
+    const { Signal, Computed, perInstance } = signalClasses(true, key);
+    const { tint, count, label } = perInstance(() => {
+      const tint = new Signal("grey");
+      return {
+        tint,
+        ...perInstance("own", () => {
+          const count = new Signal(0);
+          return {
+            count,
+            label: new Computed(() => `${tint.value} ${count.value}`),
+          };
+        }),
+      };
+    });
+    tint.forInstance(byId("a")).value = "red";
+    // Linked roots share the enclosing level but keep their own level.
+    assertEquals(tint.forInstance(byId("b")).value, "red");
+    count.forInstance(byId("a")).value = 2;
+    assertEquals(label.forInstance(byId("a")).value, "red 2");
+    assertEquals(label.forInstance(byId("b")).value, "red 0");
+    // Another link, and a root enclosed the usual way, are separate.
+    assertEquals(tint.forInstance(byId("c")).value, "grey");
+    assertEquals(tint.forInstance(byId("d")).value, "grey");
+    // `instancefor` reaches a linked root's instances too.
+    assertEquals(label.forInstance(byId("for-b")).value, "red 0");
+    // A linked group counts once in `.all`.
+    assertEquals(tint.all.value, ["red", "grey", "grey"]);
+  } finally {
+    uninstallDocument();
+  }
+});
+
+Deno.test("tt-link alone makes separate elements one instance of a single level", () => {
+  const byId = installDocument(`
+    <output id="display" tt-link="${key}=c1"></output>
+    <button id="up" tt-link="${key}=c1"></button>
+    <button id="other" tt-link="${key}=c2"></button>`);
+  try {
+    const { Signal, perInstance } = signalClasses(true, key);
+    const { count } = perInstance(() => ({ count: new Signal(0) }));
+    count.forInstance(byId("up")).value = 3;
+    assertEquals(count.forInstance(byId("display")).value, 3);
+    assertEquals(count.forInstance(byId("other")).value, 0);
+  } finally {
+    uninstallDocument();
+  }
+});
+
+Deno.test("tt-link links an inner level by copy inside a linked outer level", () => {
+  const link = (copy: string) => `tt-link="${key}=g ${key}-own=${copy}"`;
+  const byId = installDocument(`
+    <p id="box" ${link("g.0")}></p>
+    <p id="button" ${link("g.0")}></p>
+    <p id="other" ${link("g.1")}></p>`);
+  try {
+    const { Signal, perInstance } = signalClasses(true, key);
+    const { tint, count } = perInstance(() => ({
+      tint: new Signal("grey"),
+      ...perInstance("own", () => ({ count: new Signal(0) })),
+    }));
+    // One copy's parts share its own level.
+    count.forInstance(byId("button")).value = 4;
+    assertEquals(count.forInstance(byId("box")).value, 4);
+    // Another copy has its own, and shares the outer level.
+    assertEquals(count.forInstance(byId("other")).value, 0);
+    tint.forInstance(byId("other")).value = "red";
+    assertEquals(tint.forInstance(byId("box")).value, "red");
   } finally {
     uninstallDocument();
   }
@@ -187,12 +302,16 @@ Deno.test("an aborted root re-inserted later resumes its instance", () => {
   }
 });
 
-Deno.test("per-instance signals stay inert outside the browser runtime", () => {
+Deno.test("per-instance signals resolve only inside an instance root", () => {
   const { Signal, perInstance } = signalClasses(false);
   const { material } = perInstance(() => ({ material: new Signal("bulk") }));
   // Aggregates can be declared during server-side validation.
   void material.all;
-  assertThrows(() => material.forInstance({} as Element), Error, "client handlers");
+  assertThrows(
+    () => material.forInstance({} as Element),
+    Error,
+    "inside an instance root",
+  );
 });
 
 Deno.test("Signals collections expose an instance root and evaluate instances", () => {
@@ -298,7 +417,11 @@ Deno.test("nested perInstance scopes each level and `.all` to its parent", () =>
     );
 
     // Layer signals need a layer root; nested `.all` is read inside the note.
-    assertThrows(() => material.forInstance(byId("isoA")), Error, `${key}-layer`);
+    assertThrows(
+      () => material.forInstance(byId("isoA")),
+      Error,
+      `${key}-layer`,
+    );
     assertThrows(() => material.all, TypeError, "nested");
   } finally {
     uninstallDocument();

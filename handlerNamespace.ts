@@ -122,8 +122,6 @@ export type BundleSource = {
    * `template.name`).
    */
   dependencies: ReadonlyMap<string, { path: string; exportName: string }>;
-  /** Binding name for module-private state, or false for stateless bundles. */
-  stored: string | false;
   /** Additionally export this handler as the module default. */
   defaultExport?: string;
   /**
@@ -155,20 +153,11 @@ export async function compileHandlerBundle(
   bundle: BundleSource,
   compiler?: Pick<typeof import("esbuild"), "build" | "transform">,
 ): Promise<{ code: string; dependencies: string[] }> {
-  const { functions, prelude = "", dependencies, stored } = bundle;
-  if (stored && !isBindingName(stored)) {
-    throw new TypeError("Store state must use a simple parameter name.");
-  }
+  const { functions, prelude = "", dependencies } = bundle;
   const namespaces = new Set(
     [...dependencies.keys()].map((key) => namespaceOf(key)),
   );
-  const reserved = new Set([
-    "fn",
-    "signal",
-    "template",
-    "constants",
-    ...(stored ? [stored] : []),
-  ]);
+  const reserved = new Set(["fn", "signal", "template", "constants"]);
   const bareNames = [...dependencies.keys()].filter((key) =>
     isBindingName(key) && !reserved.has(key) && !functions.has(key)
   );
@@ -215,8 +204,7 @@ export async function compileHandlerBundle(
       ? `export default ${handlerBindings.get(bundle.defaultExport)};`
       : "",
   ].filter(Boolean);
-  const storedLine = stored ? `const ${stored} = Object.create(null);` : "";
-  const body = [storedLine, ...pieces, ...exportLines].join("\n");
+  const body = [...pieces, ...exportLines].join("\n");
 
   // Pass 1: bundle against virtual `fn`/`signal` modules so esbuild's
   // tree-shaking tells us which dependencies are actually used. Each
@@ -225,26 +213,6 @@ export async function compileHandlerBundle(
     [...dependencies.keys()].map((key, index) => [key, `./__tiny_${index}.js`]),
   );
   const paths = new Set(syntheticPaths.values());
-  // `signal.filterByInstance` reaches every signal, so using it keeps them
-  // all. The marker path shows in the output only when it is used.
-  const filterMarkerPath = "./__tiny_filterByInstance.js";
-  paths.add(filterMarkerPath);
-  const signalKeys = [...dependencies.keys()].filter((key) =>
-    namespaceOf(key) === "signal"
-  );
-  const filterByInstanceExport = [
-    `import { marker as __tiny_marker } from ${
-      JSON.stringify(filterMarkerPath)
-    };`,
-    ...signalKeys.map((key, index) =>
-      `import { ${exportName(dependencies.get(key)!.exportName)} as __tiny_${index} } from ${
-        JSON.stringify(syntheticPaths.get(key))
-      };`
-    ),
-    `export const filterByInstance = () => [__tiny_marker${
-      signalKeys.map((_, index) => `, __tiny_${index}`).join("")
-    }];`,
-  ].join("\n");
   const plugin: Plugin = {
     name: "tiny-handler-bundle",
     setup(build) {
@@ -255,19 +223,21 @@ export async function compileHandlerBundle(
       build.onLoad(
         { filter: /^(fn|signal|template)$/, namespace: "tiny-handlers" },
         (args) => ({
-          contents: [
-            ...[...dependencies].filter(([key]) =>
-              namespaceOf(key) === args.path
-            ).map(([key, { exportName: name }]) =>
-              `export { ${exportName(name)} as ${
-                exportName(nameOf(key))
-              } } from ${JSON.stringify(syntheticPaths.get(key))};`
-            ),
-            args.path === "signal" ? filterByInstanceExport : "",
-          ].join("\n"),
+          contents: [...dependencies].filter(([key]) =>
+            namespaceOf(key) === args.path
+          ).map(([key, { exportName: name }]) =>
+            `export { ${exportName(name)} as ${
+              exportName(nameOf(key))
+            } } from ${JSON.stringify(syntheticPaths.get(key))};`
+          ).join("\n"),
           loader: "js",
         }),
       );
+      // Runtime modules a prelude imports (`./tt-signal_….js`).
+      build.onResolve({ filter: /^\.\/tt-[\w-]+\.js$/ }, (args) => ({
+        path: args.path,
+        external: true,
+      }));
       build.onResolve({ filter: /.*/, namespace: "tiny-handlers" }, (args) => {
         if (!paths.has(args.path)) {
           throw new Error(`Unknown handler: ${args.path}`);
@@ -377,14 +347,7 @@ export async function compileHandlerBundle(
     } };`
     : "";
   const fnMembers = namespace("fn");
-  // Each property resolves on read, so a nested level the element is not
-  // inside throws only when that signal is used. Collection-wide signals
-  // pass through as they are.
-  const filterByInstanceMember = livePaths.has(filterMarkerPath)
-    ? "filterByInstance(element) { const scoped = {}; for (const name of Object.keys(signal)) { if (name === \"filterByInstance\") continue; Object.defineProperty(scoped, name, { enumerable: true, get() { const found = signal[name]; return typeof found.forInstance === \"function\" ? found.forInstance(element) : found; } }); } return scoped; }"
-    : "";
-  const signalMembers = [namespace("signal"), filterByInstanceMember]
-    .filter(Boolean).join(", ");
+  const signalMembers = namespace("signal");
   const templateMembers = namespace("template");
   const transformed = await Promise.all(
     pieces.map(async (piece) =>
@@ -403,7 +366,6 @@ export async function compileHandlerBundle(
     templateMembers && sourceIdentifiers.has("template")
       ? `const template = { ${templateMembers} };`
       : "",
-    stored && sourceIdentifiers.has(stored) ? storedLine : "",
     ...transformed,
     ...exportLines,
     registerLine,

@@ -154,6 +154,16 @@ Deno.test({
       assertStringIncludes(list.innerHTML, "Row 1");
       assertStringIncludes(list.innerHTML, "Row 2");
       assertStringIncludes(list.innerHTML, "tt-handler-click");
+      // Params are text, never parsed as markup.
+      const { row } = await import(
+        pathToFileURL(`${Deno.cwd()}/${directory}/handlers/${templateFile}.js`)
+          .href
+      );
+      const hostile = `<img src=x onerror="alert(1)"> & 'quoted'`;
+      const holder = document.createElement("ul");
+      holder.append(row({ index: hostile }));
+      assertEquals(holder.querySelector("img"), null);
+      assertStringIncludes(holder.textContent!, hostile);
       const link = document.head.querySelector('link[rel="stylesheet"]');
       assertEquals(link?.getAttribute("href"), `/styles/${styleFile}`);
     } finally {

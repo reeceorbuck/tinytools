@@ -1,34 +1,9 @@
-import { assertEquals, assertThrows } from "@std/assert";
-import { createEvents, eventHandlerBody } from "../eventAttributes.ts";
+import { assertEquals } from "@std/assert";
+import { eventHandlerBody } from "../eventAttributes.ts";
 import { runHandler } from "../honoFactory.tsx";
 
-type Handlers = {
-  click: (this: HTMLButtonElement, event: MouseEvent) => void;
-  submit: (event: SubmitEvent) => void;
-  anyEvent: (event: Event) => void;
-};
-
-const events = createEvents<Handlers>((name) =>
-  ["click", "submit", "anyEvent"].includes(name)
-    ? `handlers.bundle_123.${name}.call(this, event)`
-    : undefined
-);
-
-Deno.test("events emit identical bodies and separate handler IDs", () => {
-  const attributes = events({ click: "click", mouseover: "anyEvent" });
-  assertEquals(String(attributes.onclick), eventHandlerBody);
-  assertEquals(String(attributes.onmouseover), eventHandlerBody);
-  assertEquals(attributes["tt-handler-click"], "bundle_123.click");
-  assertEquals(attributes["tt-handler-mouseover"], "bundle_123.anyEvent");
-  assertEquals(events({}), {});
-  assertThrows(() => events({ click: "missing" } as never), TypeError);
-});
-
-Deno.test("events delegate to tiny.runHandler with the element and event", () => {
-  const attributes = events({ click: "click" });
-  const element = {
-    getAttribute: (name: string) => attributes[name as keyof typeof attributes],
-  };
+Deno.test("the inline attribute body delegates to tiny.runHandler with the element and event", () => {
+  const element = {};
   const event = new Event("click");
   const handler = function (receivedElement: unknown, received: Event) {
     assertEquals(receivedElement, element);
@@ -41,19 +16,6 @@ Deno.test("events delegate to tiny.runHandler with the element and event", () =>
     undefined,
   );
 });
-
-function checkTypes() {
-  events({ click: "click", submit: "submit", keydown: "anyEvent" });
-  // @ts-expect-error Unknown handler names are not imported.
-  events({ click: "missing" });
-  // @ts-expect-error MouseEvent handlers cannot receive keyboard events.
-  events({ keydown: "click" });
-  // @ts-expect-error Unknown event names are not allowed.
-  events({ clik: "click" });
-  // @ts-expect-error Raw functions are not imported handler names.
-  events({ click: () => {} });
-}
-void checkTypes;
 
 Deno.test("browser dispatcher starts every handler without awaiting and preserves receiver and event", async () => {
   const descriptors = new Map(

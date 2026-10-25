@@ -91,18 +91,36 @@ function collectChildNodes(children: unknown, into: Set<unknown>): void {
   }
 }
 
+/** Attributes a component wrapper puts on its root element(s). */
+type RootAttributes = Record<string, string>;
+
+/** Class lists joined, each class once. */
+function joinClasses(...lists: unknown[]): string {
+  return [
+    ...new Set(
+      lists.flatMap((list) =>
+        typeof list === "string" ? list.split(/\s+/).filter(Boolean) : []
+      ),
+    ),
+  ].join(" ");
+}
+
 function markRoots(
   result: unknown,
-  name: string,
+  attributes: RootAttributes,
   passedChildren: Set<unknown>,
 ): unknown {
   // Content handed in by the caller (props.children) belongs to the caller.
   if (passedChildren.has(result)) return result;
   if (Array.isArray(result)) {
-    return result.map((item) => markRoots(item, name, passedChildren));
+    return result.map((item) => markRoots(item, attributes, passedChildren));
   }
   if (result && typeof result === "object" && TEMPLATE_ROOTS in result) {
-    return markTemplateRoots(result as TemplateResult, name, passedChildren);
+    return markTemplateRoots(
+      result as TemplateResult,
+      attributes,
+      passedChildren,
+    );
   }
   if (!isValidElement(result)) return result;
   const node = result as unknown as JSXNode;
@@ -111,10 +129,10 @@ function markRoots(
     // Hono renders from node.children, so both copies must be updated.
     const copy = cloneNode(node, {
       ...node.props,
-      children: markRoots(node.props.children, name, passedChildren),
+      children: markRoots(node.props.children, attributes, passedChildren),
     });
     copy.children = node.children.map((child) =>
-      markRoots(child, name, passedChildren)
+      markRoots(child, attributes, passedChildren)
     );
     return copy;
   }
@@ -125,7 +143,11 @@ function markRoots(
 
   return cloneNode(node, {
     ...node.props,
-    [COMPONENT_ROOT_ATTRIBUTE]: name,
+    ...attributes,
+    // A class joins the root's own rather than replacing it.
+    ...(attributes.class && {
+      class: joinClasses(node.props.class, attributes.class),
+    }),
   });
 }
 
@@ -447,13 +469,16 @@ export function templateRootTags(value: unknown): string[] | undefined {
 
 function markTemplateRoots(
   template: TemplateResult,
-  name: string,
+  attributes: RootAttributes,
   passedChildren: Set<unknown>,
 ): HtmlEscapedString {
   const text = String(template);
-  const attribute = ` ${COMPONENT_ROOT_ATTRIBUTE}="${
-    name.replace(/[&"<>]/g, (ch) => `&#${ch.charCodeAt(0)};`)
-  }"`;
+  const escape = (value: string) =>
+    value.replace(/[&"<>]/g, (ch) => `&#${ch.charCodeAt(0)};`);
+  const { class: className, ...rest } = attributes;
+  const attribute = Object.entries(rest).map(([name, value]) =>
+    ` ${name}="${escape(value)}"`
+  ).join("");
   const sources = template[TEMPLATE_ROOT_SOURCES];
   let output = "";
   let from = 0;
@@ -462,6 +487,18 @@ function markTemplateRoots(
     if (passedChildren.has(sources?.[index])) return;
     output += text.slice(from, at) + attribute;
     from = at;
+    if (!className) return;
+    // A class joins the root's own `class` attribute, if its tag has one.
+    const tag = /^(?:[^>"']|"[^"]*"|'[^']*')*/.exec(text.slice(at))![0];
+    const own = /(\sclass=")([^"]*)"/.exec(tag);
+    if (own) {
+      const start = at + own.index + own[1].length;
+      output += text.slice(at, start) +
+        joinClasses(own[2], escape(className));
+      from = start + own[2].length;
+    } else {
+      output += ` class="${escape(className)}"`;
+    }
   });
   // The new string carries no offsets, so outer components leave it alone.
   const result = raw(output + text.slice(from), template.callbacks) as
@@ -480,16 +517,31 @@ function cloneNode(node: JSXNode, props: JSXNode["props"]): JSXNode {
   return copy;
 }
 
-function markResult(
+/**
+ * @internal Puts `attributes` on the root element(s) of a component's
+ * `result`, leaving alone any root the caller passed in as `props.children`.
+ */
+export function markResult(
   result: unknown,
-  name: string,
+  attributes: RootAttributes,
   props: Record<string, unknown> | undefined,
 ): unknown {
   const passedChildren = new Set<unknown>();
   collectChildNodes(props?.children, passedChildren);
   return result instanceof Promise
-    ? result.then((resolved) => markRoots(resolved, name, passedChildren))
-    : markRoots(result, name, passedChildren);
+    ? result.then((resolved) => markRoots(resolved, attributes, passedChildren))
+    : markRoots(result, attributes, passedChildren);
+}
+
+/**
+ * @internal Whether `value` is JSX markup: a node, a precompiled template, an
+ * escaped string or a pending one.
+ */
+export function isMarkup(value: unknown): boolean {
+  if (value instanceof Promise || isValidElement(value)) return true;
+  return !!value && typeof value === "object" &&
+    (TEMPLATE_ROOTS in value ||
+      (value as { isEscaped?: unknown }).isEscaped === true);
 }
 
 /**
@@ -503,7 +555,16 @@ function markResult(
  * ```
  */
 export function component<T>(jsx: T, name = ""): T {
-  return markResult(jsx, name, undefined) as T;
+  return markResult(jsx, { [COMPONENT_ROOT_ATTRIBUTE]: name }, undefined) as T;
+}
+
+/**
+ * @internal Flags a component that marks its own root, so the JSX runtime
+ * renders it as it is.
+ */
+export function markedComponent<T extends AnyFunction>(component: T): T {
+  (component as unknown as Record<symbol, boolean>)[WRAPPED] = true;
+  return component;
 }
 
 /** @internal Returns a stable wrapper that marks the component's root. */
@@ -524,7 +585,11 @@ export function wrapComponent<T extends AnyFunction>(tag: T): T {
       if ((tag as unknown as Record<symbol, boolean>)[TRANSPARENT]) {
         return tag.call(this, props);
       }
-      return markResult(tag.call(this, props), name, props);
+      return markResult(
+        tag.call(this, props),
+        { [COMPONENT_ROOT_ATTRIBUTE]: name },
+        props,
+      );
     };
     Object.defineProperty(wrapped, "name", { value: name });
     (wrapped as unknown as Record<symbol, boolean>)[WRAPPED] = true;

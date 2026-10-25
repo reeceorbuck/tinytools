@@ -21,6 +21,7 @@ Published as `@tinytools/hono-tools` on JSR (Deno) and
 - [Signals](#signals)
 - [Styles](#styles)
 - [Templates](#templates)
+- [Library](#library)
 - [Components](#components)
 - [Client-side navigation](#client-side-navigation)
 - [Partial cache](#partial-cache)
@@ -121,8 +122,10 @@ export default app;
 ```
 
 The page is rendered with a `<script type="module">` for the one handler bundle
-it used, a `<link rel="stylesheet">` for the one style bundle, and the inline
-`tiny.runHandler` dispatcher. Nothing else is loaded.
+it used, a `<link rel="stylesheet">` for the one style bundle, and the cached
+`tiny.runHandler` dispatcher script. Nothing else is loaded: a page that binds
+no handler loads no script at all, and each feature (signals, computeds,
+lifecycle elements, ...) adds its runtime only to the pages that use it.
 
 ## Concepts
 
@@ -150,7 +153,7 @@ rebuilt on every change and never cleaned up.
 A route or component resolves exactly the collections it needs:
 
 ```tsx
-const { fn, signal, styled, events, handlers, c } = await tiny.imports(
+const { fn, signal, styled, template, constants, c } = await tiny.imports(
   handlersA,
   handlersB,
   styles,
@@ -161,14 +164,11 @@ const { fn, signal, styled, events, handlers, c } = await tiny.imports(
 - `signal.name` is a signal reference, usable on `onConnect` / `onInput`.
 - `styled.name` is the generated class string; `styled.mergeClasses(...)` joins
   class strings without duplicates.
-- `events({...})` is an explicit attribute-spread alternative to `fn`.
-- `handlers.name` is the legacy inline `onclick="..."` expression (blocked by
-  the default CSP, kept for migration).
 - `c` is the current Hono context; reading it outside a request throws.
 
 Each call is independent. When several collections define the same name the last
 one passed wins. Only the handler bundles and style bundles actually accessed
-through `fn`, `signal`, `styled` or `events` are recorded for the request and
+through `fn`, `signal`, `styled` or `template` are recorded for the request and
 emitted by `AssetTags`.
 
 `await tiny.imports()` with no arguments supplies the request context and empty
@@ -179,7 +179,7 @@ a server-sent update), but then at least one collection must be passed.
 
 Every collection compiles to one browser module at
 `/handlers/<source>_<hash>.js`, exporting each handler by name. Elements
-reference a handler as `tt-handler-click="<bundle>.<name>"`, and the inline
+reference a handler as `tt-handler-click="<bundle>.<name>"`, and the
 `tiny.runHandler` dispatcher imports the bundle on first use.
 
 The hash covers the bundle's own code and every bundle it imports, directly or
@@ -197,13 +197,13 @@ static file serving from `./public/`, Hono's context storage, per-request asset
 tracking, and the JSX renderer. `new tiny.Hono({ tools: "core" })` is
 equivalent; a plain `new tiny.Hono()` installs nothing.
 
-| Option                        | Default       | Meaning                                                   |
-| ----------------------------- | ------------- | --------------------------------------------------------- |
-| `csp`                         | `true`        | Send the script CSP and use reference bindings (see CSP). |
-| `serveStatic`                 | auto-detected | The static adapter for your runtime (Deno, Bun, Node).    |
-| `generatedFilenameHashLength` | `5`           | Hash length for both handler and style filenames (1-8).   |
-| `generatedHandlerHashLength`  | `5`           | Handler filename hash length.                             |
-| `generatedStyleHashLength`    | `5`           | Style filename hash length.                               |
+| Option                        | Default       | Meaning                                                 |
+| ----------------------------- | ------------- | ------------------------------------------------------- |
+| `csp`                         | `true`        | Send the script CSP header (see CSP).                   |
+| `serveStatic`                 | auto-detected | The static adapter for your runtime (Deno, Bun, Node).  |
+| `generatedFilenameHashLength` | `5`           | Hash length for both handler and style filenames (1-8). |
+| `generatedHandlerHashLength`  | `5`           | Handler filename hash length.                           |
+| `generatedStyleHashLength`    | `5`           | Style filename hash length.                             |
 
 The renderer wraps `c.render(content, { title })` in a full document on normal
 requests. When the request carries a `source-url` header (a partial navigation)
@@ -254,25 +254,22 @@ Recommended middleware order for a child router:
 `core()` sends
 `script-src 'self' 'sha256-…'; script-src-attr 'unsafe-hashes'
 'sha256-…'`. The
-dispatcher loads from the same-origin, content-hashed
-`/handlers/tt-runtime_<hash>.js` file and is cached immutably. The hash in
-`script-src` allows the inline lifecycle runtime, which is included only on
-pages using lifecycle elements; the attribute hash allows the shared
-`tiny.runHandler(this,event)` body. Arbitrary inline scripts, legacy
-`handlers.*` attributes and cross-origin scripts remain blocked. The policy
-restricts scripts only.
+dispatcher, and the lifecycle runtime on pages using lifecycle elements, load
+from same-origin, content-hashed `/handlers/tt-*_<hash>.js` files cached
+immutably. The hash in `script-src` allows the inline copy of the lifecycle
+runtime that streamed and partial content carries; the attribute hash allows the
+shared `tiny.runHandler(this,event)` body. Arbitrary inline scripts and
+cross-origin scripts remain blocked. The policy restricts scripts only.
 
-`csp: false` sends no header and renders `fn.*` as legacy inline expressions for
-the request. To manage your own policy, disable the default and include the hash
-of the exported `eventHandlerBody` plus the dispatcher script:
+`csp: false` sends no header. To manage your own policy, include the hash of the
+exported `eventHandlerBody` plus the inline lifecycle runtime:
 
 ```ts
 import { eventHandlerBody } from "tinytools";
 ```
 
-`tiny.middleware.csp()` is the standalone CSP middleware. Injected markup can
-reuse an authorised attribute body, so keep sanitising untrusted HTML, including
-`tt-handler-*` attributes.
+Injected markup can reuse an authorised attribute body, so keep sanitising
+untrusted HTML, including `tt-handler-*` attributes.
 
 ## Event bindings
 
@@ -286,9 +283,12 @@ const { fn } = await tiny.imports(buttonHandlers);
 
 A handler declared for `KeyboardEvent` is rejected on `onClick`. The runtime
 expands each reference into `onclick="tiny.runHandler(this,event)"` plus
-`tt-handler-click="<bundle>.handleClick"`. Components receive references
-unchanged and can forward them to intrinsic elements; type such props with
-`HandlerProp`:
+`tt-handler-click="<bundle>.handleClick"`. Events the runtime delivers itself
+(`connect`, `disconnect`, `parsed`, `signal`, `sorted`, `navigate`,
+`currententrychange`, `incomingdata`) render only their `tt-handler-*`
+attribute, since browsers run inline attributes for their own events only.
+Components receive references unchanged and can forward them to intrinsic
+elements; type such props with `HandlerProp`:
 
 ```tsx
 import type { HandlerProp } from "tinytools";
@@ -311,14 +311,6 @@ Handlers receive the element as `this` and the native event as their argument.
 Call `event.preventDefault()` before awaiting anything; returning `false` does
 not cancel the default action.
 
-`events()` is the explicit spread form and also accepts handler names from the
-imported collections:
-
-```tsx
-const { fn, events } = await tiny.imports(buttonHandlers);
-<button {...events({ click: fn.handleClick, mouseover: "handleHover" })} />;
-```
-
 Besides the standard DOM events, the JSX types cover `onCommand`, `onNavigate`,
 `onCurrentEntryChange`, `onIncomingData` and `onSignal`. The `onMount` /
 `onUnmount` attributes are deliberately unavailable; use the lifecycle
@@ -336,8 +328,7 @@ export const listHandlers = new tiny.Handlers(import.meta.url, {
 ```
 
 Handlers in one collection can call each other by name. To use handlers from
-another collection as bare identifiers, pass `{ imports: [other] }` as the
-second argument.
+another collection, use the factory form.
 
 ### Factory form
 
@@ -421,6 +412,14 @@ const viewerSignals = new tiny.Signals(
   read changes. Dependencies are tracked on every run, so a read behind a
   condition counts only while that branch is taken. An optional second argument
   lists extra signals to follow. Equal values (arrays by item) do not notify.
+  The callback receives the previous value (`undefined` on the first run). Given
+  a third argument, a computed starts at that value without running its
+  callback, which first runs when a listed dependency changes, so a value that
+  steps from its previous one reads as one statement:
+  `new Computed((hue) => (hue + 90) % 360, [press], 0)`.
+- Each signal is named after the key it is returned under (`hue` for
+  `return { hue }`, inside `perInstance` too), which handlers such as
+  `setCssProperty` use. Set `.name` to use another (`contrast-adjust` above).
 - The factory runs on the server to validate the definitions and again in the
   browser. Keep it pure: no imports or async work. Handlers and values from
   module scope come in through an
@@ -428,8 +427,13 @@ const viewerSignals = new tiny.Signals(
   the factory from its source with only `fn` and `constants` in scope, so any
   other outer reference fails at definition time instead of in the browser. Read
   and write `.value` only in computed callbacks or handlers.
-- Every collection shares one signal runtime module; each collection is one
-  bundle whose state is shared by all consumers on the page.
+- The signal runtime is split by feature into shared, cached modules:
+  `tt-signal` (`Signal`, `signalsFrom`) and, only for collections whose factory
+  takes them, `tt-computed`, `tt-trigger` and `tt-instance` (`perInstance`).
+  Destructure the tools you use (`({ Signal, Computed }) => ...`) so the bundle
+  imports only those; a factory taking the whole toolkit as one parameter gets
+  every module. Each collection is one bundle whose state is shared by all
+  consumers on the page.
 
 In handlers, import a collection and use `signal.name.value` directly. In JSX,
 `signal.name` is an event reference:
@@ -442,25 +446,25 @@ const { fn, signal } = await tiny.imports(viewerSignals, signalTools);
 ```
 
 - On `input` / `change` the signal takes the target's value and, if the input
-  has a `name` (or `data-bind-name`), that name.
+  has a `name`, that name.
 - On `load` the element subscribes to the signal and receives a `signal` event
   (`event.signal.value`) whenever it changes. Subscribing sends nothing, so
   `onSignal` reacts to changes rather than running on connect; render the
-  current value on the server. Subscriptions use the element's
-  `abortController` when present (see Lifecycle components), so they end when
-  the element is removed.
+  current value on the server. Subscriptions use the element's `abortController`
+  when present (see Lifecycle components), so they end when the element is
+  removed.
 - An element that may connect after its signals have already changed (into a
-  cached or resumed instance, or after another element's `onConnect` wrote
-  them) catches up with `signalTools.fireSelfSignal` listed after the signals:
-  `onConnect={[signal.filter, fn.fireSelfSignal]}`. It runs `onSignal` once
-  per signal the element has subscribed to so far, with that signal's current
-  value.
+  cached or resumed instance, or after another element's `onConnect` wrote them)
+  catches up with `signalTools.fireSelfSignal` listed after the signals:
+  `onConnect={[signal.filter, fn.fireSelfSignal]}`. It runs `onSignal` once per
+  signal the element has subscribed to so far, with that signal's current value.
 - On any other event (`onClick={signal.requests}`) a numeric signal adds one, so
   subscribers run on each click and a `Computed` can count them. No handler is
   needed to turn a click into a signal, and a non-numeric signal throws.
 - While rendering, a reference exposes no `.value`; reading it throws.
 - `unsubscribe(target)` ends a subscription early.
-- `value={signal.x}` is not a binding. Render the initial value yourself.
+- Given as an element property or attribute (`value={signal.x}`), a signal is
+  bound: see below.
 
 To render initial markup with the same computations, evaluate the collection on
 the server. `evaluateUsingInitialValues` runs the factory with the given values
@@ -561,11 +565,11 @@ const formHandlers = new tiny.Handlers(import.meta.url, async () => {
 
 Changing a value changes the bundle filename, like any edit to the code.
 
-The `signalTools` collection from `tinytools/handlers` provides `effect`,
-`setTextContent`, `setValue`, `setChecked`, `setSelected`, `setDisabled`,
-`setHidden`, `setBoundAttributes` and `setCssProperty` (which writes
-`--<signal name>`). They share `setBoundProperty`, which writes `value` as a
-string, other properties as booleans and `data-*`/`aria-*` attributes as text.
+The `signalTools` collection from `tinytools/handlers` provides
+`fireSelfSignal`, `setTextContent`, `setValue` and `setCssProperty` (which
+writes `--<signal name>`) for `onSignal`. The bindings below need no handler of
+your own: the runtime binds `setBound`, which writes `value` as a string, other
+properties as booleans and `data-*`/`aria-*` attributes as text.
 
 An input given a signal as its `value` renders the signal's initial value and
 follows each change:
@@ -575,12 +579,12 @@ follows each change:
 ```
 
 It expands to `value={signal.query.initial}`, `onConnect={signal.query}` and
-`onSignal={fn.setValue}`, placed first among the element's own `onConnect` and
-`onSignal` handlers, plus a `tt-value-signal` attribute naming the signal.
-`setValue` then ignores every other signal the input subscribes to, so the
-element can bind more signals of its own, and writes the value only when it
-differs, so typing is not interrupted. A select does not take one: its `value`
-attribute is not what it shows.
+`onSignal` running `setBound`, placed first among the element's own `onConnect`
+and `onSignal` handlers, plus a `tt-value-signal` attribute naming the signal.
+`setBound` writes only the bindings of the signal that changed, so the element
+can bind more signals of its own, and writes the value only when it differs, so
+typing is not interrupted. A select does not take one: its `value` attribute is
+not what it shows.
 
 A `<textarea>` takes one too. It shows its text rather than a `value` attribute,
 so the initial value is rendered as its text, and it takes no other children.
@@ -611,8 +615,8 @@ A component that takes a signal to bind types the prop as `SignalProp<Value>`,
 as `HandlerProp` types a handler.
 
 A checkbox or radio given a signal as its `checked` works the same way, through
-`setChecked` and a `tt-checked-signal` attribute. It is checked while the
-signal's value is truthy:
+a `tt-checked-signal` attribute. It is checked while the signal's value is
+truthy:
 
 ```tsx
 <input type="checkbox" checked={signal.isEven} onChange={fn.updateIsEven} />;
@@ -621,7 +625,7 @@ signal's value is truthy:
 An input can bind both; a signal given as both is subscribed once.
 
 An option given a signal as its `selected` is selected while the signal's value
-is truthy, through `setSelected` and a `tt-selected-signal` attribute:
+is truthy, through a `tt-selected-signal` attribute:
 
 ```tsx
 <select onChange={fn.chooseSection}>
@@ -642,9 +646,8 @@ while it is truthy:
 
 Any element also takes a signal as a `data-*` or `aria-*` attribute. The value
 is written as the attribute's text, so `false` becomes `"false"` (which
-`aria-expanded` relies on), and `null` or `undefined` removes the attribute. One
-`setBoundAttributes` handler writes all of an element's bound attributes, each
-found by its `tt-<attribute>-signal`:
+`aria-expanded` relies on), and `null` or `undefined` removes the attribute.
+Each is found by its `tt-<attribute>-signal`:
 
 ```tsx
 <li data-status={signal.status} aria-busy={signal.isSaving}>...</li>;
@@ -709,15 +712,6 @@ const layerSignals = new tiny.Signals(
   collections by listing their keys separated by spaces.
 - In handlers, `signal.material.forInstance(this)` is the signal of the instance
   enclosing `this`. A per-instance signal has no single `.value`.
-- `signal.filterByInstance(this)` gives every signal at once as seen from
-  `this`: per-instance signals resolve to the enclosing instance and
-  collection-wide signals come back as they are, so
-  `const { operator, weekday } = signal.filterByInstance(this)` replaces one
-  `.forInstance(this)` per signal. A handler file that uses it keeps all of its
-  imported signals. `filterByInstance` cannot be used as a signal name.
-  **Under review:** it may be deprecated, since it isn't clear it earns its
-  place over `.forInstance(this)`. For now only the booking `SlotPicker` in
-  `dental` uses it; avoid adopting it elsewhere until that is decided.
 - `signal.x.all` is a read-only signal of every instance's value in document
   order, so a `Computed` depending on it is the net result of all instances. An
   instance joins when something inside its root first resolves a signal (an
@@ -844,9 +838,8 @@ const cardStyles = new tiny.Styles(import.meta.url, {
 ```
 
 Generated CSS is layered as
-`@layer global, unscoped, limited, normal,
-important, debug`, declared by the
-core renderer in `<head>`.
+`@layer global, unscoped, limited, normal, important, debug`; every style bundle
+states that order first, so it holds whichever bundle loads first.
 
 ### Scope modes
 
@@ -912,7 +905,8 @@ const listHandlers = new tiny.Handlers(import.meta.url, async () => {
   stylesheets it used become the collection's bundle; a change to any of them is
   a new filename.
 - In a handler, `template.name(params?)` returns a `DocumentFragment` to insert.
-  `params` fill `$[name]` placeholders in the markup, as client routes do.
+  `params` fill `$[name]` placeholders in the markup, as client routes do. They
+  are text: escaped, so a value is never parsed as markup.
 - While rendering, `template.name()` returns the same markup as raw HTML, so a
   page shows the first instance of what handlers add later from one source. It
   records the markup's assets as if the page had rendered them.
@@ -925,6 +919,48 @@ const listHandlers = new tiny.Handlers(import.meta.url, async () => {
   circular definition error.
 - On the server, `collection.run` handlers and `template.name()` return the
   markup.
+
+## Library
+
+Ready-made signal components, imported from `tinytools/library`. Place their
+parts anywhere and link them with `component.instance()`:
+
+```tsx
+import { ListSignalComponent } from "tinytools/library";
+
+const { component } = await tiny.imports(ListSignalComponent);
+const { List, Item, AddItem } = component.instance();
+
+<List label="Tasks">
+  <Item dismissable>Order stock</Item>
+  <Item label="Call back patients">
+    <a href="/recalls">Call back patients</a>
+  </Item>
+</List>
+<AddItem placeholder="New task" dismissable />;
+```
+
+- `CounterSignalComponent`: `CounterDisplay` and `Increment` (`by`), sharing one
+  count. Both expose `signal.count`.
+- `ListSignalComponent`: `List` holds the `Item`s written inside it, as an
+  `<ol>`; given `Row`s instead, it is a `<tbody>`, for a table the page writes
+  around it (with its own `<thead>`) and styles like its others. `AddItem`
+  (`label`, `placeholder`) adds its text to the list of its instance, and
+  `AddButton` (`label`, children for its content) adds a blank item, focusing
+  its first control. Changes are announced to screen readers. `List` takes:
+  - `label`, naming the list to assistive technology.
+  - `reorderable` (default true): drag, or Alt + ↑ / ↓, to move an item. It
+    reaches the items written inside the list through context.
+  - `newItem`: a `tiny.Templates` entry each added item holds a clone of, with
+    `$[label]` filled in, instead of the label alone. For a list of `Row`s, the
+    clone is the row's cells.
+
+  An `Item`'s or `Row`'s children are your own markup, handlers included (a
+  `Row`'s are its cells). Each takes `label`, naming it to its dismiss button
+  (defaulting to the children when they are text), and `dismissable`, giving it
+  a × button that removes it. `AddItem` and `AddButton` take `dismissable` for
+  the items they add. Set `--list-surface`, `--list-border`, `--list-text`,
+  `--list-muted` and `--list-accent` to recolour `Item`s.
 
 ## Components
 
@@ -1006,17 +1042,17 @@ clean themselves up. No wrapper is needed. The JSX runtime declares the tag
 ahead of the markup, as `<meta name="tt-define" content="load-more">` in a full
 page's head or a `<tt-define tag="load-more">` element in streamed and partial
 content, and the lifecycle runtime defines it before that markup is parsed or
-inserted. The runtime is not part of the dispatcher file: it is inlined after
-the dispatcher for pages that declare tags in the head, and ahead of the first
-`<tt-define>` in streamed or partial content otherwise, so pages without
-lifecycle elements never load it. Elements therefore upgrade in document order,
-a parent's `onConnect` always precedes a child's `onParsed`, nothing is rendered
-beside the element and it keeps working however it is moved, substituted or
-cloned. A `tiny.Templates` bundle whose markup holds such elements defines their
-tags itself. Since `onConnect` can run more than once, guard one-time setup.
-`onLoad` stays with the elements the browser fires `load` on (`<body>`, `<img>`,
-`<link>` and the like); binding it to a lifecycle element throws, since that
-element runs `onConnect` instead.
+inserted. The runtime is not part of the dispatcher file: it is a cached script
+loaded after the dispatcher for pages that declare tags in the head, and inlined
+ahead of the first `<tt-define>` in streamed or partial content otherwise, so
+pages without lifecycle elements never load it. Elements therefore upgrade in
+document order, a parent's `onConnect` always precedes a child's `onParsed`,
+nothing is rendered beside the element and it keeps working however it is moved,
+substituted or cloned. A `tiny.Templates` bundle whose markup holds such
+elements defines their tags itself. Since `onConnect` can run more than once,
+guard one-time setup. `onLoad` stays with the elements the browser fires `load`
+on (`<body>`, `<img>`, `<link>` and the like); binding it to a lifecycle element
+throws, since that element runs `onConnect` instead.
 
 A built-in element keeps its tag and gets the same lifecycle events with no
 extra markup: `<button onConnect={fn.ready}>` or
@@ -1253,8 +1289,8 @@ await buildScriptFiles({
 });
 ```
 
-`buildScriptFiles()` (also `tiny.build()`) defines every registered collection,
-writes every handler bundle and style bundle, removes stale files and persists
+`buildScriptFiles()` defines every registered collection, writes every handler
+bundle and style bundle, removes stale files and persists
 `.cache/clientToolsCache.json`. `fresh: true` skips every cache and existence
 check, for isolated deployments. `transpileClientFiles` transpiles standalone
 `.ts` files from `clientDir` into `publicDir`.
@@ -1312,10 +1348,6 @@ deno task check   # type-check the public entry points
 deno task lint
 deno task test    # full test suite (writes under ./.test-* and ./public)
 ```
-
-`tests/fixtures/events-csp.tsx` is a runnable comparison of legacy and reference
-bindings: `deno run -A tests/fixtures/events-csp.tsx` and open
-`http://127.0.0.1:3047/` (add `?csp` to enable the policy).
 
 Publishing is driven from the workspace root (`deno task release:patch`), which
 bumps the version, publishes to JSR, syncs `package.json` and updates the

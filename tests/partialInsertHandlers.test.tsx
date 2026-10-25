@@ -55,13 +55,13 @@ Deno.test("partial handlers activate and serialize on Partial", async () => {
     .use(...tiny.middleware.core());
 
   app.get("/", async (context) => {
-    const { fn, handlers } = await tiny.imports(partialInsertHandlers);
+    const { fn } = await tiny.imports(partialInsertHandlers);
 
     for (const name of handlerNames) {
       assertMatch(
-        handlers[name] as unknown as string,
+        String(<template onLoad={fn[name]} />),
         new RegExp(
-          `^handlers\\.partialInsertHandlers_[a-z0-9]+\\.${name}\\.call\\(this, event\\)$`,
+          `tt-handler-load="partialInsertHandlers_[a-z0-9]+\\.${name}"`,
         ),
       );
     }

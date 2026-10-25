@@ -316,18 +316,20 @@ export const jsxAttr = (
   if (!attributes) {
     return honoJsxAttr(name, value as Parameters<typeof honoJsxAttr>[1]);
   }
-  const [eventAttribute, handlerAttribute] = Object.entries(attributes);
-  const rendered = !eventAttribute
-    ? honoJsxTemplate``
-    : handlerAttribute
-    ? honoJsxTemplate`${honoJsxAttr(...eventAttribute as [string, string])} ${
-      honoJsxAttr(...handlerAttribute as [string, string])
-    }`
-    : honoJsxAttr(...eventAttribute as [string, string]);
+  // The event attribute, its `tt-handler-*` and, for an instance's
+  // references, `instancefor`.
+  const [first, ...more] = Object.entries(attributes) as [string, string][];
+  const rendered = !first ? honoJsxTemplate`` : more.reduce<
+    ReturnType<typeof honoJsxAttr>
+  >(
+    (joined, attribute) =>
+      honoJsxTemplate`${joined} ${honoJsxAttr(...attribute)}`,
+    honoJsxAttr(...first),
+  );
   if (typeof rendered === "object") {
     attributeSources.set(rendered, [name, value]);
   }
-  if (!eventAttribute) return rendered;
+  if (!first) return rendered;
   const event = lifecycleEvent(name);
   return event ? markLifecycleAttribute(rendered, event) : rendered;
 };
@@ -336,138 +338,13 @@ import type { JSX as HonoJSX } from "hono/jsx/jsx-runtime";
 import type { IncomingDataEvent } from "./handlers/processIncomingData.ts";
 import type { SortedEvent } from "./handlers/dragSortTools.ts";
 
-/**
- * Brand symbol for ClientFunction types.
- * This is used to create a nominal type that distinguishes ClientFunction handlers
- * from regular functions at compile time.
- */
-declare const ClientFunctionBrand: unique symbol;
-
-/**
- * Brand symbol for inline client expressions returned by tiny.imports().
- */
-declare const ActivatedClientFunctionBrand: unique symbol;
-
-/**
- * Error interface that appears in type errors for raw functions.
- * The interface name is intentionally descriptive to help users understand the error.
- */
-interface ERROR_Raw_functions_cannot_be_used_as_event_handlers___Use_tiny_imports {
-  readonly [ClientFunctionBrand]: true;
-  readonly [ActivatedClientFunctionBrand]: true;
-}
-
-/**
- * Branded type for client-side event handlers created via ClientTools.
- *
- * At runtime, these are actually strings (filenames), but TypeScript sees them as
- * functions with a brand. This prevents accidentally passing regular functions
- * as event handlers in JSX, which would fail silently at runtime.
- *
- * In JSX, use references returned by `await tiny.imports(tools)`,
- * NOT directly from the factory.
- *
- * **Common Error Fix:**
- * - ❌ `new tiny.Handlers(url, {...}).myHandler` → won't work
- * - ✅ `(await tiny.imports(tools)).fn.myHandler` → correct
- *
- * @example
- * ```ts
- * // Define handlers
- * const handlers = new tiny.Handlers(import.meta.url, {
- *   handleClick() {
- *     console.log("clicked");
- *   },
- * });
- *
- * app.get("/", async (c) => {
- *   const { fn } = await tiny.imports(handlers);
- *   return <div onClick={fn.handleClick}>Click me</div>;
- * });
- * ```
- */
-export type ClientFunction<
-  // deno-lint-ignore no-explicit-any
-  T extends (...args: any[]) => any = (...args: any[]) => any,
-> = T & {
-  readonly [ClientFunctionBrand]: true;
-};
-
-/**
- * An inline client expression returned by tiny.imports().handlers.
- *
- * If you see an error about this type, check:
- * - Raw functions → wrap with ClientTools constructor's functions option
- * - Non-activated → access through tiny.imports()
- */
-export type ActivatedClientFunction<
-  // deno-lint-ignore no-explicit-any
-  T extends (...args: any[]) => any = (...args: any[]) => any,
-> =
-  & T
-  & ERROR_Raw_functions_cannot_be_used_as_event_handlers___Use_tiny_imports;
-
-/**
- * Helper type to brand a function type as a ClientFunction.
- * Used internally by ClientTools.
- *
- * Note: This type indicates a non-activated ClientFunction.
- * To use in JSX, import the collection with tiny.imports().
- */
-// deno-lint-ignore no-explicit-any
-export type BrandAsClientFunction<T extends (...args: any[]) => any> =
-  ClientFunction<T>;
-
-/**
- * Helper type to "activate" a ClientFunction, making it usable in JSX handlers.
- * Used internally by tiny.imports() for inline handler expressions.
- * Also handles raw function types by treating them as activatable.
- */
-// deno-lint-ignore no-explicit-any
-export type ActivateClientFunction<T> = T extends (...args: any[]) => any
-  ? ActivatedClientFunction<T>
-  : T;
-
-/**
- * Helper type to activate all client functions in an object.
- * Transforms { foo: ClientFunction<F> } to { foo: ActivatedClientFunction<F> }
- * Also includes the `activate` method for merging local component functions.
- */
-export type ActivateClientFunctions<T> =
-  & {
-    [K in keyof T]: ActivateClientFunction<T[K]>;
-  }
-  & {
-    /**
-     * Compose activated handlers that execute independently without waiting
-     * for one another.
-     */
-    multiHandler(
-      ...handlers: ActivatedClientFunction[]
-    ): ActivatedClientFunction;
-
-    /**
-     * Compose activated handlers in order. Each handler is awaited, and later
-     * handlers are skipped when an earlier handler returns false.
-     */
-    multiHandlerSync(
-      ...handlers: ActivatedClientFunction[]
-    ): ActivatedClientFunction;
-  };
-
-/**
- * Type guard to check if a value is a ClientFunction at the type level.
- * Note: At runtime, client functions are actually strings, so this is purely for type narrowing.
- */
-export type IsClientFunction<T> = T extends ClientFunction<infer _F> ? true
-  : false;
-
 // ============================================================================
 // Event Handler Types with Descriptive Error Messages
 // ============================================================================
 
 /**
- * Event handler type for JSX attributes. Must be an activated ClientFunction.
+ * Event handler type for JSX attributes: a handler reference from
+ * `tiny.imports()` (`fn.name`, `signal.name`), or a list of them.
  *
  * The handler's event parameter type is checked via natural contravariance:
  * a handler accepting `Event` is valid for any specific event (e.g., `onSubmit`),
@@ -476,19 +353,12 @@ export type IsClientFunction<T> = T extends ClientFunction<infer _F> ? true
  * The `this` parameter remains broad so element-specific handlers can still be
  * passed through JSX without forcing every intrinsic prop to model its exact
  * receiver element type.
- *
- * If you see a type error, you likely need to:
- * 1. Use ClientTools constructor with functions option instead of raw functions
- * 2. Access handlers through tiny.imports() (not the factory)
  */
 type ClientEventHandler<E extends Event> =
-  // deno-lint-ignore no-explicit-any
-  | ActivatedClientFunction<(this: any, event: E) => void>
   | HandlerReference<string, (event: E) => unknown>
   | readonly HandlerReference<string, (event: E) => unknown>[]
   | undefined;
 
-// Define your global overrides here - now requiring branded ClientFunction types
 interface GlobalOverrides {
   // Common events
   onCommand?: ClientEventHandler<CommandEvent>;

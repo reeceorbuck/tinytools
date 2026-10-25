@@ -1,45 +1,32 @@
 import { assertEquals, assertThrows } from "@std/assert";
-import { createEvents, createHandlerReferences } from "../eventAttributes.ts";
+import {
+  createHandlerReferences,
+  eventHandlerBody,
+} from "../eventAttributes.ts";
+import { jsx } from "../jsx-runtime.ts";
 
 type Functions = {
   click: (event: MouseEvent) => void;
   keyboard: (event: KeyboardEvent) => void;
 };
 
-const resolve = (name: string) =>
-  ["click", "keyboard"].includes(name)
-    ? `handlers.bundle_123.${name}.call(this, event)`
-    : undefined;
-const events = createEvents<Functions>(resolve);
-const handlers = createHandlerReferences<Functions>(resolve);
+const handlers = createHandlerReferences<Functions>((name) =>
+  ["click", "keyboard"].includes(name) ? `bundle_123.${name}` : undefined
+);
 
-Deno.test("handler references emit the same attributes as names", () => {
+Deno.test("handler references render as <bundle>.<name>", () => {
   assertEquals(
-    events({ click: handlers.click, keydown: handlers.keyboard }),
-    events({ click: "click", keydown: "keyboard" }),
+    String(
+      jsx("input", { onClick: handlers.click, onKeyDown: handlers.keyboard }),
+    ),
+    `<input onclick="${eventHandlerBody}" tt-handler-click="bundle_123.click" onkeydown="${eventHandlerBody}" tt-handler-keydown="bundle_123.keyboard"/>`,
   );
 });
 
-Deno.test("handler references reject foreign IDs and forged objects", () => {
-  const foreign = createHandlerReferences<Functions>((name) =>
+Deno.test("handler references reject malformed IDs and forged objects", () => {
+  const malformed = createHandlerReferences<Functions>((name) =>
     `handlers.other_456.${name}.call(this, event)`
   );
-  assertThrows(() => events({ click: foreign.click }), TypeError);
-  assertThrows(() => events({ click: {} } as never), TypeError);
-  const otherEvents = createEvents<Functions>(() => undefined);
-  assertThrows(() => otherEvents({ click: handlers.click }), TypeError);
+  assertThrows(() => jsx("button", { onClick: malformed.click }), TypeError);
+  assertThrows(() => jsx("button", { onClick: [{}] }), TypeError);
 });
-
-function checkTypes() {
-  events({ click: handlers.click, keydown: handlers.keyboard });
-  // @ts-expect-error Incompatible event signature.
-  events({ keydown: handlers.click });
-  // @ts-expect-error Unknown property.
-  events({ click: handlers.missing });
-  const foreign = createHandlerReferences<{ other: Functions["click"] }>(
-    resolve,
-  );
-  // @ts-expect-error Matching signatures cannot bypass imported handler names.
-  events({ click: foreign.other });
-}
-void checkTypes;

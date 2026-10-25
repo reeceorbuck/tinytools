@@ -30,6 +30,7 @@ import {
 import {
   cache,
   Handlers,
+  imports,
   normalizeSourceFileUrl,
   Styles,
 } from "../clientTools.ts";
@@ -1284,12 +1285,13 @@ Deno.test({
     });
 
     // Create a consumer in a different file that imports the external tools
-    const _consumerTools = new Handlers(import.meta.url, {
-      imports: [sharedTools],
-    }, {
-      consumerFunction(this: HTMLElement) {
-        console.log("consuming external");
-      },
+    const _consumerTools = new Handlers(import.meta.url, async () => {
+      const { fn } = await imports(sharedTools);
+      return {
+        consumerFunction(this: HTMLElement) {
+          console.log("consuming external", fn.externalUtility);
+        },
+      };
     });
 
     // Build

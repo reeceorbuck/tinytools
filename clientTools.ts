@@ -10,11 +10,7 @@
  * @module
  */
 
-import type {
-  ActivateClientFunctions,
-  BrandAsClientFunction as _BrandAsClientFunction,
-  JSX,
-} from "./jsx-runtime.ts";
+import type { JSX } from "./jsx-runtime.ts";
 import {
   type ActivateScopedStyles,
   changedStyleKeys,
@@ -32,8 +28,11 @@ import type { Context } from "hono";
 import { raw } from "hono/html";
 import type { HtmlEscapedString } from "hono/utils/html";
 import {
+  type InstanceGroup,
   type InstanceLevels,
   type InstanceSeed,
+  InstanceSignalHandle,
+  type InternalSignalTools,
   type SignalAccessors,
   signalClasses,
   type SignalConstant,
@@ -44,14 +43,12 @@ import {
   type SignalValues,
 } from "./signals.ts";
 import {
-  createEvents,
   createHandlerReferences,
   createSignalReferences,
-  type Events,
+  type HandlerReference,
   type HandlerReferences,
   type SignalReferences,
   type SignalRendering,
-  signalSetter,
 } from "./eventAttributes.ts";
 
 // Import shared registries from registry modules
@@ -63,7 +60,14 @@ import {
   getImportRegistry,
   HandlerBundle,
 } from "./clientFunctions.ts";
+import {
+  COMPONENT_ROOT_ATTRIBUTE,
+  isMarkup,
+  markedComponent,
+  markResult,
+} from "./componentScope.ts";
 import { lifecycleRuntimePath } from "./lifecycleElement.ts";
+import { signalToolsPrelude } from "./signalModules.ts";
 import {
   mkdirSync,
   readFileSync,
@@ -128,6 +132,7 @@ export type NoContextToolUsageTracker = {
 
 export interface ToolResolutionTarget {
   readonly _handlerFilenames: ReadonlyMap<string, string>;
+  readonly _handlerDefinitions: ReadonlyMap<string, ClientFunctionImpl>;
   readonly _styleFilenames: ReadonlyMap<string, string>;
   readonly _styles: ReadonlyMap<string, ScopedStyleImpl>;
 }
@@ -202,28 +207,6 @@ export function resolveToolAccessFromChain(
   prop: PropertyKey,
   onUsage?: (type: ToolUsageType, filename: string) => void,
 ): unknown {
-  if (
-    mode === "function" &&
-    (prop === "multiHandler" || prop === "multiHandlerSync")
-  ) {
-    return (...handlerReferences: string[]) => {
-      for (const reference of handlerReferences) {
-        if (!/^handlers\.\w+\.[$\w]+\.call\(this, event\)$/.test(reference)) {
-          throw new Error(
-            `Cannot compose invalid handler reference: ${reference}`,
-          );
-        }
-      }
-
-      if (prop === "multiHandler") return handlerReferences.join(";");
-
-      const calls = handlerReferences.map((reference) =>
-        `if(await ${reference}===false)return;`
-      ).join("");
-      return `void (async()=>{${calls}})()`;
-    };
-  }
-
   if (mode === "style" && prop === "mergeClasses") {
     return (...classNames: Array<string | null | undefined | false>) =>
       mergeClassNames(...classNames);
@@ -244,8 +227,9 @@ export function resolveToolAccessFromChain(
       onUsage?.(mode === "function" ? "handler" : "style", filename);
     }
 
+    // `<bundle>.<name>`, what `tt-handler-*` attributes carry.
     if (mode === "function") {
-      return (tools as unknown as Record<string, unknown>)[prop];
+      return tools._handlerDefinitions.get(prop)?.reference;
     }
 
     const styleImpl = tools._styles.get(prop);
@@ -833,6 +817,13 @@ export const DEFAULT_HANDLER_DIR = "./public/handlers";
 /** Directory (relative to the app's CWD) where style bundles are written by the lazy-mode path. */
 export const DEFAULT_STYLES_DIR = "./public/styles";
 
+/**
+ * Prefixed to the hash behind style bundle filenames; change it when the
+ * emitted CSS changes shape, so stale bundles are not reused (v2 states the
+ * layer order in every bundle).
+ */
+const STYLE_BUNDLE_FORMAT = "v2:";
+
 /** Shared cache instance for all client tools */
 export const cache = new ClientToolsCacheManager();
 
@@ -880,6 +871,7 @@ export type ImportedTools<
   TSignals = Empty,
   TConstants = Empty,
   TTemplates = Empty,
+  TComponents = Empty,
 > = {
   /**
    * The values of every imported `tiny.Constants`, merged. Inside a Handlers
@@ -887,7 +879,6 @@ export type ImportedTools<
    * `constants` (named exactly that): the bundle declares a copy.
    */
   readonly constants: TConstants;
-  readonly events: Events<TFunctions>;
   readonly fn: HandlerReferences<TFunctions>;
   readonly signal: SignalReferences<TSignals>;
   /**
@@ -897,7 +888,11 @@ export type ImportedTools<
    * what handlers add later.
    */
   readonly template: TTemplates;
-  readonly handlers: ActivateClientFunctions<TFunctions>;
+  /**
+   * Every imported `tiny.SignalComponent`, by name, and
+   * `component.instance()` to make one linked instance of each.
+   */
+  readonly component: TComponents & ComponentLinker<TComponents>;
   readonly styled: ActivateScopedStyles<TStyles>;
   readonly c: Context;
 };
@@ -921,7 +916,10 @@ type ExtractTemplates<T> = T extends { readonly _isTemplates: true }
   : Empty;
 
 /** Anything `tiny.imports()` accepts. */
-type Importable = AnyClientToolsInstance | ConstantsClass<SignalConstants>;
+type Importable =
+  | AnyClientToolsInstance
+  | ConstantsClass<SignalConstants>
+  | AnySignalComponent;
 
 type HandlerFactory<T extends Record<string, AnyFunction>> = () =>
   | T
@@ -1016,58 +1014,12 @@ function constantsDeclaration(
 export interface ClientToolsOptions<
   TFunctions extends Record<string, AnyFunction> = Empty,
   TStyles extends Record<string, ScopedStyleInput> = Empty,
-  // deno-lint-ignore no-explicit-any
-  TImports extends ClientToolsClass<any, any, any>[] = [],
 > {
   /** Client functions to define */
   functions?: TFunctions;
   /** Scoped styles to define */
   styles?: ForbidReservedStyledKeys<TStyles>;
-  /** Other ClientTools instances to import functions and styles from */
-  imports?: TImports;
 }
-
-export interface HandlersOptions<
-  TImports extends AnyClientToolsInstance[] = [],
-> {
-  /** Other TinyTools instances to import functions and styles from */
-  imports?: TImports;
-}
-
-/** Infer result type for ClientToolsOptions */
-export type InferClientToolsOptions<T> = T extends ClientToolsOptions<
-  infer TFunctions,
-  infer TStyles,
-  infer TImports
->
-  // deno-lint-ignore no-explicit-any
-  ? TImports extends ClientToolsClass<any, any, any>[] ? ClientToolsClass<
-      TFunctions & UnionOfFunctions<TImports>,
-      TStyles & UnionOfStyles<TImports>,
-      Empty
-    >
-  : ClientToolsClass<TFunctions, TStyles, Empty>
-  : never;
-
-// deno-lint-ignore no-explicit-any
-type FunctionsFromTool<T> = T extends ClientToolsClass<infer F, any, any> ? F
-  : Empty;
-
-// deno-lint-ignore no-explicit-any
-type StylesFromTool<T> = T extends ClientToolsClass<any, infer S, any> ? S
-  : Empty;
-
-/** Helper to accumulate functions from an array of ClientTools (works with both tuples and arrays) */
-// deno-lint-ignore no-explicit-any
-type UnionOfFunctions<T extends ClientToolsClass<any, any, any>[]> =
-  [T[number]] extends [never] ? Empty
-    : UnionToIntersection<FunctionsFromTool<T[number]>>;
-
-/** Helper to accumulate styles from an array of ClientTools (works with both tuples and arrays) */
-// deno-lint-ignore no-explicit-any
-type UnionOfStyles<T extends ClientToolsClass<any, any, any>[]> =
-  [T[number]] extends [never] ? Empty
-    : UnionToIntersection<StylesFromTool<T[number]>>;
 
 /**
  * Constructor interface for ClientTools that enables type inference from options.
@@ -1081,65 +1033,23 @@ interface ClientToolsConstructor {
   new <
     TFunctions extends Record<string, AnyFunction> = Empty,
     TStyles extends Record<string, ScopedStyleInput> = Empty,
-    // deno-lint-ignore no-explicit-any
-    TImports extends ClientToolsClass<any, any, any>[] = [],
   >(
     sourceFileUrl: string | URL,
-    options: ClientToolsOptions<TFunctions, TStyles, TImports>,
-  ): ClientToolsClass<
-    TFunctions & UnionOfFunctions<TImports>,
-    TStyles & UnionOfStyles<TImports>,
-    Empty
-  >;
+    options: ClientToolsOptions<TFunctions, TStyles>,
+  ): ClientToolsClass<TFunctions, TStyles, Empty>;
 }
 
 interface HandlersConstructor {
+  /** An async (or sync) definition that may import other tools. */
   new <TFunctions extends Record<string, AnyFunction>>(
     sourceFileUrl: string | URL,
     factory: HandlerFactory<TFunctions>,
   ): ClientToolsClass<TFunctions, Record<never, never>, Record<never, never>>;
-  // Overloads without sourceFileUrl (functions as first arg)
+  /** Handlers that need nothing from other tools. */
   new <TFunctions extends Record<string, AnyFunction> = Empty>(
-    functions: TFunctions,
-  ): ClientToolsClass<TFunctions, Empty, Empty>;
-
-  new <
-    TFunctions extends Record<string, AnyFunction> = Empty,
-    TImports extends AnyClientToolsInstance[] = [],
-  >(
-    options: HandlersOptions<TImports>,
-    functions: TFunctions,
-  ): ClientToolsClass<
-    TFunctions & UnionOfFunctions<TImports>,
-    UnionOfStyles<TImports>,
-    Empty
-  >;
-
-  // Overloads with sourceFileUrl
-  new <TFunctions extends Record<string, AnyFunction> = Empty>(
-    sourceFileUrl: string | URL | undefined,
-    functions: TFunctions,
-  ): ClientToolsClass<TFunctions, Empty, Empty>;
-
-  new <
-    TFunctions extends Record<string, AnyFunction> = Empty,
-    TImports extends AnyClientToolsInstance[] = [],
-  >(
-    sourceFileUrl: string | URL | undefined,
-    options: HandlersOptions<TImports>,
-    functions: TFunctions,
-  ): ClientToolsClass<
-    TFunctions & UnionOfFunctions<TImports>,
-    UnionOfStyles<TImports>,
-    Empty
-  >;
-}
-
-interface StoreConstructor extends HandlersConstructor {
-  new <TStored extends object, TFunctions extends Record<string, AnyFunction>>(
     sourceFileUrl: string | URL,
-    factory: (stored: TStored) => TFunctions | Promise<TFunctions>,
-  ): ClientToolsClass<TFunctions, Record<never, never>, Record<never, never>>;
+    functions: TFunctions,
+  ): ClientToolsClass<TFunctions, Empty, Empty>;
 }
 
 /** A `tiny.Signals` collection; `Deferred` marks the async definition form. */
@@ -1292,11 +1202,7 @@ class ClientToolsClass<
   AccumulatedStyles = Empty,
   AccumulatedGlobalStyles = Empty,
 > {
-  private static readonly RESERVED_FUNCTION_KEYS = new Set<string>([
-    "multiHandler",
-    "multiHandlerSync",
-    "run",
-  ]);
+  private static readonly RESERVED_FUNCTION_KEYS = new Set<string>(["run"]);
   private static readonly RESERVED_STYLED_KEYS = new Set<string>([
     "mergeClasses",
     "run",
@@ -1311,17 +1217,12 @@ class ClientToolsClass<
   private styleFilenames = new Map<string, string>();
   /** Stores ScopedStyleImpl instances for all styles in this factory */
   private _scopedStyles = new Map<string, ScopedStyleImpl>();
-  /** Track which style names were defined directly (not imported) */
+  /** The style names this instance defines. */
   private _ownStyleNames = new Set<string>();
   /** Previous bundle filename derived from cached constituent style hashes. */
   private _staleOwnBundleFilename?: string;
   /** Whether the on-disk reconciliation prune has run yet for this instance. */
   private _stalePruneDone = false;
-  /** Tracks which imported ClientTools instance owns each imported style name */
-  private _importedStyleOwners = new Map<string, AnyClientToolsInstance>();
-  /** Tracks imported ClientTools instances for cascading ensureBuilt() */
-  // deno-lint-ignore no-explicit-any
-  private _importedTools: ClientToolsClass<any, any, any>[] = [];
   /** Whether ensureBuilt() has already run */
   private _ensureBuiltPromise: Promise<void> | null = null;
   private _definitionReady = true;
@@ -1335,6 +1236,7 @@ class ClientToolsClass<
   /** Construction order within the source file; keys the bundle's cache entry. */
   protected _bundleIndex: number;
 
+  /** Stateful bundles (Signals) are unique per instance even when sources match. */
   protected get stateful(): boolean {
     return false;
   }
@@ -1349,6 +1251,11 @@ class ClientToolsClass<
 
   /** Stylesheets the markup this instance's bundle carries needs. */
   protected get bundleStyleFiles(): Iterable<string> {
+    return [];
+  }
+
+  /** Runtime modules (`tt-*.js`) the bundle's prelude imports. */
+  protected get bundleRuntimeFiles(): Iterable<string> {
     return [];
   }
 
@@ -1399,30 +1306,10 @@ class ClientToolsClass<
   }
 
   protected defineFactory(
-    factory: (
-      stored: Record<string, unknown>,
-    ) => ReturnType<HandlerFactory<Record<string, AnyFunction>>>,
+    factory: HandlerFactory<Record<string, AnyFunction>>,
   ): void {
-    let storedBinding = "stored";
-    if (this.stateful) {
-      const source = factory.toString().trim();
-      const parameter = source.match(
-        /^(?:async\s+)?(?:function(?:\s+[$\w]+)?\s*|[$\w]+\s*)?\(\s*([$A-Z_a-z][$\w]*)?\s*\)/,
-      ) ?? source.match(/^(?:async\s+)?([$A-Z_a-z][$\w]*)\s*=>/);
-      if (!parameter) {
-        throw new TypeError(
-          "Store factory must have no parameters or one simple state parameter.",
-        );
-      }
-      storedBinding = parameter[1] ?? storedBinding;
-      if (storedBinding === "fn" || storedBinding === "_handler") {
-        throw new TypeError(
-          "Store state parameter cannot be named fn or _handler.",
-        );
-      }
-    }
     this.defineDeferred(async (scope) => {
-      const functions = await factory(Object.create(null));
+      const functions = await factory();
       if (
         !functions || typeof functions !== "object" ||
         Object.values(functions).some((value) => typeof value !== "function")
@@ -1432,7 +1319,7 @@ class ClientToolsClass<
         );
       }
       this._constantsPrelude = constantsDeclaration(scope.constants);
-      this._processFunctions(functions, scope.dependencies, storedBinding);
+      this._processFunctions(functions, scope.dependencies);
       await this._bundle?.pruneDependencies();
       this._refreshHandlerFilenames();
     });
@@ -1449,14 +1336,13 @@ class ClientToolsClass<
   private _refreshHandlerFilenames(): void {
     for (const [name, instance] of this._clientFunctions) {
       this.handlerFilenames.set(name, instance.filename);
-      (this as Record<string, unknown>)[name] = instance.expression;
     }
   }
 
   constructor(
     sourceFileUrl: string | URL | undefined,
     // deno-lint-ignore no-explicit-any
-    options?: ClientToolsOptions<any, any, any>,
+    options?: ClientToolsOptions<any, any>,
   ) {
     this.sourceFileUrl = normalizeSourceFileUrl(sourceFileUrl) ??
       (typeof sourceFileUrl === "string"
@@ -1468,46 +1354,8 @@ class ClientToolsClass<
       "bundle",
     );
     registeredClientTools.add(this);
-
-    const processOptions = () => {
-      if (options) {
-        // Process imports first so imported functions/styles are available
-        if (options.imports) {
-          for (const externalTools of options.imports) {
-            this._processImport(externalTools);
-          }
-        }
-
-        // Process functions
-        if (options.functions) {
-          this._processFunctions(options.functions);
-        }
-
-        // Process styles
-        if (options.styles) {
-          this._processStyles(options.styles);
-        }
-      }
-    };
-    if (
-      options?.imports?.some((tools: AnyClientToolsInstance) =>
-        !tools._definitionReady
-      )
-    ) {
-      this._definitionReady = false;
-      this._definitionInitializer = async () => {
-        await Promise.all(
-          options.imports.map((tools: AnyClientToolsInstance) =>
-            tools.ensureDefined()
-          ),
-        );
-        processOptions();
-        this._finalizeStyleBundle();
-      };
-    } else {
-      processOptions();
-    }
-
+    if (options?.functions) this._processFunctions(options.functions);
+    if (options?.styles) this._processStyles(options.styles);
     // After all styles are processed, bundle scoped styles into one file
     this._finalizeStyleBundle();
   }
@@ -1516,7 +1364,6 @@ class ClientToolsClass<
   protected _processFunctions<T extends Record<string, AnyFunction>>(
     fns: T,
     dependencies?: ReadonlyMap<string, ClientFunctionImpl>,
-    storedBinding = "stored",
   ): void {
     const registry = getImportRegistry(this.sourceFileUrl);
     for (const [fnName, fn] of Object.entries(fns)) {
@@ -1526,22 +1373,14 @@ class ClientToolsClass<
         );
       }
 
-      // Check for duplicate from imports
-      if (this._clientFunctions.has(fnName)) {
-        throw new Error(
-          `Cannot define function '${fnName}': ` +
-            `a function with this name already exists (imported from another ClientTools instance)`,
-        );
-      }
-
       this._bundle ??= new HandlerBundle({
         sourceFileUrl: this.sourceFileUrl,
         index: this._bundleIndex,
         stateful: this.stateful,
-        storedBinding,
         dependencies,
         prelude: this.bundlePrelude,
         styleFiles: this.bundleStyleFiles,
+        runtimeFiles: this.bundleRuntimeFiles,
       });
       const instance = this._bundle.add(fnName, fn);
       registry.set(fnName, instance);
@@ -1553,13 +1392,10 @@ class ClientToolsClass<
   /**
    * After all own scoped styles are collected, compute a bundle filename
    * from the sorted individual filenames and register the bundle.
-   * Only styles defined directly on this instance are bundled — imported
-   * styles retain their original bundle filename from the exporting instance.
    */
   private _finalizeStyleBundle(): void {
     if (this._ownStyleNames.size === 0) return;
 
-    // Only bundle styles that belong to this instance (not imported)
     const ownStyles = [...this._scopedStyles.entries()]
       .filter(([name]) => this._ownStyleNames.has(name));
 
@@ -1577,10 +1413,12 @@ class ClientToolsClass<
     const baseName = urlPath.split("/").pop()?.replace(/\.[^.]+$/, "") ||
       "styles";
     const bundleFilename = `${baseName}_${
-      generateStyleHash(sortedStyleHashes.join(","))
+      generateStyleHash(STYLE_BUNDLE_FORMAT + sortedStyleHashes.join(","))
     }`;
     const staleBundleFilename = `${baseName}_${
-      generateStyleHash(sortedCleanupStyleHashes.join(","))
+      generateStyleHash(
+        STYLE_BUNDLE_FORMAT + sortedCleanupStyleHashes.join(","),
+      )
     }`;
     this._staleOwnBundleFilename = staleBundleFilename !== bundleFilename
       ? staleBundleFilename
@@ -1596,8 +1434,8 @@ class ClientToolsClass<
   }
 
   /**
-   * Recompute bundle filenames and imported style asset mappings after any
-   * constituent style filename changes.
+   * Recompute the bundle filename after any constituent style filename
+   * changes.
    * @internal
    */
   refreshStyleAssetMappings(): {
@@ -1613,16 +1451,6 @@ class ClientToolsClass<
 
     if (this._ownStyleNames.size > 0) {
       this._finalizeStyleBundle();
-    }
-
-    for (const [styleName, owner] of this._importedStyleOwners) {
-      const importedFilename = owner._styleFilenames.get(styleName);
-      const importedStyle = this._scopedStyles.get(styleName);
-      if (importedFilename) {
-        this.styleFilenames.set(styleName, importedFilename);
-      } else if (importedStyle) {
-        this.styleFilenames.set(styleName, importedStyle.filename);
-      }
     }
 
     const newBundleFilename = firstOwnStyleName
@@ -1659,11 +1487,8 @@ class ClientToolsClass<
 
     cache.beginChangeDetectionPass();
 
-    // Ensure imported tools are built first (their bundles need to exist)
-    await Promise.all(this._importedTools.map((t) => t.ensureBuilt()));
-
-    // Write every bundle these handlers live in (own + imported), along
-    // with everything those bundles import.
+    // Write every bundle these handlers live in, along with everything those
+    // bundles import.
     const bundles = new Set(
       [...this._clientFunctions.values()].map((impl) => impl.bundle),
     );
@@ -1682,7 +1507,7 @@ class ClientToolsClass<
       oldScopedStyleFilenames.set(name, impl.filename);
     }
 
-    // Revalidate all scoped styles (own + imported)
+    // Revalidate all scoped styles
     let anyStyleChanged = false;
     for (const [, impl] of this._scopedStyles) {
       const changed = await impl.revalidate();
@@ -1735,11 +1560,6 @@ class ClientToolsClass<
           );
         }
       }
-    }
-
-    // Update styleFilenames for any imported styles whose filename changed
-    if (anyStyleChanged) {
-      this.refreshStyleAssetMappings();
     }
 
     // Build style bundle CSS files
@@ -1894,59 +1714,6 @@ class ClientToolsClass<
     }
   }
 
-  /** Internal helper to process imports from another ClientTools instance */
-  // deno-lint-ignore no-explicit-any
-  private _processImport<T extends ClientToolsClass<any, any, any>>(
-    externalTools: T,
-  ): void {
-    this._importedTools.push(externalTools);
-    const externalSourceUrl = externalTools.sourceFileUrl;
-
-    // Import functions
-    for (const [fnName, instance] of externalTools._handlerDefinitions) {
-      if (ClientToolsClass.RESERVED_FUNCTION_KEYS.has(fnName)) {
-        throw new Error(
-          `Cannot import ClientFunction '${fnName}' from '${externalSourceUrl}': this key is reserved by fn API.`,
-        );
-      }
-
-      if (this._clientFunctions.has(fnName)) {
-        throw new Error(
-          `Cannot import ClientFunction '${fnName}' from '${externalSourceUrl}': ` +
-            `a function with this name already exists in the factory (from '${this.sourceFileUrl}')`,
-        );
-      }
-
-      getImportRegistry(this.sourceFileUrl).set(fnName, instance);
-      (this as Record<string, unknown>)[fnName] = instance.expression;
-      this.handlerFilenames.set(fnName, instance.filename);
-      this._clientFunctions.set(fnName, instance);
-    }
-
-    // Import styles — use the external tools' bundle filenames so accessing
-    // an imported style references the original bundle, not this instance's.
-    const externalStyleFilenames = externalTools._styleFilenames;
-    for (const [styleName, instance] of externalTools._styles) {
-      if (ClientToolsClass.RESERVED_STYLED_KEYS.has(styleName)) {
-        throw new Error(
-          `Cannot import style '${styleName}' from '${externalSourceUrl}': this key is reserved by styled API.`,
-        );
-      }
-
-      if (!this._scopedStyles.has(styleName)) {
-        (this as Record<string, unknown>)[styleName] = instance;
-        // Use the external bundle filename (not the individual style filename)
-        this.styleFilenames.set(
-          styleName,
-          externalStyleFilenames.get(styleName) ?? instance.filename,
-        );
-        this._importedStyleOwners.set(styleName, externalTools);
-        this._scopedStyles.set(styleName, instance);
-        // Note: NOT added to _ownStyleNames — imported styles are excluded from this bundle
-      }
-    }
-  }
-
   /**
    * Get the handler filenames map (for internal use by middleware).
    * @internal
@@ -2015,106 +1782,34 @@ export const ClientTools: ClientToolsConstructor =
 
 class HandlersClass extends ClientToolsClass<Empty, Empty, Empty> {
   constructor(
-    sourceFileUrlOrOptionsOrFunctions:
-      | string
-      | URL
-      | undefined
-      // deno-lint-ignore no-explicit-any
-      | HandlersOptions<any>
-      | Record<string, AnyFunction>,
-    optionsOrFunctions?:
-      // deno-lint-ignore no-explicit-any
-      | HandlersOptions<any>
+    sourceFileUrl: string | URL,
+    functions:
       | Record<string, AnyFunction>
       | HandlerFactory<Record<string, AnyFunction>>,
-    maybeFunctions?: Record<string, AnyFunction>,
   ) {
-    if (typeof optionsOrFunctions === "function") {
+    if (typeof functions === "function") {
       if (
-        !(typeof sourceFileUrlOrOptionsOrFunctions === "string" ||
-          sourceFileUrlOrOptionsOrFunctions instanceof URL) ||
-        !normalizeSourceFileUrl(sourceFileUrlOrOptionsOrFunctions)
+        !(typeof sourceFileUrl === "string" || sourceFileUrl instanceof URL) ||
+        !normalizeSourceFileUrl(sourceFileUrl)
       ) {
         throw new TypeError(
           "Handlers factory requires a valid source file URL. Pass import.meta.url.",
         );
       }
-      if (maybeFunctions !== undefined) {
-        throw new TypeError(
-          "Handlers factory does not accept a third argument.",
-        );
-      }
-      super(sourceFileUrlOrOptionsOrFunctions);
-      this.defineFactory(optionsOrFunctions);
+      super(sourceFileUrl);
+      this.defineFactory(functions);
       return;
     }
-    // Detect whether first arg is the sourceFileUrl (string/URL/undefined) or
-    // already an object (options or functions, meaning no sourceFileUrl was
-    // provided).
-    const firstArgIsObject = sourceFileUrlOrOptionsOrFunctions !== null &&
-      sourceFileUrlOrOptionsOrFunctions !== undefined &&
-      typeof sourceFileUrlOrOptionsOrFunctions === "object" &&
-      !(sourceFileUrlOrOptionsOrFunctions instanceof URL);
-
-    let sourceFileUrl: string | URL | undefined;
-    // deno-lint-ignore no-explicit-any
-    let options: HandlersOptions<any> | undefined;
-    let functions: Record<string, AnyFunction>;
-
-    if (firstArgIsObject) {
-      // No sourceFileUrl: either `(functions)` or `(options, functions)`
-      sourceFileUrl = undefined;
-      if (optionsOrFunctions === undefined) {
-        functions = sourceFileUrlOrOptionsOrFunctions as Record<
-          string,
-          AnyFunction
-        >;
-      } else {
-        // deno-lint-ignore no-explicit-any
-        options = sourceFileUrlOrOptionsOrFunctions as HandlersOptions<any>;
-        functions = optionsOrFunctions as Record<string, AnyFunction>;
-      }
-    } else {
-      sourceFileUrl = sourceFileUrlOrOptionsOrFunctions as
-        | string
-        | URL
-        | undefined;
-      if (maybeFunctions === undefined) {
-        // `(url, functions)`
-        functions = (optionsOrFunctions ?? {}) as Record<string, AnyFunction>;
-      } else {
-        // `(url, options, functions)`
-        // deno-lint-ignore no-explicit-any
-        options = optionsOrFunctions as HandlersOptions<any>;
-        functions = maybeFunctions;
-      }
-    }
-
-    const resolvedUrl = normalizeSourceFileUrl(sourceFileUrl);
-    if (!resolvedUrl && !cache.trustCache) {
-      const detail = sourceFileUrl
-        ? `Received ${
-          JSON.stringify(String(sourceFileUrl))
-        } which is not a valid file path. ` +
-          "Did you mean to use import.meta.url instead of import.meta.main?"
-        : "No source file URL was provided.";
+    if (!normalizeSourceFileUrl(sourceFileUrl) && !cache.trustCache) {
       console.warn(
-        `[tiny-tools] \x1b[33mWarning:\x1b[0m tiny.Handlers constructed without a valid source file URL. ${detail} ` +
+        `[tiny-tools] \x1b[33mWarning:\x1b[0m tiny.Handlers constructed without a valid source file URL (received ${
+          JSON.stringify(String(sourceFileUrl))
+        }). ` +
           "Handler changes will not be tracked between builds and stale files will not be cleaned up. " +
-          "Pass import.meta.url as the first argument to enable change tracking.",
+          "Pass import.meta.url as the first argument.",
       );
     }
-
-    super(sourceFileUrl, {
-      functions,
-      imports: options?.imports,
-    });
-  }
-}
-
-class StoreClass extends HandlersClass {
-  protected override get stateful(): boolean {
-    return true;
+    super(sourceFileUrl, { functions });
   }
 }
 
@@ -2201,26 +1896,8 @@ function splitFactory(
   return undefined;
 }
 
-/** `signalClasses` also returns the per-instance handle class, for validation. */
-type InternalSignalTools = SignalTools & {
-  // deno-lint-ignore no-explicit-any
-  InstanceSignal: new (...args: any[]) => {
-    readonly initialValue: unknown;
-    seededValue(
-      seed: Record<string, unknown>,
-      instances: Map<unknown, unknown>,
-    ): unknown;
-  };
-};
-
 /** Module-level names every Signals bundle may use. */
-const SIGNAL_BUNDLE_RESERVED = [
-  "fn",
-  "signal",
-  "stored",
-  "signalClasses",
-  "constants",
-];
+const SIGNAL_BUNDLE_RESERVED = ["fn", "signal", "stored", "constants"];
 
 /**
  * Rebuilds the factory from its source with only what the browser bundle
@@ -2264,7 +1941,12 @@ function runSignalFactory(
   tools: SignalTools,
 ): SignalDefinitions {
   try {
-    return factory(tools);
+    const definitions = factory(tools);
+    // Signals are EventTargets; per-instance handles name theirs per group.
+    for (const [name, signal] of Object.entries(definitions ?? {})) {
+      if (signal instanceof EventTarget) signal.name ??= name;
+    }
+    return definitions;
   } catch (error) {
     const name = error instanceof ReferenceError &&
       /^(.+) is not defined$/.exec(error.message)?.[1];
@@ -2284,7 +1966,7 @@ function runSignalFactory(
 
 /** Runs the factory server-side (values inert) to validate it and list its signals. */
 function signalNames(factory: SignalFactory): string[] {
-  const tools = signalClasses(false) as InternalSignalTools;
+  const tools = signalClasses(false);
   const definitions = runSignalFactory(factory, tools);
   if (
     !definitions || typeof definitions !== "object" ||
@@ -2296,11 +1978,6 @@ function signalNames(factory: SignalFactory): string[] {
   ) {
     throw new TypeError(
       "Signals factory must synchronously return an object of Signal or Computed instances, or perInstance signals.",
-    );
-  }
-  if (Object.hasOwn(definitions, "filterByInstance")) {
-    throw new TypeError(
-      "'filterByInstance' is reserved for signal.filterByInstance(element); give the signal another name.",
     );
   }
   return Object.keys(definitions);
@@ -2344,32 +2021,20 @@ type SignalEvaluation = {
   seed?: Record<string, unknown>;
 };
 
-class SignalsClass extends StoreClass {
-  #prelude: { code: string };
+class SignalsClass extends HandlersClass {
+  protected override get stateful(): boolean {
+    return true;
+  }
+
+  #prelude: { code: string; files: string[] };
   /** The compiled factory; set once an async definition has resolved. */
   #compiled: { factory?: SignalFactory };
   #deferred: boolean;
 
-  /** The one browser module holding the signal classes, shared by every collection. */
-  static #runtime: InstanceType<typeof HandlersClass> | undefined;
-
-  static get runtime(): InstanceType<typeof HandlersClass> {
-    return SignalsClass.#runtime ??= new Handlers(
-      new URL("./signals.ts", import.meta.url),
-      { signalClasses },
-    );
-  }
-
   constructor(
     sourceFileUrl: string | URL,
     factoryOrDefinition: SignalFactory | SignalDefinition,
-    ...rest: unknown[]
   ) {
-    if (rest.length > 0) {
-      throw new TypeError(
-        "tiny.Signals no longer takes constants as a third argument: import a tiny.Constants in an async definition.",
-      );
-    }
     const deferred = factoryOrDefinition instanceof AsyncFunction;
     if (deferred && factoryOrDefinition.length > 0) {
       throw new TypeError(
@@ -2379,7 +2044,7 @@ class SignalsClass extends StoreClass {
     const compiled: { factory?: SignalFactory } = deferred ? {} : {
       factory: compileSignalFactory(factoryOrDefinition as SignalFactory),
     };
-    const prelude = { code: "" };
+    const prelude = { code: "", files: [] as string[] };
     const owner: { collection?: SignalsClass } = {};
     super(sourceFileUrl, async () => {
       const scope = handlerDefinitionScope.getStore()!;
@@ -2400,7 +2065,6 @@ class SignalsClass extends StoreClass {
       }
       const names = signalNames(compiled.factory!);
       const declarations = constantsDeclaration(scope.constants);
-      await imports(SignalsClass.runtime);
       // Module-level names in the bundle must not collide with signal exports.
       const taken = new Set([...names, ...SIGNAL_BUNDLE_RESERVED]);
       const free = (base: string) => {
@@ -2409,29 +2073,38 @@ class SignalsClass extends StoreClass {
         taken.add(name);
         return name;
       };
-      // Unpack the toolkit with the factory's own parameter and run its body
-      // once, e.g. `const { Signal } = fn.signalClasses();` followed by
-      // `const signals = (() => {...})();`. Factories of other shapes are
-      // called with the toolkit instead.
-      const tools = `fn.signalClasses(true, ${
-        JSON.stringify(owner.collection!.instanceKey)
-      })`;
+      // Bind the toolkit to the factory's own parameter, importing only the
+      // runtime modules it names, and run its body once:
+      // `import { SignalInstance as Signal } from "./tt-signal_….js";`
+      // followed by `const signals = (() => {...})();`. Factories of other
+      // shapes are called with the whole toolkit instead.
+      const instanceKey = owner.collection!.instanceKey;
       const split = splitFactory(factory.toString());
       const parameterNames = split?.parameter.match(/[$A-Z_a-z][$\w]*/g) ??
         [];
       let graph: string;
+      let tools: ReturnType<typeof signalToolsPrelude>;
       if (split && !parameterNames.some((name) => taken.has(name))) {
         parameterNames.forEach((name) => taken.add(name));
         graph = free("signals");
-        prelude.code = declarations +
-          (split.parameter ? `const ${split.parameter} = ${tools};\n` : "") +
-          `const ${graph} = (${split.body})();`;
+        tools = signalToolsPrelude(split.parameter, instanceKey);
+        prelude.code = [
+          declarations + tools.code,
+          `const ${graph} = (${split.body})();`,
+        ].filter(Boolean).join("\n");
       } else {
         const define = free("defineSignals");
         graph = free("signals");
-        prelude.code = declarations + `const ${define} = ${factory};\n` +
-          `const ${graph} = ${define}(${tools});`;
+        tools = signalToolsPrelude(undefined, instanceKey);
+        prelude.code = declarations + tools.code + "\n" +
+          `const ${define} = ${factory};\n` +
+          `const ${graph} = ${define}(${tools.tools});`;
       }
+      // Each signal without a name is named after its key, as on the server.
+      prelude.code +=
+        `\nfor (const [name, signal] of Object.entries(${graph})) ` +
+        `if (signal instanceof EventTarget) signal.name ??= name;`;
+      prelude.files = tools.files;
       return Object.fromEntries(names.map((name) => {
         const property = /^[$A-Z_a-z][$\w]*$/.test(name)
           ? `.${name}`
@@ -2461,6 +2134,39 @@ class SignalsClass extends StoreClass {
     return `${baseName}_${
       generateHandlerHash(`${this.sourceFileUrl}#${this._bundleIndex}`)
     }`;
+  }
+
+  #levels?: { leaves: string[]; enclosing: string[] };
+
+  /**
+   * The keys of the innermost per-instance levels, whose roots a component
+   * instance's root is, and of the levels enclosing them, whose roots the
+   * page provides around it.
+   */
+  _instanceLevels(): { leaves: string[]; enclosing: string[] } {
+    if (this.#levels) return this.#levels;
+    const graph = runSignalFactory(
+      this.#compiled.factory!,
+      signalClasses(false, this.instanceKey),
+    );
+    const leaves = new Set<string>();
+    const enclosing = new Set<string>();
+    const groupsIn = (signals: Record<string, unknown>) =>
+      new Set(
+        Object.values(signals).flatMap((signal) =>
+          signal instanceof InstanceSignalHandle ? [signal.group] : []
+        ),
+      );
+    const visit = (group: InstanceGroup) => {
+      const children = groupsIn(group.template);
+      (children.size ? enclosing : leaves).add(group.key);
+      children.forEach(visit);
+    };
+    groupsIn(graph).forEach(visit);
+    return this.#levels = {
+      leaves: [...leaves],
+      enclosing: [...enclosing],
+    };
   }
 
   /** Must match the key `perInstance(name, ...)` builds in signals.ts. */
@@ -2513,7 +2219,7 @@ class SignalsClass extends StoreClass {
     inputs: Record<string, unknown>,
     seed?: Record<string, unknown>,
   ): Record<string, unknown> {
-    const tools = signalClasses(true) as InternalSignalTools;
+    const tools: InternalSignalTools = signalClasses(true, this.instanceKey);
     const graph = runSignalFactory(this.#compiled.factory!, tools);
     for (const [name, value] of Object.entries(inputs)) {
       if (!Object.hasOwn(graph, name)) {
@@ -2554,6 +2260,10 @@ class SignalsClass extends StoreClass {
 
   protected override get bundlePrelude(): string {
     return this.#prelude.code;
+  }
+
+  protected override get bundleRuntimeFiles(): Iterable<string> {
+    return this.#prelude.files;
   }
 }
 
@@ -2689,7 +2399,8 @@ async function renderToMarkup(child: unknown): Promise<string> {
 /**
  * The browser source of one clone function. `markup` is spliced in as a
  * string literal, so the function has no free variables and runs unchanged
- * on the server, where it returns the markup.
+ * on the server, where it returns the markup. Params are text: escaped, so
+ * a value is never parsed as markup, in an attribute or between tags.
  */
 function templateCloneSource(markup: string): string {
   return `function (params) {
@@ -2698,7 +2409,12 @@ function templateCloneSource(markup: string): string {
     markup = markup.replace(
       /\\$\\[([^\\]]+)\\]/g,
       (_placeholder, key) =>
-        Object.hasOwn(params, key) ? params[key] ?? "" : "",
+        Object.hasOwn(params, key)
+          ? String(params[key] ?? "").replace(
+            /[&<>"']/g,
+            (ch) => "&#" + ch.charCodeAt(0) + ";",
+          )
+          : "",
     );
   }
   if (typeof document === "undefined") return markup;
@@ -2825,15 +2541,352 @@ export const Templates: TemplatesConstructor =
 export const Handlers: HandlersConstructor =
   HandlersClass as unknown as HandlersConstructor;
 
-/** @deprecated Use Signals instead. Retained for compatibility. */
-export const Store: StoreConstructor =
-  StoreClass as unknown as StoreConstructor;
-
 export const Signals: SignalsConstructor =
   SignalsClass as unknown as SignalsConstructor;
 
 export const Styles: StylesConstructor =
   StylesClass as unknown as StylesConstructor;
+
+// ============================================================================
+// Components with instances
+// ============================================================================
+
+type AnySignalsCollection = AnyClientToolsInstance & {
+  readonly _isSignals: true;
+  readonly instanceKey: string;
+};
+
+/**
+ * One instance of an imported signal component: the component itself, to
+ * render as `<Box />`, with its `key` (that root's id, when the component
+ * exposes signals) and `signal`
+ * references that act on it from anywhere on the page. A `class` is added
+ * to its root's own (`<Box class={styled.wide} />`); the component never
+ * sees it.
+ */
+export type Instance<TSignals, Props, Result> =
+  & ((props: Props & { class?: string }) => Result)
+  & {
+    readonly key: string;
+    readonly signal: SignalReferences<TSignals>;
+  };
+
+/**
+ * A signal component as `tiny.imports()` returns it under `component`:
+ * each `instance()` is a new instance of it.
+ */
+export type ImportedComponent<Name extends string, TSignals, Props, Result> = {
+  readonly name: Name;
+  instance(): Instance<TSignals, Props, Result>;
+  /**
+   * The `tt-instance` for an element enclosing instances, when the
+   * component's signals have levels above its own: `<section
+   * tt-instance={component.Name.scopeKey}>`. Signals at those levels are
+   * shared by every instance inside that element.
+   */
+  readonly scopeKey: string;
+  /**
+   * The exposed signals, acting on whichever instance or enclosing element
+   * the element using them sits in, rather than on one instance.
+   */
+  readonly signal: SignalReferences<TSignals>;
+};
+
+// deno-lint-ignore no-explicit-any
+type AnyImportedComponent = ImportedComponent<string, any, any, any>;
+
+/** One instance of each imported component, by name. */
+export type ComponentInstances<TComponents> = {
+  -readonly [Name in keyof TComponents]: TComponents[Name] extends
+    ImportedComponent<string, infer TSignals, infer Props, infer Result>
+    ? Instance<TSignals, Props, Result>
+    : never;
+};
+
+/** `component.instance()` of a `tiny.imports()`. */
+export type ComponentLinker<TComponents> = {
+  /**
+   * One copy of the imported components: an instance of each, by name,
+   * all sharing one instance of their signals wherever they sit on the
+   * page, so a box and its button are parts of one box.
+   * `const { Box, Button } = component.instance()`.
+   */
+  instance(): ComponentInstances<TComponents>;
+  /**
+   * `repeat` copies made together: each has its own instance of the
+   * innermost level, and they share the levels enclosing it (see
+   * `scopeKey`), so two boxes keep their own colour but share a recolor.
+   * `const [one, two] = component.instance(2)`.
+   */
+  instance(repeat: number): ComponentInstances<TComponents>[];
+};
+
+declare const instancedBrand: unique symbol;
+
+/**
+ * What `instanced(render, [...])` makes: a component and the signals its
+ * instances expose, for a `tiny.SignalComponent` factory to return by name.
+ */
+export type Instanced<TSignals, Props, Result> = {
+  readonly [instancedBrand]: {
+    signals: TSignals;
+    props: Props;
+    result: Result;
+  };
+};
+
+/** The signals named by an `instanced()` list, by name. */
+type ExposedSignals<References extends readonly unknown[]> = {
+  [
+    Reference in References[number] as Reference extends
+      HandlerReference<infer Name, unknown> ? Name : never
+  ]: Reference extends HandlerReference<string, infer Signal> ? Signal
+    : never;
+};
+
+/** The tools a `tiny.SignalComponent` factory receives. */
+export type SignalComponentTools = {
+  /**
+   * Makes the factory's component, and names the signals other code may
+   * drive on each instance: `instanced(() => <div />, [signal.press])`, with
+   * signals from a `tiny.imports()` in the factory. Signals left out, or
+   * all of them when there is no list, stay internal to the component.
+   */
+  instanced<
+    Props,
+    Result,
+    const References extends readonly HandlerReference<string, unknown>[] = [],
+  >(
+    render: (props: Props) => Result,
+    exposed?: References,
+  ): Instanced<ExposedSignals<References>, Props, Result>;
+  /** The same for a component without props: `instanced(<div />, [...])`. */
+  instanced<
+    const References extends readonly HandlerReference<string, unknown>[] = [],
+  >(
+    markup: JSX.Element,
+    exposed?: References,
+  ): Instanced<ExposedSignals<References>, Empty, JSX.Element>;
+};
+
+/** How a component given as a function or as markup renders, if it is one. */
+function renderOf(value: unknown): InstancedParts["render"] | undefined {
+  if (typeof value === "function") return value as InstancedParts["render"];
+  if (isMarkup(value)) return () => value;
+}
+
+/** Binds the signals of one request's `tiny.imports()` to an instance. */
+type SignalSource = (instanceKey?: string) => SignalReferences<unknown>;
+
+/** Each signal reference from a request's `tiny.imports()`, by its name. */
+const signalSources = new WeakMap<
+  object,
+  { name: string; source: SignalSource }
+>();
+
+/**
+ * The per-instance levels of the signal collections a `tiny.SignalComponent`
+ * factory imports: its instance roots carry the innermost, and the page
+ * provides roots for the enclosing ones.
+ */
+const signalComponentScope = new AsyncLocalStorage<
+  { leaves: Set<string>; enclosing: Set<string> }
+>();
+
+type InstancedParts = {
+  render: (props: Record<string, unknown>) => unknown;
+  exposed: Map<string, SignalSource>;
+};
+
+const instancedParts = new WeakMap<object, InstancedParts>();
+
+const signalComponentTools: SignalComponentTools = {
+  instanced(
+    component: unknown,
+    references?: readonly HandlerReference<string, unknown>[],
+  ) {
+    const render = renderOf(component);
+    if (!render) {
+      throw new TypeError(
+        "instanced() takes the component, a function or JSX, as its first argument: instanced(render, [signal.press]).",
+      );
+    }
+    const exposed = new Map<string, SignalSource>();
+    for (const reference of references ?? []) {
+      const found = signalSources.get(reference);
+      if (!found) {
+        throw new TypeError(
+          "instanced() exposes signals from a tiny.imports() in the factory: instanced(render, [signal.press]).",
+        );
+      }
+      exposed.set(found.name, found.source);
+    }
+    const parts = {};
+    instancedParts.set(parts, { render, exposed });
+    return parts as never;
+  },
+};
+
+/**
+ * A component whose instances other code renders and drives. Like
+ * `tiny.Signals`, it takes a factory; the factory imports what the component
+ * renders with and returns its components by name,
+ * `{ ColorBox: instanced(() => <div />, [signal.press]) }`; each is separate,
+ * sharing only the factory's imports. `tiny.imports()` of it runs the
+ * factory for the request and returns `component.ColorBox`,
+ * whose `instance()` gives one instance to render as `<Instance />`
+ * (its root becomes the instance root of every collection the factory
+ * imported) and drive through `instance.signal`.
+ */
+export class SignalComponent<TComponents extends AnyInstancedComponents> {
+  readonly factory: (
+    tools: SignalComponentTools,
+  ) => TComponents | Promise<TComponents>;
+
+  constructor(
+    factory: (
+      tools: SignalComponentTools,
+    ) => TComponents | Promise<TComponents>,
+  ) {
+    this.factory = factory;
+  }
+}
+
+/**
+ * What a `tiny.SignalComponent` factory returns: its components, by name,
+ * each a plain function or JSX, or from `instanced()` to expose signals.
+ */
+type AnyInstancedComponents = Record<
+  string,
+  // deno-lint-ignore no-explicit-any
+  Instanced<any, any, any> | ((props: any) => unknown) | JSX.Element
+>;
+
+type AnySignalComponent = SignalComponent<AnyInstancedComponents>;
+
+/** The `component` of a `tiny.imports()` of signal components. */
+type ExtractComponents<T> = T extends SignalComponent<infer TComponents> ? {
+    readonly [Name in keyof TComponents & string]: TComponents[Name] extends
+      Instanced<infer TSignals, infer Props, infer Result>
+      ? ImportedComponent<Name, TSignals, Props, Result>
+      : TComponents[Name] extends (props: infer Props) => infer Result
+        ? ImportedComponent<Name, ExposedSignals<[]>, Props, Result>
+      : TComponents[Name] extends JSX.Element
+        ? ImportedComponent<Name, ExposedSignals<[]>, Empty, JSX.Element>
+      : never;
+  }
+  : Empty;
+
+let instanceCount = 0;
+let linkCount = 0;
+
+type AnyInstance = Instance<unknown, Record<string, unknown>, unknown>;
+
+/** The link ids of one copy from `component.instance()`, and of its group. */
+type CopyLink = { group: string; copy: string };
+
+/** The `component` of a request's `tiny.imports()`. */
+function linkableComponents(
+  components: (InstancedParts & {
+    name: string;
+    instanceKeys: string;
+    enclosing: string[];
+  })[],
+): Record<string, AnyImportedComponent> & ComponentLinker<unknown> {
+  const makers = new Map<string, (link?: CopyLink) => AnyInstance>();
+  const imported: Record<string, AnyImportedComponent> = Object.fromEntries(
+    components.map(({ name, render, exposed, instanceKeys, enclosing }) => {
+      if (name === "instance") {
+        throw new TypeError(
+          "A tiny.SignalComponent can't name a component 'instance': component.instance() makes the instances.",
+        );
+      }
+      const leaves = instanceKeys.split(" ").filter(Boolean);
+      const make = (link?: CopyLink) => {
+        const key = `${name}-${++instanceCount}`;
+        const attributes: Record<string, string> = {
+          [COMPONENT_ROOT_ATTRIBUTE]: name,
+          // Alone, the root is its own instance of the innermost levels.
+          ...(link ? {} : { "tt-instance": instanceKeys }),
+          // Only `instancefor` needs the id, so a component exposing nothing
+          // can render as often as it likes without repeating one.
+          ...(exposed.size ? { id: key } : {}),
+        };
+        if (link && (enclosing.length || leaves.length)) {
+          // Linked, a copy's parts share every level, and the copies made
+          // together share the outer ones.
+          attributes["tt-link"] = [
+            ...enclosing.map((level) => `${level}=${link.group}`),
+            ...leaves.map((level) => `${level}=${link.copy}`),
+          ].join(" ");
+        }
+        // Named after the component, for stack traces and devtools.
+        const component = {
+          [name]: ({ class: className, ...props }: Record<string, unknown>) =>
+            markResult(
+              render(props),
+              className
+                ? { ...attributes, class: String(className) }
+                : attributes,
+              props,
+            ),
+        }[name];
+        return Object.assign(markedComponent(component), {
+          key,
+          signal: instanceSignals(exposed, key),
+        });
+      };
+      const component: AnyImportedComponent = {
+        name,
+        scopeKey: enclosing.join(" "),
+        signal: instanceSignals(exposed),
+        instance: () => make(),
+      };
+      makers.set(name, make);
+      return [name, component];
+    }),
+  );
+  const instances = (group: string, copy: number) =>
+    Object.fromEntries(
+      [...makers].map((
+        [name, make],
+      ) => [name, make({ group, copy: `${group}.${copy}` })]),
+    );
+  return Object.assign(imported, {
+    instance: ((repeat?: number) => {
+      const group = `link-${++linkCount}`;
+      if (repeat === undefined) return instances(group, 0);
+      if (!Number.isInteger(repeat) || repeat < 0) {
+        throw new TypeError(
+          `component.instance(repeat) takes a whole number of copies, not ${repeat}.`,
+        );
+      }
+      return Array.from(
+        { length: repeat },
+        (_, copy) => instances(group, copy),
+      );
+    }) as ComponentLinker<unknown>["instance"],
+  });
+}
+
+/**
+ * One instance's references to the signals its component exposes, or, with
+ * no `key`, references resolving by ancestry.
+ */
+function instanceSignals(
+  exposed: Map<string, SignalSource>,
+  key?: string,
+): SignalReferences<unknown> {
+  const bound = new Map<SignalSource, SignalReferences<unknown>>();
+  return new Proxy({}, {
+    get(_target, name) {
+      const source = typeof name === "string" ? exposed.get(name) : undefined;
+      if (!source) return undefined;
+      if (!bound.has(source)) bound.set(source, source(key));
+      return (bound.get(source) as Record<string, unknown>)[name as string];
+    },
+  }) as SignalReferences<unknown>;
+}
 
 /** Values for `tiny.imports()`, read as `constants`. See {@link ConstantsClass}. */
 export const Constants: new <Values extends SignalConstants>(
@@ -2851,19 +2904,27 @@ export async function imports<
     UnionToIntersection<ExtractStyles<TTools[number]>>,
     UnionToIntersection<ExtractSignals<TTools[number]>>,
     UnionToIntersection<ExtractConstants<TTools[number]>>,
-    UnionToIntersection<ExtractTemplates<TTools[number]>>
+    UnionToIntersection<ExtractTemplates<TTools[number]>>,
+    UnionToIntersection<ExtractComponents<TTools[number]>>
   >
 >;
 export async function imports(
   ...given: Importable[]
-): Promise<ImportedTools<unknown, unknown, unknown, unknown, unknown>> {
+): Promise<
+  ImportedTools<unknown, unknown, unknown, unknown, unknown, unknown>
+> {
   const evaluations = new Map<SignalsClass, SignalEvaluation>();
-  const imported = given.map((item) => {
-    const evaluation = signalInputs.get(item);
-    if (!evaluation) return item;
-    evaluations.set(evaluation.collection, evaluation);
-    return evaluation.collection;
-  });
+  const components = given.filter((item) => item instanceof SignalComponent);
+  const imported = [
+    ...new Set(
+      given.filter((item) => !(item instanceof SignalComponent)).map((item) => {
+        const evaluation = signalInputs.get(item as AnyClientToolsInstance);
+        if (!evaluation) return item;
+        evaluations.set(evaluation.collection, evaluation);
+        return evaluation.collection;
+      }),
+    ),
+  ] as (AnyClientToolsInstance | ConstantsClass<SignalConstants>)[];
   const constantSets = imported.filter((item) =>
     item instanceof ConstantsClass
   );
@@ -2872,6 +2933,11 @@ export async function imports(
   );
   const definition = handlerDefinitionScope.getStore();
   if (definition?.active) {
+    if (components.length) {
+      throw new Error(
+        "Components cannot be imported inside a handler definition; import their signals collection instead.",
+      );
+    }
     if (imported.length === 0) {
       throw new Error(
         "Handler definitions require explicit tools in tiny.imports().",
@@ -2933,13 +2999,6 @@ export async function imports(
         };
       }
     }
-    Object.defineProperty(signalReferences, "filterByInstance", {
-      value() {
-        throw new Error(
-          "signal.filterByInstance() cannot be called during server-side definition. Call it inside a returned handler.",
-        );
-      },
-    });
     const unsupported = () => {
       throw new Error(
         "Handler definitions support only fn from tiny.imports(); request tools are unavailable.",
@@ -2949,6 +3008,7 @@ export async function imports(
       constants: JSON.parse(JSON.stringify(definition.constants ?? {})),
       signal: signalReferences as SignalReferences<unknown>,
       template: templateReferences,
+      component: {} as ComponentLinker<unknown>,
       fn: new Proxy(references, {
         get(target, property) {
           if (
@@ -2963,12 +3023,6 @@ export async function imports(
           return target[property];
         },
       }) as unknown as HandlerReferences<unknown>,
-      get events() {
-        return unsupported();
-      },
-      get handlers() {
-        return unsupported();
-      },
       get styled() {
         return unsupported();
       },
@@ -2983,7 +3037,7 @@ export async function imports(
       accessedStyleFiles: Set<string>;
     };
   }>();
-  if (!context && imported.length === 0) {
+  if (!context && imported.length === 0 && components.length === 0) {
     throw new Error(
       "tiny.imports() requires at least one TinyTools instance when no Hono request context is active.",
     );
@@ -3049,27 +3103,82 @@ export async function imports(
     get: (_target, property) =>
       resolveToolAccessFromChain(tools, "style", property, recordUsage),
   });
+  const resolveSignal = (name: string) => {
+    // Unlike handlers, a signal name in two collections is never an
+    // override: each element would silently bind to the last one.
+    const owners = signals.filter((tool) => tool._handlerFilenames.has(name));
+    if (owners.length > 1) {
+      throw new Error(
+        `Ambiguous signal '${name}': it is defined by the collections ${
+          owners.map((tool) => `'${tool.instanceKey}'`).join(" and ")
+        }. Import those collections in separate tiny.imports() calls.`,
+      );
+    }
+    return resolveToolAccessFromChain(signals, "function", name, recordUsage);
+  };
+  const levels = signalComponentScope.getStore();
+  for (const tool of levels ? signals : []) {
+    const { leaves, enclosing } = tool._instanceLevels();
+    leaves.forEach((key) => levels!.leaves.add(key));
+    enclosing.forEach((key) => levels!.enclosing.add(key));
+  }
+  const source: SignalSource = (key) =>
+    createSignalReferences(resolveSignal, rendering, key);
+  const references = createSignalReferences(resolveSignal, rendering);
+  // Remembers where each reference came from, for `instanced()`.
+  const signal = new Proxy(references, {
+    get(target, name, receiver) {
+      const reference = Reflect.get(target, name, receiver);
+      if (
+        typeof name === "string" && reference && typeof reference === "object"
+      ) {
+        signalSources.set(reference, { name, source });
+      }
+      return reference;
+    },
+  });
+  const instancedComponents = await Promise.all(
+    (components as AnySignalComponent[]).map((component) => {
+      const levels = {
+        leaves: new Set<string>(),
+        enclosing: new Set<string>(),
+      };
+      return signalComponentScope.run(levels, async () => {
+        const entries = Object.entries(
+          await component.factory(signalComponentTools) ?? {},
+        );
+        return entries.map(([name, value]) => {
+          // A plain function or markup is a component that exposes no
+          // signals.
+          const render = instancedParts.has(value)
+            ? undefined
+            : renderOf(value);
+          const parts = render
+            ? { render, exposed: new Map<string, SignalSource>() }
+            : instancedParts.get(value);
+          if (!parts) {
+            throw new TypeError(
+              `A tiny.SignalComponent factory returns its components by name, each a function, JSX or from instanced(): '${name}' is none of these.`,
+            );
+          }
+          return {
+            ...parts,
+            name,
+            instanceKeys: [...levels.leaves].join(" "),
+            enclosing: [...levels.enclosing],
+          };
+        });
+      });
+    }),
+  ).then((lists) => lists.flat());
   return {
     constants: mergeConstants({}, constantSets),
-    signal: createSignalReferences((name) => {
-      // Unlike handlers, a signal name in two collections is never an
-      // override: each element would silently bind to the last one.
-      const owners = signals.filter((tool) => tool._handlerFilenames.has(name));
-      if (owners.length > 1) {
-        throw new Error(
-          `Ambiguous signal '${name}': it is defined by the collections ${
-            owners.map((tool) => `'${tool.instanceKey}'`).join(" and ")
-          }. Import those collections in separate tiny.imports() calls.`,
-        );
-      }
-      return resolveToolAccessFromChain(signals, "function", name, recordUsage);
-    }, rendering),
+    signal,
     fn: createHandlerReferences((name) =>
       (handlers as Record<string, unknown>)[name]
     ),
-    events: createEvents((name) => (handlers as Record<string, unknown>)[name]),
     template,
-    handlers: handlers as ActivateClientFunctions<unknown>,
+    component: linkableComponents(instancedComponents),
     styled: styled as ActivateScopedStyles<unknown>,
     get c(): Context {
       if (!context) {
@@ -3081,7 +3190,7 @@ export async function imports(
 }
 
 /**
- * Registers `signalTools` for a build when the app defines a `tiny.Signals`
+ * Registers `signalBindingTools` for a build when the app defines a `tiny.Signals`
  * collection, since a signal placed as a JSX child renders with its
  * `setTextContent`. Otherwise it is loaded only by the first `tiny.imports()`
  * of a signal, after the build, so its bundle would be missing from a fresh
@@ -3102,7 +3211,7 @@ export async function registerSignalTextTools(): Promise<void> {
  * onConnect={signal} onSignal={fn.setTextContent}>`, so the text is there
  * before any script runs and follows each change after; a custom element is
  * inline, like a span.
- * Both must be synchronous to sit inline in JSX, so `signalTools` is built
+ * Both must be synchronous to sit inline in JSX, so `signalBindingTools` is built
  * here, ahead of any use. Both modules are loaded lazily: they import this one.
  */
 async function signalRendering(
@@ -3110,16 +3219,21 @@ async function signalRendering(
   evaluations: ReadonlyMap<SignalsClass, SignalEvaluation>,
   recordUsage: (type: ToolUsageType, filename: string) => void,
 ): Promise<SignalRendering> {
-  const [{ signalTools }, { jsx }] = await Promise.all([
+  const [{ signalBindingTools }, { jsx }] = await Promise.all([
     import("./handlers/signals.ts"),
     import("./jsx-runtime.ts"),
   ]);
-  await signalTools.ensureBuilt();
+  await signalBindingTools.ensureBuilt();
   const fn = createHandlerReferences<
-    Record<"setTextContent" | ReturnType<typeof signalSetter>, unknown>
+    Record<"setTextContent" | "setBound", unknown>
   >(
     (name) =>
-      resolveToolAccessFromChain([signalTools], "function", name, recordUsage),
+      resolveToolAccessFromChain(
+        [signalBindingTools],
+        "function",
+        name,
+        recordUsage,
+      ),
   );
   // Each collection's factory runs once per tiny.imports(), on first use.
   const initialValues = new Map<SignalsClass, Record<string, unknown>>();
@@ -3144,7 +3258,7 @@ async function signalRendering(
         children: `${initialText}`,
         // A JSXNode renders like the Element JSX expressions are typed as.
       }) as unknown as JSX.Element,
-    setter: (binding) => fn[signalSetter(binding)] as object,
+    setter: () => fn.setBound as object,
   };
 }
 

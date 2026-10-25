@@ -1,7 +1,6 @@
 import { assertEquals } from "@std/assert";
 import { signalClasses } from "../signals.ts";
-import { Signals } from "../clientTools.ts";
-import { loadHandler } from "./helpers/loadHandler.ts";
+import { signalRuntimeSources } from "../signalModules.ts";
 
 Deno.test("computed signals follow the signals they read", () => {
   const { Signal, Computed } = signalClasses(true);
@@ -36,6 +35,35 @@ Deno.test("computed signals follow the signals they read", () => {
   assertEquals(doubled.value, 8);
 });
 
+Deno.test("a computed steps from its previous value, from an initial value", () => {
+  const { Signal, Trigger, Computed } = signalClasses(true);
+  const press = new Trigger();
+  let runs = 0;
+  const steps = new Computed(
+    (step) => {
+      runs++;
+      return step + 10;
+    },
+    [press],
+    0,
+  );
+  // The initial value stands in for the first run.
+  assertEquals([steps.value, runs], [0, 0]);
+  press.fire();
+  press.fire();
+  assertEquals([steps.value, runs], [20, 2]);
+
+  // Without one, the first run sees `undefined`.
+  const count = new Signal(1);
+  const seen: (number | undefined)[] = [];
+  const total = new Computed((previous?: number) => {
+    seen.push(previous);
+    return (previous ?? 0) + count.value;
+  });
+  count.value = 2;
+  assertEquals([total.value, seen], [3, [undefined, 1]]);
+});
+
 Deno.test("array values compare by item and are read from control groups", () => {
   const { Signal } = signalClasses(true);
   const surfaces = new Signal<string[]>(["M"]);
@@ -68,12 +96,24 @@ Deno.test("array values compare by item and are read from control groups", () =>
   assertEquals(flag.value, true);
 });
 
-Deno.test("the signal runtime bundles and tracks in the browser build", async () => {
-  // The runtime bundle is registered the first time a collection needs it.
-  void (Signals as unknown as { runtime: unknown }).runtime;
-  const classes = await loadHandler<typeof signalClasses>("signalClasses");
-  const { Signal, Computed } = classes(true);
-  const count = new Signal<number>(1);
+Deno.test("the signal runtime modules track in the browser build", async () => {
+  const url = (file: string): string =>
+    `data:text/javascript,${
+      encodeURIComponent(
+        signalRuntimeSources.get(file)!.replace(
+          /"\.\/(tt-[\w-]+\.js)"/g,
+          (_: string, imported: string) => JSON.stringify(url(imported)),
+        ),
+      )
+    }`;
+  const files = [...signalRuntimeSources.keys()];
+  const { SignalInstance: Signal } = await import(
+    url(files.find((file) => file.startsWith("tt-signal_"))!)
+  );
+  const { ComputedInstance: Computed } = await import(
+    url(files.find((file) => file.startsWith("tt-computed_"))!)
+  );
+  const count = new Signal(1);
   const double = new Computed(() => count.value * 2);
   count.value = 4;
   assertEquals(double.value, 8);

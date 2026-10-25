@@ -17,7 +17,7 @@ const keyboard = new tiny.Handlers(import.meta.url, {
 const styles = new tiny.Styles(import.meta.url, { panel: "color: red;" });
 
 Deno.test("imports infer all explicit collections and preserve JSX signatures", async () => {
-  const { fn, styled, handlers, events } = await tiny.imports(
+  const { fn, styled } = await tiny.imports(
     buttons,
     keyboard,
     styles,
@@ -34,8 +34,7 @@ Deno.test("imports infer all explicit collections and preserve JSX signatures", 
     </button>
   );
   assertEquals(String(element).includes("tt-handler-click"), true);
-  assertEquals(typeof handlers.click, "string");
-  events({ click: fn.click, keydown: "keydown" });
+  assertEquals(String(element).includes("tt-handler-keydown"), true);
 });
 
 async function checkTypes() {
@@ -45,8 +44,6 @@ async function checkTypes() {
   // @ts-expect-error Unimported styles are unavailable.
   local.styled.panel;
   const keys = await tiny.imports(keyboard);
-  // @ts-expect-error Keyboard handlers do not handle mouse events.
-  local.events({ click: keys.fn.keydown });
   // @ts-expect-error Native JSX retains handler event types.
   const invalid = <button type="button" onClick={keys.fn.keydown} />;
   const contextOnly = await tiny.imports();

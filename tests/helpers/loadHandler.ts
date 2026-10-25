@@ -1,7 +1,25 @@
 import { assertExists } from "@std/assert";
 import { handlerBundles, handlers } from "../../clientFunctions.ts";
+import { signalRuntimeSources } from "../../signalModules.ts";
 
 const bundleUrls = new Map<string, Promise<string>>();
+
+/** Replace imports of runtime modules (`./tt-*.js`) with `data:` URLs. */
+function inlineRuntimeImports(code: string): string {
+  for (const [file, source] of signalRuntimeSources) {
+    const specifier = JSON.stringify(`./${file}`);
+    if (!code.includes(specifier)) continue;
+    code = code.replaceAll(
+      specifier,
+      JSON.stringify(
+        `data:text/javascript,${
+          encodeURIComponent(inlineRuntimeImports(source))
+        }`,
+      ),
+    );
+  }
+  return code;
+}
 
 /** Build a bundle as a `data:` module URL, inlining its bundle imports. */
 export function bundleUrl(filename: string): Promise<string> {
@@ -20,7 +38,9 @@ export function bundleUrl(filename: string): Promise<string> {
           JSON.stringify(await bundleUrl(impl.filename)),
         );
       }
-      return `data:text/javascript,${encodeURIComponent(code)}`;
+      return `data:text/javascript,${
+        encodeURIComponent(inlineRuntimeImports(code))
+      }`;
     })();
     bundleUrls.set(filename, url);
   }

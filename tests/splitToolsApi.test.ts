@@ -1,6 +1,11 @@
 import { assertEquals } from "@std/assert";
 import { Handlers, imports, Styles } from "../clientTools.ts";
+import { handlerReferenceAttributes } from "../eventAttributes.ts";
 import { css } from "../scopedStyles.ts";
+
+/** The `<bundle>.<name>` a handler reference renders as. */
+const handlerOf = (reference: unknown) =>
+  handlerReferenceAttributes("onClick", reference)?.["tt-handler-click"] ?? "";
 
 Deno.test("split tools api - css tag trims formatting whitespace", () => {
   const inlineStyle = css`
@@ -57,17 +62,32 @@ Deno.test({
       },
     });
 
-    const localHandlers = new Handlers("file:///tests/local-handlers.ts", {
-      imports: [sharedHandlers],
-    }, {
-      localHandler: function () {
-        return "local";
+    const localHandlers = new Handlers(
+      "file:///tests/local-handlers.ts",
+      async () => {
+        const { fn } = await imports(sharedHandlers);
+        return {
+          localHandler: function () {
+            return `local ${fn.sharedHandler()}`;
+          },
+        };
       },
-    });
+    );
 
-    const { handlers: fn } = await imports(localHandlers);
-    assertEquals(String(fn.sharedHandler).includes("handlers."), true);
-    assertEquals(String(fn.localHandler).includes("handlers."), true);
+    const { fn } = await imports(localHandlers);
+    assertEquals(
+      /^local_handlers_\w+\.localHandler$/.test(handlerOf(fn.localHandler)),
+      true,
+    );
+    const bundle = localHandlers._handlerDefinitions.get("localHandler")!
+      .bundle;
+    assertEquals([...bundle.dependencies.keys()], ["sharedHandler"]);
+    assertEquals(
+      bundle.reachableFilenames.includes(
+        sharedHandlers._handlerFilenames.get("sharedHandler")!,
+      ),
+      true,
+    );
   },
 });
 
@@ -88,8 +108,8 @@ Deno.test({
       },
     });
 
-    const { handlers: fn, styled } = await imports(styles, handlers);
-    assertEquals(String(fn.clickHandler).includes("handlers."), true);
+    const { fn, styled } = await imports(styles, handlers);
+    assertEquals(handlerOf(fn.clickHandler).endsWith(".clickHandler"), true);
     assertEquals(styled.button.includes("button_"), true);
   },
 });
@@ -123,13 +143,13 @@ Deno.test({
       },
     });
 
-    const { handlers: fn, styled } = await imports(
+    const { fn, styled } = await imports(
       baseStyles,
       accentStyles,
       buttonStyles,
       handlers,
     );
-    assertEquals(String(fn.clickHandler).includes("handlers."), true);
+    assertEquals(handlerOf(fn.clickHandler).endsWith(".clickHandler"), true);
     assertEquals(styled.button.includes("button_"), true);
     assertEquals(styled.panel.includes("panel_"), true);
     assertEquals(styled.badge.includes("badge_"), true);

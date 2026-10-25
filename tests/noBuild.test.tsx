@@ -37,6 +37,7 @@ if (!Deno.args.includes("--none")) {
     "../clientTools.ts"
   );
   const { getEsbuild } = await import("../esbuildInit.ts");
+  const { buildScriptFiles } = await import("../build.ts");
   const { UpgradeCustomElement } = await import(
     "../components/ActivateOnLoadHandler.tsx"
   );
@@ -137,7 +138,7 @@ if (!Deno.args.includes("--none")) {
         const runtimePath = html.match(/<script src="([^"]+)"><\/script>/)?.[1];
         assertStringIncludes(runtimePath!, "/handlers/tt-runtime_");
         const runtime = await (await app.request(runtimePath!)).text();
-        assertStringIncludes(runtime, tiny.runHandler.toString());
+        assertStringIncludes(runtime, "function runHandler(el, e) {");
         assertStringIncludes(
           runtime,
           "const tiny = {runHandler};",
@@ -159,7 +160,7 @@ if (!Deno.args.includes("--none")) {
         assertEquals(memoryAssets, assetsBefore);
         cache.save();
         await assertRejects(
-          () => tiny.build(),
+          () => buildScriptFiles(),
           Error,
           "Full builds are disabled",
         );

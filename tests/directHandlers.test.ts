@@ -1,25 +1,21 @@
 import { assertEquals, assertStringIncludes, assertThrows } from "@std/assert";
 import {
-  createEvents,
   createHandlerReferences,
   eventHandlerBody,
 } from "../eventAttributes.ts";
 import { jsx, jsxAttr, jsxs, jsxTemplate } from "../jsx-runtime.ts";
 import { jsxDEV } from "../jsx-dev-runtime.ts";
 
-const resolve = (name: string) =>
-  `handlers.bundle_123.${name}.call(this, event)`;
 const handlers = createHandlerReferences<
   { click: (event: MouseEvent) => void }
->(resolve);
-const events = createEvents<{ click: (event: MouseEvent) => void }>(resolve);
+>((name) => `bundle_123.${name}`);
+const clickAttributes =
+  `onclick="${eventHandlerBody}" tt-handler-click="bundle_123.click"`;
 
 Deno.test("direct references expand in normal and dev JSX without mutating props", () => {
   const props = { onClick: handlers.click, children: "Count" };
   const reference = props.onClick;
-  const expected = String(
-    jsx("button", { ...events({ click: handlers.click }), children: "Count" }),
-  );
+  const expected = `<button ${clickAttributes}>Count</button>`;
   for (const render of [jsx, jsxs, jsxDEV]) {
     assertEquals(String(render("button", props)), expected);
   }
@@ -31,22 +27,13 @@ Deno.test("precompiled attribute helper emits both escaped attributes", () => {
   const html = String(
     jsxTemplate`<button ${jsxAttr("onClick", handlers.click)}>Count</button>`,
   );
-  assertEquals(
-    html,
-    String(
-      jsx("button", {
-        ...events({ click: handlers.click }),
-        children: "Count",
-      }),
-    ),
-  );
-  assertStringIncludes(html, 'tt-handler-click="bundle_123.click"');
+  assertEquals(html, `<button ${clickAttributes}>Count</button>`);
 });
 
 Deno.test("ordinary attributes, inline expressions and component props are preserved", () => {
   assertStringIncludes(
-    String(jsx("button", { onClick: resolve("click") })),
-    resolve("click"),
+    String(jsx("button", { onClick: "count += 1" })),
+    'onClick="count += 1"',
   );
   assertEquals(String(jsxAttr("title", 'a"b')), 'title="a&quot;b"');
   const reference = handlers.click;

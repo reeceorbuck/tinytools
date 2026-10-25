@@ -20,8 +20,8 @@ export interface ReadonlySignal<Value = SignalValue> {
   readonly value: Value;
   /**
    * Optional name, used by handlers such as `setCssProperty`. Set in the
-   * factory, or automatically from the `name` (or `data-bind-name`) of an
-   * input whose input/change event writes the signal.
+   * factory, or automatically from the `name` of an input whose input/change
+   * event writes the signal.
    */
   name?: string;
   /** Sends `target` later changes; it hears nothing until the next one. */
@@ -157,11 +157,25 @@ export interface SignalTools {
    * changes. Dependencies are tracked on every run, so reads behind
    * conditions count only while taken. `dependencies` may list extra signals
    * to follow (for example ones read only inside an untracked helper).
+   * `compute` receives the previous value: `undefined` on the first run.
    */
-  Computed: new <Value>(
-    compute: () => Value,
-    dependencies?: readonly ReadonlySignal<unknown>[],
-  ) => ReadonlySignal<Value>;
+  Computed: {
+    new <Value>(
+      compute: (previous: Value | undefined) => Value,
+      dependencies?: readonly ReadonlySignal<unknown>[],
+    ): ReadonlySignal<Value>;
+    /**
+     * Starts at `initialValue` without running `compute`, which first runs
+     * when one of `dependencies` changes, so list every signal it should
+     * follow there. Suits a value that only steps from its previous one on
+     * each change (`new Computed((hue) => (hue + 90) % 360, [press], 0)`).
+     */
+    new <Value>(
+      compute: (previous: Value) => Value,
+      dependencies: readonly ReadonlySignal<unknown>[],
+      initialValue: Value & SignalValue,
+    ): ReadonlySignal<Value>;
+  };
   /**
    * One writable signal per entry of `initialValues`, under the same key and
    * typed from its value, so an object of defaults (usually from `constants`)
@@ -266,603 +280,629 @@ export type InstanceSeed<
     : never;
 };
 
+// ============================================================================
+// Runtime
+//
+// The classes below are the signal runtime itself, used as they are on the
+// server and shipped to the browser as source (see `signalModules.ts`), split
+// into modules by feature so a page only loads what its collections use:
+// `Signal` and `signalsFrom` (always), `Computed`, `Trigger` and
+// `perInstance`. Each shipped function may therefore only use the DOM, `tiny`
+// and the names its module declares or imports: see `signalModules.ts`.
+// ============================================================================
+
+/** Signals read while a computed callback runs, so it can follow them. */
+let tracking: Set<SignalInstance<unknown>> | null = null;
+
+/** Runs `compute`, recording the signals it reads. */
+export function track<Value>(
+  compute: () => Value,
+): { value: Value; reads: Set<SignalInstance<unknown>> } {
+  const previous = tracking;
+  const reads = new Set<SignalInstance<unknown>>();
+  tracking = reads;
+  try {
+    return { value: compute(), reads };
+  } finally {
+    tracking = previous;
+  }
+}
+
+/** Runs `read` without recording its reads in an enclosing computed. */
+export function untracked<Value>(read: () => Value): Value {
+  const previous = tracking;
+  tracking = null;
+  try {
+    return read();
+  } finally {
+    tracking = previous;
+  }
+}
+
+/** @internal Equal values do not notify; arrays compare by their items. */
+export function sameValue(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  return Array.isArray(a) && Array.isArray(b) && a.length === b.length &&
+    a.every((item, index) => Object.is(item, b[index]));
+}
+
+/** The parts of a form control the runtime reads. */
+export type Control = {
+  type?: string;
+  name?: string;
+  value: string;
+  checked?: boolean;
+  multiple?: boolean;
+  selectedOptions?: ArrayLike<{ value: string }>;
+  form?: HTMLFormElement | null;
+};
+
 /**
- * The signal classes for one collection. `instanceKey` identifies that
- * collection's instance roots: elements whose space-separated `tt-instance`
- * attribute includes it. Everything lives inside this function because it
- * alone is sent to the browser.
+ * @internal A control's value in the shape of the signal's current value: checkboxes
+ * write `checked` to a boolean signal and otherwise the checked values of
+ * their group (the inputs sharing their form and name), a multiple select its
+ * selected values, and a numeric signal reads a number.
  */
-export function signalClasses(
-  runtime = true,
-  instanceKey?: string,
-): SignalTools {
-  /** Signals read while a computed callback runs, so it can follow them. */
-  let tracking: Set<SignalInstance<unknown>> | null = null;
+export function readControl(control: Control, current: unknown): unknown {
+  if (control.type === "checkbox") {
+    if (typeof current === "boolean") return !!control.checked;
+    const named = control.name
+      ? control.form?.elements.namedItem(control.name)
+      : null;
+    const group = typeof RadioNodeList !== "undefined" &&
+        named instanceof RadioNodeList
+      ? Array.from(named) as unknown as Control[]
+      : [control];
+    return group.filter((input) => input.checked).map((input) => input.value);
+  }
+  if (control.multiple && control.selectedOptions) {
+    return Array.from(control.selectedOptions, (option) => option.value);
+  }
+  if (typeof current === "number") {
+    return control.value === "" ? NaN : Number(control.value);
+  }
+  return control.value;
+}
 
-  function track<Value>(
-    compute: () => Value,
-  ): { value: Value; reads: Set<SignalInstance<unknown>> } {
-    const previous = tracking;
-    const reads = new Set<SignalInstance<unknown>>();
-    tracking = reads;
-    try {
-      return { value: compute(), reads };
-    } finally {
-      tracking = previous;
-    }
+export class SignalInstance<Value = SignalValue> extends EventTarget
+  implements Signal<Value> {
+  name?: string;
+  #value: Value;
+  #subscriptions = new WeakMap<
+    EventTarget,
+    { listener: EventListener; fire: EventListener }
+  >();
+
+  constructor(initialValue: Value = null as Value) {
+    super();
+    this.#value = initialValue;
   }
 
-  function untracked<Value>(read: () => Value): Value {
-    const previous = tracking;
-    tracking = null;
-    try {
-      return read();
-    } finally {
-      tracking = previous;
-    }
+  get value(): Value {
+    tracking?.add(this as SignalInstance<unknown>);
+    return this.#value;
   }
 
-  /** Equal values do not notify; arrays compare by their items. */
-  function sameValue(a: unknown, b: unknown): boolean {
-    if (Object.is(a, b)) return true;
-    return Array.isArray(a) && Array.isArray(b) && a.length === b.length &&
-      a.every((item, index) => Object.is(item, b[index]));
+  set value(value: Value) {
+    if (sameValue(this.#value, value)) return;
+    this.#value = value;
+    this.dispatchEvent(this.createEvent());
   }
 
-  /** The parts of a form control the runtime reads. */
-  type Control = {
-    type?: string;
-    name?: string;
-    value: string;
-    checked?: boolean;
-    multiple?: boolean;
-    selectedOptions?: ArrayLike<{ value: string }>;
-    dataset?: { bindName?: string };
-  };
+  createEvent(): Event {
+    return Object.assign(new Event("signal"), { signal: this });
+  }
 
   /**
-   * A control's value in the shape of the signal's current value: checkboxes
-   * write `checked` to a boolean signal and otherwise the checked values of
-   * their group, a multiple select its selected values, and a numeric signal
-   * reads a number.
+   * Returns whether a new subscription was made. Subscribing sends nothing:
+   * the target hears of changes only. A `tt-fire-signals` event on the
+   * target (`signalTools.fireSelfSignal`) sends it the current value.
    */
-  function readControl(
-    control: Control,
-    current: unknown,
-    group: () => Control[],
-  ): unknown {
-    if (control.type === "checkbox") {
-      if (typeof current === "boolean") return !!control.checked;
-      return group().filter((input) => input.checked).map((input) =>
-        input.value
-      );
-    }
-    if (control.multiple && control.selectedOptions) {
-      return Array.from(control.selectedOptions, (option) => option.value);
-    }
-    if (typeof current === "number") {
-      return control.value === "" ? NaN : Number(control.value);
-    }
-    return control.value;
+  subscribe(target: EventTarget): boolean {
+    if (this.#subscriptions.has(target)) return false;
+    const abortSignal = (target as { abortController?: AbortController })
+      .abortController?.signal;
+    if (abortSignal?.aborted) return false;
+    // Elements run their `onSignal` handlers; other targets (a computed's)
+    // hear the event itself.
+    const listener = (event: Event) =>
+      typeof HTMLElement !== "undefined" && target instanceof HTMLElement
+        ? tiny.runHandler(target, event)
+        : target.dispatchEvent(this.createEvent());
+    const fire = () => listener(this.createEvent());
+    this.#subscriptions.set(target, { listener, fire });
+    this.addEventListener("signal", listener, { signal: abortSignal });
+    target.addEventListener("tt-fire-signals", fire, { signal: abortSignal });
+    abortSignal?.addEventListener(
+      "abort",
+      () => this.#subscriptions.delete(target),
+      { once: true },
+    );
+    return true;
   }
 
-  /** The other inputs of a checkbox group: those sharing its form and name. */
-  function namedGroup(control: Control): Control[] {
-    const form = (control as { form?: HTMLFormElement }).form;
-    const named = control.name ? form?.elements.namedItem(control.name) : null;
+  unsubscribe(target: EventTarget): void {
+    const subscription = this.#subscriptions.get(target);
+    if (!subscription) return;
+    this.#subscriptions.delete(target);
+    this.removeEventListener("signal", subscription.listener);
+    target.removeEventListener("tt-fire-signals", subscription.fire);
+  }
+
+  /** Takes the value of `control`, and its name when it has one. */
+  read(control: Control): void {
+    this.value = readControl(control, this.#value) as Value;
+    if (control.name) this.name = control.name;
+  }
+
+  handleEvent(target: unknown, event?: Event | null): this {
+    if (event?.type === "input" || event?.type === "change") {
+      this.read(event.target as unknown as Control);
+    } else if (
+      (event?.type === "connect" || event?.type === "load") &&
+      target instanceof EventTarget
+    ) {
+      // Subscribing only listens: `onSignal` runs on the next change, not
+      // now. `load` is for `<body>` and the other elements the browser
+      // fires it on.
+      this.subscribe(target);
+    } else if (event) {
+      // Any other event (a click, say) is counted, so subscribers run on
+      // each one and the value stays a change to notify about.
+      if (typeof this.#value !== "number") {
+        throw new TypeError(
+          `A signal bound to a ${event.type} event counts those events, so it must hold a number.`,
+        );
+      }
+      this.value = (this.#value + 1) as Value;
+    }
+    return this;
+  }
+}
+
+export function signalsFrom(
+  initialValues: Record<string, SignalValue>,
+): Record<string, SignalInstance<SignalValue>> {
+  return Object.fromEntries(
+    Object.entries(initialValues).map((
+      [key, value],
+    ) => [key, new SignalInstance(value)]),
+  );
+}
+
+export class TriggerInstance extends SignalInstance<number> implements Trigger {
+  constructor() {
+    super(0);
+  }
+
+  fire(): void {
+    super.value++;
+  }
+
+  override get value(): number {
+    return super.value;
+  }
+
+  override set value(_value: number) {
+    throw new TypeError("Triggers have no value to set: call `fire()`.");
+  }
+
+  /** Every event fires it, except the ones that subscribe. */
+  override handleEvent(target: unknown, event?: Event | null): this {
     if (
-      typeof RadioNodeList !== "undefined" && named instanceof RadioNodeList
+      (event?.type === "connect" || event?.type === "load") &&
+      target instanceof EventTarget
     ) {
-      return Array.from(named) as unknown as Control[];
+      this.subscribe(target);
+    } else if (event) {
+      this.fire();
     }
-    return [control];
+    return this;
+  }
+}
+
+export class ComputedInstance<Value> extends SignalInstance<Value>
+  implements ReadonlySignal<Value> {
+  #compute: (previous: Value | undefined) => Value;
+  #explicit: Set<ReadonlySignal<unknown>>;
+  #dependencies = new Set<ReadonlySignal<unknown>>();
+  #target = new EventTarget();
+
+  /** With `initialValue`, `compute` waits for a change of `dependencies`. */
+  constructor(
+    compute: (previous: Value | undefined) => Value,
+    dependencies: readonly ReadonlySignal<unknown>[] = [],
+    ...initialValue: [] | [Value]
+  ) {
+    const initial = initialValue.length
+      ? { value: initialValue[0] as Value, reads: new Set<never>() }
+      : track(() => compute(undefined));
+    super(initial.value);
+    this.#compute = compute;
+    this.#explicit = new Set(dependencies);
+    this.#target.addEventListener("signal", () => this.refresh());
+    this.#follow(initial.reads);
   }
 
-  class SignalInstance<Value = SignalValue> extends EventTarget
-    implements Signal<Value> {
-    #name?: string;
-    #value: Value;
-    #subscriptions = new WeakMap<
-      EventTarget,
-      { listener: EventListener; fire: EventListener }
-    >();
-
-    constructor(initialValue: Value = null as Value) {
-      super();
-      this.#value = initialValue;
-      this.#name = undefined;
+  /** Subscribes to the signals the last run read, dropping the rest. */
+  #follow(reads: Set<SignalInstance<unknown>>): void {
+    const wanted = new Set<ReadonlySignal<unknown>>([
+      ...this.#explicit,
+      ...reads,
+    ]);
+    wanted.delete(this);
+    for (const dependency of this.#dependencies) {
+      if (wanted.has(dependency)) continue;
+      dependency.unsubscribe(this.#target);
+      this.#dependencies.delete(dependency);
     }
-
-    get name(): string | undefined {
-      return this.#name;
+    for (const dependency of wanted) {
+      if (this.#dependencies.has(dependency)) continue;
+      dependency.subscribe(this.#target);
+      this.#dependencies.add(dependency);
     }
+  }
 
-    set name(name: string | undefined) {
-      this.#name = name;
+  /** Recomputes the value, notifying subscribers if it changed. */
+  refresh(): void {
+    // Reading its own value is no dependency: `#follow` drops `this`.
+    const { value, reads } = track(() => this.#compute(super.value));
+    this.#follow(reads);
+    super.value = value;
+  }
+
+  override get value(): Value {
+    return super.value;
+  }
+
+  override set value(_value: Value) {
+    throw new TypeError("Computed signals are read-only.");
+  }
+}
+
+type Graph = Record<string, SignalInstance<unknown> | InstanceSignalHandle>;
+
+/**
+ * Where a `perInstance` call is running: `undefined` at the top of the
+ * factory (instances span the document), `null` while building a detached
+ * template (inert), or the instance root of the enclosing `perInstance`
+ * (nested instances live inside it).
+ */
+let currentScope: Element | null | undefined;
+
+/** @internal Runs `run` with `scope` as the current `perInstance` scope. */
+export function withScope<Result>(
+  scope: Element | null,
+  run: () => Result,
+): Result {
+  const previous = currentScope;
+  currentScope = scope;
+  try {
+    return run();
+  } finally {
+    currentScope = previous;
+  }
+}
+
+/**
+ * @internal One `perInstance` call: a copy of its graph per instance root, created
+ * the first time something inside the root resolves one of its signals
+ * (an `onConnect` or `onChange` reference). A nested call makes one group per
+ * instance of its parent, holding only the roots inside that instance.
+ * An instance is parked when its root's `abortController` aborts, which
+ * lifecycle elements provide: it leaves `.all` and is held only as long as
+ * the root element itself lives, so the same element re-inserted later
+ * resumes its values while a removed one is collected with its graph.
+ * Nothing observes the document.
+ */
+export class InstanceGroup {
+  #define: () => Graph;
+  #key: string;
+  #scope: Element | null | undefined;
+  #instances = new Map<Element, Graph>();
+  /** Instances shared by linked elements, by link id. */
+  #linked = new Map<string, { graph: Graph; members: Set<Element> }>();
+  /** Graphs of roots whose controller aborted, kept while the element lives. */
+  #parked = new WeakMap<Element, Graph>();
+  /** `.all` of each signal, recomputed whenever an instance changes. */
+  #aggregates = new Map<string, SignalInstance<unknown[]>>();
+  /** A detached copy listing the signal names and server-side values. */
+  readonly template: Graph;
+
+  /** The `tt-instance` key of this group's roots. */
+  get key(): string {
+    return this.#key;
+  }
+
+  constructor(define: () => Graph, key: string) {
+    this.#define = () => InstanceGroup.#named(define());
+    this.#key = key;
+    this.#scope = currentScope;
+    this.template = withScope(null, this.#define);
+  }
+
+  /**
+   * The graph of the instance enclosing `element`, or, when `element` has an
+   * `instancefor` attribute, of the instance enclosing the element with that
+   * id (as `commandfor` names its target), so a control outside a
+   * component can drive one of its instances. An element whose `tt-link`
+   * names this group (`<key>=<link id>`) belongs to that linked instance
+   * instead, shared by every element naming the same link wherever it sits.
+   */
+  instanceFor(element: Element): Graph {
+    const forId = element?.getAttribute?.("instancefor");
+    const target = forId
+      ? element.ownerDocument.getElementById(forId)
+      : element;
+    const selector =
+      `[tt-instance~="${this.#key}"], [tt-link*="${this.#key}="]`;
+    let root = target?.closest?.(selector);
+    while (root && !root.matches(`[tt-instance~="${this.#key}"]`)) {
+      const link = this.#linkOf(root);
+      if (link) return this.#linkedGraph(link, root);
+      root = root.parentElement?.closest(selector) ?? null;
     }
-
-    get value(): Value {
-      if (!runtime) {
-        throw new Error("Signal values are only available in client handlers.");
-      }
-      tracking?.add(this as SignalInstance<unknown>);
-      return this.#value;
-    }
-
-    set value(value: Value) {
-      if (!runtime) {
-        throw new Error("Signal values are only available in client handlers.");
-      }
-      if (sameValue(this.#value, value)) return;
-      this.#value = value;
-      this.dispatchEvent(this.createEvent());
-    }
-
-    createEvent(): Event {
-      return Object.assign(new Event("signal"), { signal: this });
-    }
-
-    /**
-     * Returns whether a new subscription was made. Subscribing sends nothing:
-     * the target hears of changes only. A `tt-fire-signals` event on the
-     * target (`signalTools.fireSelfSignal`) sends it the current value.
-     */
-    subscribe(target: EventTarget): boolean {
-      if (!runtime) {
-        throw new Error("Signals can only be subscribed in client handlers.");
-      }
-      if (this.#subscriptions.has(target)) return false;
-      const element = target as EventTarget & {
-        abortController?: AbortController;
-      };
-      const abortSignal = element.abortController?.signal;
-      if (abortSignal?.aborted) return false;
-      const listener = (event: Event) => {
-        if (
-          typeof HTMLElement !== "undefined" && target instanceof HTMLElement
-        ) {
-          tiny.runHandler(target, event);
-        } else {
-          target.dispatchEvent(this.createEvent());
-        }
-      };
-      const fire = () => listener(this.createEvent());
-      this.#subscriptions.set(target, { listener, fire });
-      this.addEventListener("signal", listener, { signal: abortSignal });
-      target.addEventListener("tt-fire-signals", fire, { signal: abortSignal });
-      abortSignal?.addEventListener(
-        "abort",
-        () => this.#subscriptions.delete(target),
-        { once: true },
+    if (!root || (this.#scope && !this.#scope.contains(root))) {
+      throw new Error(
+        `Per-instance signals must be used inside an instance root: an element with tt-instance="${this.#key}" (the collection's \`instanceKey\`, or \`instanceKeyFor(name)\` for a named perInstance).`,
       );
-      return true;
     }
-
-    unsubscribe(target: EventTarget): void {
-      const subscription = this.#subscriptions.get(target);
-      if (!subscription) return;
-      this.#subscriptions.delete(target);
-      this.removeEventListener("signal", subscription.listener);
-      target.removeEventListener("tt-fire-signals", subscription.fire);
-    }
-
-    /** Takes the value of the control that fired `event`. */
-    read(control: Control): void {
-      this.value = readControl(
-        control,
-        this.#value,
-        () => namedGroup(control),
-      ) as Value;
-      const name = control.dataset?.bindName || control.name;
-      if (name) this.name = name;
-    }
-
-    handleEvent(target: unknown, event?: Event | null): this {
-      if (event?.type === "input" || event?.type === "change") {
-        this.read(event.target as unknown as Control);
-      } else if (
-        (event?.type === "connect" || event?.type === "load") &&
-        target instanceof EventTarget
-      ) {
-        // Subscribing only listens: `onSignal` runs on the next change, not
-        // now. `load` is for `<body>` and the other elements the browser
-        // fires it on.
-        this.subscribe(target);
-      } else if (event) {
-        // Any other event (a click, say) is counted, so subscribers run on
-        // each one and the value stays a change to notify about.
-        if (typeof this.#value !== "number") {
-          throw new TypeError(
-            `A signal bound to a ${event.type} event counts those events, so it must hold a number.`,
-          );
-        }
-        this.value = (this.#value + 1) as Value;
-      }
-      return this;
-    }
-  }
-
-  class TriggerInstance extends SignalInstance<number> implements Trigger {
-    #fired = 0;
-
-    constructor() {
-      super(0);
-    }
-
-    fire(): void {
-      super.value = ++this.#fired;
-    }
-
-    override get value(): number {
-      return super.value;
-    }
-
-    override set value(_value: number) {
-      throw new TypeError("Triggers have no value to set: call `fire()`.");
-    }
-
-    /** Every event fires it, except the ones that subscribe. */
-    override handleEvent(target: unknown, event?: Event | null): this {
-      if (
-        (event?.type === "connect" || event?.type === "load") &&
-        target instanceof EventTarget
-      ) {
-        this.subscribe(target);
-      } else if (event) {
-        this.fire();
-      }
-      return this;
-    }
-  }
-
-  class ComputedInstance<Value> extends SignalInstance<Value>
-    implements ReadonlySignal<Value> {
-    #compute: () => Value;
-    #explicit: Set<ReadonlySignal<unknown>>;
-    #dependencies = new Set<ReadonlySignal<unknown>>();
-    #target = new EventTarget();
-
-    constructor(
-      compute: () => Value,
-      dependencies: readonly ReadonlySignal<unknown>[] = [],
-    ) {
-      const initial = runtime ? track(compute) : undefined;
-      super(initial ? initial.value : undefined as Value);
-      this.#compute = compute;
-      this.#explicit = new Set(dependencies);
-      if (initial) {
-        this.#target.addEventListener("signal", () => this.refresh());
-        this.#follow(initial.reads);
-      }
-    }
-
-    /** Subscribes to the signals the last run read, dropping the rest. */
-    #follow(reads: Set<SignalInstance<unknown>>): void {
-      const wanted = new Set<ReadonlySignal<unknown>>([
-        ...this.#explicit,
-        ...reads,
-      ]);
-      wanted.delete(this);
-      for (const dependency of this.#dependencies) {
-        if (wanted.has(dependency)) continue;
-        dependency.unsubscribe(this.#target);
-        this.#dependencies.delete(dependency);
-      }
-      for (const dependency of wanted) {
-        if (this.#dependencies.has(dependency)) continue;
-        dependency.subscribe(this.#target);
-        this.#dependencies.add(dependency);
-      }
-    }
-
-    /** Recomputes the value, notifying subscribers if it changed. */
-    refresh(): void {
-      if (!runtime) return;
-      const { value, reads } = track(this.#compute);
-      this.#follow(reads);
-      super.value = value;
-    }
-
-    override get value(): Value {
-      return super.value;
-    }
-
-    override set value(_value: Value) {
-      throw new TypeError("Computed signals are read-only.");
-    }
-  }
-
-  type Graph = Record<string, SignalInstance<unknown> | InstanceSignalHandle>;
-
-  /**
-   * Where a `perInstance` call is running: `undefined` at the top of the
-   * factory (instances span the document), `null` while building a detached
-   * template (inert), or the instance root of the enclosing `perInstance`
-   * (nested instances live inside it).
-   */
-  let currentScope: Element | null | undefined;
-
-  function withScope<Result>(
-    scope: Element | null,
-    run: () => Result,
-  ): Result {
-    const previous = currentScope;
-    currentScope = scope;
-    try {
-      return run();
-    } finally {
-      currentScope = previous;
-    }
-  }
-
-  /**
-   * One `perInstance` call: a copy of its graph per instance root, created
-   * the first time something inside the root resolves one of its signals
-   * (an `onConnect` or `onChange` reference). A nested call makes one group per
-   * instance of its parent, holding only the roots inside that instance.
-   * An instance is parked when its root's `abortController` aborts, which
-   * `UpgradeCustomElement` provides for custom-tag roots: it leaves `.all`
-   * and is held only as long as the root element itself lives, so the same
-   * element re-inserted later resumes its values while a removed one is
-   * collected with its graph. Nothing observes the document.
-   */
-  class InstanceGroup {
-    #define: () => Graph;
-    #key: string;
-    #selector: string;
-    #scope: Element | null | undefined;
-    #instances = new Map<Element, Graph>();
-    /** Graphs of roots whose controller aborted, kept while the element lives. */
-    #parked = new WeakMap<Element, Graph>();
-    #aggregates = new Map<string, ComputedInstance<unknown[]>>();
-    /** A detached copy listing the signal names and server-side values. */
-    readonly template: Graph;
-
-    constructor(define: () => Graph, key: string) {
-      this.#define = define;
-      this.#key = key;
-      this.#selector = `[tt-instance~="${key}"]`;
-      this.#scope = currentScope;
-      this.template = withScope(null, define);
-    }
-
-    instanceFor(element: Element): Graph {
-      const root = typeof element?.closest === "function"
-        ? element.closest(this.#selector)
-        : null;
-      if (!root || (this.#scope && !this.#scope.contains(root))) {
-        throw new Error(
-          `Per-instance signals must be used inside an instance root: an element with tt-instance="${this.#key}" (the collection's \`instanceKey\`, or \`instanceKeyFor(name)\` for a named perInstance).`,
-        );
-      }
-      let graph = this.#instances.get(root);
-      if (!graph) {
-        const parked = this.#parked.get(root);
-        if (parked) {
-          // The same element is back: resume its values under its new controller.
-          this.#parked.delete(root);
-          this.#activate(root, parked);
-          graph = parked;
-        } else {
-          graph = this.#create(root);
-        }
-        this.#refreshAggregates();
-      }
-      return graph;
-    }
-
-    /** Lists the graph as live and parks it when the root's controller aborts. */
-    #activate(root: Element, graph: Graph): void {
+    let graph = this.#instances.get(root);
+    if (!graph) {
+      // The same element back again resumes its values under its new controller.
+      graph = this.#parked.get(root) ?? this.#create(root);
+      this.#parked.delete(root);
       this.#instances.set(root, graph);
-      const abortSignal = (root as { abortController?: AbortController })
-        .abortController
-        ?.signal;
-      abortSignal?.addEventListener("abort", () => {
-        this.#instances.delete(root);
-        this.#parked.set(root, graph);
-        this.#refreshAggregates();
-      }, { once: true });
+      (root as { abortController?: AbortController }).abortController?.signal
+        .addEventListener("abort", () => {
+          this.#instances.delete(root!);
+          this.#parked.set(root!, graph!);
+          this.#refreshAggregates();
+        }, { once: true });
+      this.#refreshAggregates();
     }
+    return graph;
+  }
 
-    #create(root: Element): Graph {
-      const graph = withScope(root, this.#define);
-      this.#seed(root, graph);
-      this.#activate(root, graph);
-      for (const [name, signal] of Object.entries(graph)) {
-        // Nested per-instance signals are aggregated by their own group.
-        if (!(signal instanceof SignalInstance)) continue;
-        const target = new EventTarget();
-        target.addEventListener(
-          "signal",
-          () => this.#aggregates.get(name)?.refresh(),
-        );
-        signal.subscribe(target);
-      }
-      return graph;
+  /** The link id `element`'s `tt-link` gives this group, if any. */
+  #linkOf(element: Element): string | undefined {
+    const prefix = `${this.#key}=`;
+    return element.getAttribute("tt-link")?.split(/\s+/)
+      .find((token) => token.startsWith(prefix))?.slice(prefix.length);
+  }
+
+  /**
+   * The instance shared by every element linked as `link`. It lives as long
+   * as the page, so members removed and inserted again keep its values.
+   */
+  #linkedGraph(link: string, member: Element): Graph {
+    let linked = this.#linked.get(link);
+    if (!linked) {
+      // Its members sit anywhere, so nested levels are not confined to one.
+      linked = { graph: this.#create(null), members: new Set() };
+      this.#linked.set(link, linked);
     }
+    if (!linked.members.has(member)) {
+      linked.members.add(member);
+      this.#refreshAggregates();
+    }
+    return linked.graph;
+  }
 
-    /**
-     * Starts a new instance from the values its root's `tt-seed` holds for
-     * this level (written by `collection.seed()` as `{ [key]: values }`), so
-     * it begins as the server rendered it. A resumed instance keeps its own
-     * values instead.
-     */
-    #seed(root: Element, graph: Graph): void {
-      const seed = root.getAttribute?.("tt-seed");
-      if (!seed) return;
-      let values: Record<string, unknown> | undefined;
+  #create(root: Element | null): Graph {
+    const graph = withScope(root, this.#define);
+    const seed = root?.getAttribute("tt-seed");
+    if (seed) {
       try {
-        values = JSON.parse(seed)?.[this.#key];
+        InstanceGroup.#write(
+          graph,
+          JSON.parse(seed)?.[this.#key] ?? {},
+          (message) => console.error(message),
+        );
       } catch {
         console.error("Ignoring malformed tt-seed:", seed);
-        return;
       }
-      InstanceGroup.#write(
-        graph,
-        values ?? {},
-        (message) => console.error(message),
-      );
     }
-
-    /**
-     * A detached instance started from `values`, as the server renders a
-     * seeded root: `evaluateUsingInitialValues` reads its signals, so
-     * computeds there see the seed. Nested levels inside it start fresh.
-     * Names of other groups of the collection are left to those groups.
-     */
-    seeded(values: Record<string, unknown>): Graph {
-      const graph = withScope(null, this.#define);
-      const own = Object.fromEntries(
-        Object.entries(values).filter(([name]) => Object.hasOwn(graph, name)),
-      );
-      InstanceGroup.#write(graph, own, (message) => {
-        throw new TypeError(message);
+    for (const [name, signal] of Object.entries(graph)) {
+      // Nested per-instance signals are aggregated by their own group.
+      if (!(signal instanceof SignalInstance)) continue;
+      const target = new EventTarget();
+      target.addEventListener("signal", () => {
+        const aggregate = this.#aggregates.get(name);
+        if (aggregate) aggregate.value = this.#values(name);
       });
-      return graph;
+      signal.subscribe(target);
     }
+    return graph;
+  }
 
-    /** Writes seed values into an instance's writable signals. */
-    static #write(
-      graph: Graph,
-      values: Record<string, unknown>,
-      report: (message: string) => void,
-    ): void {
-      for (const [name, value] of Object.entries(values)) {
-        const signal = graph[name];
-        if (
-          !(signal instanceof SignalInstance) ||
-          signal instanceof ComputedInstance ||
-          signal instanceof TriggerInstance
-        ) {
-          report(
-            `Cannot seed '${name}': it is not a writable signal of this perInstance level.`,
-          );
-          continue;
-        }
-        signal.value = value;
-      }
-    }
+  /**
+   * A detached instance started from `values`, as the server renders a
+   * seeded root: `evaluateUsingInitialValues` reads its signals, so
+   * computeds there see the seed. Nested levels inside it start fresh.
+   * Names of other groups of the collection are left to those groups.
+   */
+  seeded(values: Record<string, unknown>): Graph {
+    const graph = withScope(null, this.#define);
+    const own = Object.fromEntries(
+      Object.entries(values).filter(([name]) => Object.hasOwn(graph, name)),
+    );
+    InstanceGroup.#write(graph, own, (message) => {
+      throw new TypeError(message);
+    });
+    return graph;
+  }
 
-    aggregate(name: string): ComputedInstance<unknown[]> {
-      if (this.template[name] instanceof InstanceSignalHandle) {
-        throw new TypeError(
-          "`.all` is not available for a nested per-instance signal here: read it inside the enclosing perInstance, where it covers that instance.",
+  /**
+   * Writes seed values (from a root's `tt-seed`, written by
+   * `collection.seed()` as `{ [key]: values }`) into an instance's writable
+   * signals: plain signals, not computeds or triggers.
+   */
+  static #write(
+    graph: Graph,
+    values: Record<string, unknown>,
+    report: (message: string) => void,
+  ): void {
+    for (const [name, value] of Object.entries(values)) {
+      const signal = graph[name];
+      if (signal?.constructor !== SignalInstance) {
+        report(
+          `Cannot seed '${name}': it is not a writable signal of this perInstance level.`,
         );
+        continue;
       }
-      let aggregate = this.#aggregates.get(name);
-      if (!aggregate) {
-        // Instances notify the aggregate themselves (see `#create`), so its
-        // reads are not tracked: removed instances must not keep it alive.
-        aggregate = new ComputedInstance(() =>
-          untracked(() => this.#values(name))
-        );
-        this.#aggregates.set(name, aggregate);
-      }
-      return aggregate;
-    }
-
-    #values(name: string): unknown[] {
-      return [...this.#instances.keys()]
-        .filter((root) => root.isConnected)
-        .sort((a, b) =>
-          a.compareDocumentPosition(b) & 4 /* DOCUMENT_POSITION_FOLLOWING */
-            ? -1
-            : 1
-        )
-        .map((root) =>
-          (this.#instances.get(root)![name] as SignalInstance<unknown>).value
-        );
-    }
-
-    #refreshAggregates(): void {
-      for (const aggregate of this.#aggregates.values()) aggregate.refresh();
+      (signal as SignalInstance<unknown>).value = value;
     }
   }
 
-  class InstanceSignalHandle<Value = unknown>
-    implements InstanceSignal<Value, SignalInstance<Value>> {
-    #group: InstanceGroup;
-    #name: string;
-
-    constructor(group: InstanceGroup, name: string) {
-      this.#group = group;
-      this.#name = name;
-    }
-
-    get name(): string | undefined {
-      return this.#group.template[this.#name].name;
-    }
-
-    forInstance(element: Element): SignalInstance<Value> {
-      if (!runtime) {
-        throw new Error("Signal values are only available in client handlers.");
-      }
-      const signal = this.#group.instanceFor(element)[this.#name];
-      // A nested signal resolves its own, inner instance next.
-      return signal instanceof InstanceSignalHandle
-        ? signal.forInstance(element) as SignalInstance<Value>
-        : signal as SignalInstance<Value>;
-    }
-
-    get all(): ReadonlySignal<Value[]> {
-      return this.#group.aggregate(this.#name) as ReadonlySignal<Value[]>;
-    }
-
-    /**
-     * The value in an instance started from `seed`, as
-     * `evaluateUsingInitialValues` reports a seeded root. `instances` holds
-     * the instance built for each group, so signals of one group share it.
-     */
-    seededValue(
-      seed: Record<string, unknown>,
-      instances: Map<InstanceGroup, Graph>,
-    ): Value {
-      let graph = instances.get(this.#group);
-      if (!graph) {
-        graph = this.#group.seeded(seed);
-        instances.set(this.#group, graph);
-      }
-      const signal = graph[this.#name];
-      return (signal instanceof InstanceSignalHandle
-        ? signal.initialValue
-        : signal.value) as Value;
-    }
-
-    /** The value of a fresh instance, as `evaluateUsingInitialValues` reports. */
-    get initialValue(): Value {
-      const signal = this.#group.template[this.#name];
-      return (signal instanceof InstanceSignalHandle
-        ? signal.initialValue
-        : signal.value) as Value;
-    }
-
-    get value(): never {
-      throw new Error(
-        "Per-instance signals have a value per instance: read `.forInstance(element).value`, or `.all.value` for every instance.",
+  aggregate(name: string): SignalInstance<unknown[]> {
+    if (this.template[name] instanceof InstanceSignalHandle) {
+      throw new TypeError(
+        "`.all` is not available for a nested per-instance signal here: read it inside the enclosing perInstance, where it covers that instance.",
       );
     }
-
-    subscribe(target: Element): void {
-      this.forInstance(target).subscribe(target);
+    let aggregate = this.#aggregates.get(name);
+    if (!aggregate) {
+      aggregate = new SignalInstance(this.#values(name));
+      this.#aggregates.set(name, aggregate);
     }
-
-    unsubscribe(target: Element): void {
-      this.forInstance(target).unsubscribe(target);
-    }
-
-    /**
-     * As a handler, acts on the instance enclosing the element. Read from a
-     * handler (no event) it returns itself so `.forInstance()` and `.all` are reachable.
-     */
-    handleEvent(target: unknown, event?: Event | null): unknown {
-      if (!event) return this;
-      return this.forInstance(target as Element).handleEvent(target, event);
-    }
+    return aggregate;
   }
 
-  function perInstance(
+  /**
+   * Every connected instance's value in document order. Instances notify
+   * the aggregate themselves (see `#create`), so the reads are not tracked:
+   * removed instances must not keep a computed reading `.all` alive.
+   */
+  #values(name: string): unknown[] {
+    return untracked(() => {
+      // A linked instance counts once, at its first connected member.
+      const placed: [Element, Graph][] = [...this.#instances]
+        .filter(([root]) => root.isConnected);
+      for (const { graph, members } of this.#linked.values()) {
+        const first = [...members].filter((member) => member.isConnected)
+          .sort(InstanceGroup.#documentOrder)[0];
+        if (first) placed.push([first, graph]);
+      }
+      return placed.sort(([a], [b]) => InstanceGroup.#documentOrder(a, b))
+        .map(([, graph]) => (graph[name] as SignalInstance<unknown>).value);
+    });
+  }
+
+  /** Names each signal of `graph` that has no name after its key. */
+  static #named(graph: Graph): Graph {
+    for (const [name, signal] of Object.entries(graph ?? {})) {
+      if (signal instanceof SignalInstance) signal.name ??= name;
+    }
+    return graph;
+  }
+
+  static #documentOrder(a: Element, b: Element): number {
+    return a.compareDocumentPosition(b) & 4 /* DOCUMENT_POSITION_FOLLOWING */
+      ? -1
+      : 1;
+  }
+
+  #refreshAggregates(): void {
+    for (const [name, aggregate] of this.#aggregates) {
+      aggregate.value = this.#values(name);
+    }
+  }
+}
+
+export class InstanceSignalHandle<Value = unknown>
+  implements InstanceSignal<Value, SignalInstance<Value>> {
+  #group: InstanceGroup;
+  #name: string;
+
+  constructor(group: InstanceGroup, name: string) {
+    this.#group = group;
+    this.#name = name;
+  }
+
+  get name(): string | undefined {
+    return this.#group.template[this.#name].name;
+  }
+
+  /** @internal The group this signal belongs to. */
+  get group(): InstanceGroup {
+    return this.#group;
+  }
+
+  forInstance(element: Element): SignalInstance<Value> {
+    const signal = this.#group.instanceFor(element)[this.#name];
+    // A nested signal resolves its own, inner instance next.
+    return signal instanceof InstanceSignalHandle
+      ? signal.forInstance(element) as SignalInstance<Value>
+      : signal as SignalInstance<Value>;
+  }
+
+  get all(): ReadonlySignal<Value[]> {
+    return this.#group.aggregate(this.#name) as ReadonlySignal<Value[]>;
+  }
+
+  /**
+   * The value in an instance started from `seed`, as
+   * `evaluateUsingInitialValues` reports a seeded root. `instances` holds
+   * the instance built for each group, so signals of one group share it.
+   */
+  seededValue(
+    seed: Record<string, unknown>,
+    instances: Map<InstanceGroup, Graph>,
+  ): Value {
+    let graph = instances.get(this.#group);
+    if (!graph) {
+      graph = this.#group.seeded(seed);
+      instances.set(this.#group, graph);
+    }
+    const signal = graph[this.#name];
+    return (signal instanceof InstanceSignalHandle
+      ? signal.initialValue
+      : signal.value) as Value;
+  }
+
+  /** The value of a fresh instance, as `evaluateUsingInitialValues` reports. */
+  get initialValue(): Value {
+    const signal = this.#group.template[this.#name];
+    return (signal instanceof InstanceSignalHandle
+      ? signal.initialValue
+      : signal.value) as Value;
+  }
+
+  get value(): never {
+    throw new Error(
+      "Per-instance signals have a value per instance: read `.forInstance(element).value`, or `.all.value` for every instance.",
+    );
+  }
+
+  subscribe(target: Element): void {
+    this.forInstance(target).subscribe(target);
+  }
+
+  unsubscribe(target: Element): void {
+    this.forInstance(target).unsubscribe(target);
+  }
+
+  /**
+   * As a handler, acts on the instance enclosing the element. Read from a
+   * handler (no event) it returns itself so `.forInstance()` and `.all` are reachable.
+   */
+  handleEvent(target: unknown, event?: Event | null): unknown {
+    if (!event) return this;
+    return this.forInstance(target as Element).handleEvent(target, event);
+  }
+}
+
+/**
+ * The `perInstance` of the collection whose instance roots carry
+ * `instanceKey` (named levels carry `<instanceKey>-<name>`).
+ */
+export function perInstanceFor(
+  instanceKey: string,
+): SignalTools["perInstance"] {
+  return ((
     ...args: [define: () => Graph] | [name: string, define: () => Graph]
-  ): Record<string, InstanceSignalHandle> {
+  ): Record<string, InstanceSignalHandle> => {
     const [name, define] = args.length === 2 ? args : [undefined, args[0]];
     if (currentScope !== undefined && !name) {
       throw new TypeError(
@@ -871,7 +911,7 @@ export function signalClasses(
     }
     const group = new InstanceGroup(
       define,
-      name ? `${instanceKey}-${name}` : `${instanceKey}`,
+      name ? `${instanceKey}-${name}` : instanceKey,
     );
     for (const signal of Object.values(group.template)) {
       if (
@@ -888,29 +928,46 @@ export function signalClasses(
         signalName,
       ) => [signalName, new InstanceSignalHandle(group, signalName)]),
     );
-  }
+  }) as unknown as SignalTools["perInstance"];
+}
 
-  function signalsFrom(
-    initialValues: Record<string, SignalValue>,
-  ): Record<string, SignalInstance<SignalValue>> {
-    return Object.fromEntries(
-      Object.entries(initialValues).map((
-        [key, value],
-      ) => [key, new SignalInstance(value)]),
-    );
+/**
+ * A computed that never computes, for the server's first run of a factory,
+ * which only lists and checks its signals: computed callbacks may need
+ * browser globals.
+ */
+class InertComputed<Value> extends SignalInstance<Value> {
+  constructor(_compute: unknown, _dependencies: unknown, initialValue?: Value) {
+    super(initialValue as Value);
   }
+}
 
-  return Object.assign(
-    {
-      Signal: SignalInstance,
-      Trigger: TriggerInstance,
-      Computed: ComputedInstance,
-      signalsFrom: signalsFrom as SignalTools["signalsFrom"],
-      perInstance: perInstance as unknown as SignalTools["perInstance"],
-    },
-    // Not part of SignalTools: lets the server validate a factory's result.
-    { InstanceSignal: InstanceSignalHandle },
-  );
+/** The toolkit a collection's factory receives, with the per-instance handle class. */
+export type InternalSignalTools = SignalTools & {
+  InstanceSignal: typeof InstanceSignalHandle;
+};
+
+/**
+ * The signal toolkit for one collection, as a factory receives it.
+ * `instanceKey` identifies that collection's instance roots: elements whose
+ * space-separated `tt-instance` attribute includes it. With `runtime` false
+ * computeds stay inert, for checking a factory without running it.
+ */
+export function signalClasses(
+  runtime = true,
+  instanceKey = "",
+): InternalSignalTools {
+  return {
+    Signal: SignalInstance as unknown as SignalTools["Signal"],
+    Trigger: TriggerInstance,
+    Computed:
+      (runtime ? ComputedInstance : InertComputed) as unknown as SignalTools[
+        "Computed"
+      ],
+    signalsFrom: signalsFrom as SignalTools["signalsFrom"],
+    perInstance: perInstanceFor(instanceKey),
+    InstanceSignal: InstanceSignalHandle,
+  };
 }
 
 declare const tiny: { runHandler(target: HTMLElement, event: Event): unknown };

@@ -1,9 +1,5 @@
-import type { ActivatedClientFunction, JSX } from "./jsx-runtime.ts";
+import type { JSX } from "./jsx-runtime.ts";
 import type { InstanceSignal } from "./signals.ts";
-import { tryGetContext } from "hono/context-storage";
-
-/** Context variable recording whether the CSP-friendly reference transform is active. */
-export const CSP_ENABLED_KEY = "tinyToolsCspEnabled";
 
 /**
  * The inline attribute body every TinyTools event binding emits. It is shared by
@@ -11,9 +7,25 @@ export const CSP_ENABLED_KEY = "tinyToolsCspEnabled";
  */
 export const eventHandlerBody = "tiny.runHandler(this,event)";
 
-/** Matches `handlers.<bundle>.<name>.call(this, event)`, capturing `<bundle>.<name>`. */
-const handlerReferencePattern =
-  /^handlers\.(\w+\.[$\w]+)\.call\(this, event\)$/;
+/**
+ * Events the runtime hands to `tiny.runHandler` itself (lifecycle and signal
+ * events, and those forwarded from `navigation` or `window`). Browsers only
+ * run inline attributes for their own events, so these render just their
+ * `tt-handler-*` attribute.
+ */
+const RUNTIME_EVENTS = new Set([
+  "connect",
+  "disconnect",
+  "parsed",
+  "signal",
+  "sorted",
+  "navigate",
+  "currententrychange",
+  "incomingdata",
+]);
+
+/** A handler reference as `tt-handler-*` attributes carry it: `<bundle>.<name>`. */
+const handlerReferencePattern = /^\w+\.[$\w]+$/;
 
 declare const handlerReferenceBrand: unique symbol;
 
@@ -78,24 +90,6 @@ export type SignalReferences<TSignals> = {
     & (TSignals[Name] extends (...args: any[]) => infer Signal
       ? Signal & RenderableSignal<Signal>
       : never);
-} & {
-  /**
-   * Every signal as seen from `element`: per-instance signals resolve to the
-   * instance enclosing it, collection-wide signals are returned as they are.
-   * Client handlers only.
-   */
-  filterByInstance(element: Element): InstanceScopedSignals<TSignals>;
-};
-
-/** What `signal.filterByInstance(element)` returns. */
-export type InstanceScopedSignals<TSignals> = {
-  readonly [Name in keyof TSignals]: TSignals[Name] extends
-    // deno-lint-ignore no-explicit-any
-    (...args: any[]) => infer Signal
-    // deno-lint-ignore no-explicit-any
-    ? Signal extends InstanceSignal<any, infer Instance, any> ? Instance
-    : Signal
-    : never;
 };
 
 /**
@@ -140,8 +134,8 @@ export type BoundSignalReference =
 
 /**
  * The element properties a signal reference can be given as, each with the
- * tags that take it (any tag when omitted) and the `signalTools` handler that
- * writes the signal into it.
+ * tags that take it (any tag when omitted). `signalBindingTools.setBound` writes
+ * the signal into every one an element binds.
  */
 export const signalProperties: {
   readonly [
@@ -151,16 +145,13 @@ export const signalProperties: {
       | "selected"
       | "disabled"
       | "hidden"
-  ]: {
-    readonly tags?: readonly string[];
-    readonly setter: `set${Capitalize<Property>}`;
-  };
+  ]: { readonly tags?: readonly string[] };
 } = {
   // A select's `value` attribute is not what it shows. A textarea's is not
   // either, so a textarea renders no initial value (see signalPropertyProps).
-  value: { tags: ["input", "textarea"], setter: "setValue" },
-  checked: { tags: ["input"], setter: "setChecked" },
-  selected: { tags: ["option"], setter: "setSelected" },
+  value: { tags: ["input", "textarea"] },
+  checked: { tags: ["input"] },
+  selected: { tags: ["option"] },
   disabled: {
     tags: [
       "button",
@@ -171,9 +162,8 @@ export const signalProperties: {
       "select",
       "textarea",
     ],
-    setter: "setDisabled",
   },
-  hidden: { setter: "setHidden" },
+  hidden: {},
 };
 
 export type SignalProperty = keyof typeof signalProperties;
@@ -203,28 +193,13 @@ export function isSignalBinding(name: unknown): name is SignalBinding {
   return isSignalProperty(name) || isSignalAttribute(name);
 }
 
-/**
- * The `signalTools` handler that writes a signal into `binding`: one per
- * property, and `setBoundAttributes` for every `data-*` and `aria-*`
- * attribute an element binds.
- */
-export function signalSetter(
-  binding: SignalBinding,
-): SignalProperties[SignalProperty]["setter"] | "setBoundAttributes" {
-  return isSignalProperty(binding)
-    ? signalProperties[binding].setter
-    : "setBoundAttributes";
-}
-
-type SignalProperties = typeof signalProperties;
-
 /** What `tiny.imports()` gives signal references to implement `RenderableSignal`. */
 export type SignalRendering = {
   initial(name: string): unknown;
   /** Live text for `reference`, starting from `initial`. */
   text(reference: object, initial: unknown): JSX.Element;
-  /** The handler an element given a signal as `binding` runs. */
-  setter(binding: SignalBinding): object;
+  /** The handler an element given a signal as a property runs (`setBound`). */
+  setter(): object;
 };
 
 /** The attribute naming the signal `binding` follows (`tt-value-signal`). */
@@ -248,13 +223,18 @@ type SignalPropertyBinding = {
   signal: string;
   /** The signal reference, subscribed by `onConnect`. */
   onConnect: object;
-  /** The property's setter, run by `onSignal`. */
+  /** The setter, run by `onSignal`. */
   onSignal: object;
 };
 
 const referenceDetails = new WeakMap<
   object,
-  { name: string; resolved: string }
+  {
+    name: string;
+    resolved: string;
+    /** The key of the component instance a reference from `instance.signal` acts on. */
+    instance?: string;
+  }
 >();
 
 /** Each signal reference's live text, rendered when it is placed as a child. */
@@ -320,20 +300,20 @@ export function signalPropertyProps(
     signalProperties[binding].tags?.includes(tag.toLowerCase()) === false
   );
   if (misplaced) {
-    const { tags = [], setter } = signalProperties[misplaced];
+    const { tags = [] } = signalProperties[misplaced];
     const owners = tags.map((owner) => `<${owner}>`);
     const list = owners.length > 1
       ? `${owners.slice(0, -1).join(", ")} or ${owners.at(-1)}`
       : owners[0];
     throw new TypeError(
-      `<${tag}> cannot take a signal as its ${misplaced}; only ${list} can. Bind onConnect={signal.name} and onSignal={fn.${setter}} instead.`,
+      `<${tag}> cannot take a signal as its ${misplaced}; only ${list} can. Bind onConnect={signal.name} and an onSignal handler of your own instead.`,
     );
   }
   const expanded: Record<string, unknown> = { ...props };
   /** Each signal's reference, by `<bundle>.<name>`. */
   const connects = new Map<string, object>();
-  /** Each setter's reference, by handler name. */
-  const setters = new Map<string, object>();
+  /** The setter, which writes every binding of the element. */
+  let setter: object | undefined;
   for (const name of bound) {
     const binding = signalBindings.get(props[name] as object)!(name);
     if (binding.omitted) {
@@ -352,19 +332,17 @@ export function signalPropertyProps(
       expanded[name] = binding.initial;
     }
     expanded[signalPropertyAttribute(name)] = binding.signal;
-    // A signal bound twice is subscribed once, and `setBoundAttributes`
-    // writes every attribute, so it runs once.
+    // A signal bound twice is subscribed once, and the setter writes
+    // every binding, so it runs once.
     if (!connects.has(binding.signal)) {
       connects.set(binding.signal, binding.onConnect);
     }
-    if (!setters.has(signalSetter(name))) {
-      setters.set(signalSetter(name), binding.onSignal);
-    }
+    setter ??= binding.onSignal;
   }
   for (
     const [attribute, references] of [
       ["onConnect", [...connects.values()]],
-      ["onSignal", [...setters.values()]],
+      ["onSignal", [setter!]],
     ] as const
   ) {
     // An event attribute matches whatever its case (`onconnect` too).
@@ -408,27 +386,29 @@ export function handlerReferenceAttributes(
         "Expected an imported handler reference in event handler array",
       );
     }
-    const match = handlerReferencePattern.exec(details.resolved);
-    if (!match) {
+    if (!handlerReferencePattern.test(details.resolved)) {
       throw new TypeError(`Invalid handler reference: ${details.name}`);
     }
-    return match[1];
+    return details.resolved;
   });
   if (!handlerNames.length) return {};
-  if (
-    tryGetContext<{ Variables: { [CSP_ENABLED_KEY]: boolean } }>()?.get(
-      CSP_ENABLED_KEY,
-    ) === false
-  ) {
-    return {
-      [attributeName]: references.map((details) => details!.resolved).join(
-        "; ",
-      ),
-    };
+  // An instance's references name its root for the runtime to resolve.
+  const instances = new Set(
+    references.flatMap((details) => details?.instance ?? []),
+  );
+  if (instances.size > 1) {
+    throw new TypeError(
+      `${attributeName} binds signals of several instances (${
+        [...instances].join(", ")
+      }); an element can act on one instance only.`,
+    );
   }
   return {
-    [`on${eventName}`]: eventHandlerBody,
+    ...(RUNTIME_EVENTS.has(eventName) ? {} : {
+      [`on${eventName}`]: eventHandlerBody,
+    }),
     [`tt-handler-${eventName}`]: handlerNames.join(" "),
+    ...(instances.size ? { instancefor: [...instances][0] } : {}),
   };
 }
 
@@ -450,17 +430,12 @@ export function createHandlerReferences<TFunctions>(
 export function createSignalReferences<TSignals>(
   resolveHandler: (name: string) => unknown,
   rendering?: SignalRendering,
+  /** Binds every reference to the root of this component instance key. */
+  instance?: string,
 ): SignalReferences<TSignals> {
   return new Proxy({}, {
     get(_target, name) {
       if (typeof name !== "string") return undefined;
-      if (name === "filterByInstance") {
-        return () => {
-          throw new Error(
-            "signal.filterByInstance() resolves instances in client handlers; while rendering, bind signals as signal.name.",
-          );
-        };
-      }
       const resolved = resolveHandler(name);
       if (typeof resolved !== "string") return undefined;
       const renderingFor = (member: string) => {
@@ -513,8 +488,8 @@ export function createSignalReferences<TSignals>(
         signalBindings.set(reference, (binding) => {
           const rendering = renderingFor(`as ${binding}`);
           const initial = initialOf();
-          const signal = handlerReferencePattern.exec(resolved)?.[1];
-          if (!signal) {
+          const signal = resolved;
+          if (!handlerReferencePattern.test(signal)) {
             throw new TypeError(`Invalid handler reference: ${name}`);
           }
           return {
@@ -527,10 +502,10 @@ export function createSignalReferences<TSignals>(
             omitted,
             signal,
             onConnect: reference,
-            onSignal: rendering.setter(binding),
+            onSignal: rendering.setter(),
           };
         });
-        referenceDetails.set(reference, { name, resolved });
+        referenceDetails.set(reference, { name, resolved, instance });
         return reference;
       };
       return createReference(() =>
@@ -538,73 +513,4 @@ export function createSignalReferences<TSignals>(
       );
     },
   }) as SignalReferences<TSignals>;
-}
-
-type HandlerName<TFunctions, TEvent extends Event> =
-  & {
-    [Name in keyof TFunctions]: TFunctions[Name] extends
-      (this: ThisParameterType<TFunctions[Name]>, event: TEvent) => unknown
-      ? Name
-      : never;
-  }[keyof TFunctions]
-  & string;
-
-type EventBindings<TFunctions> = {
-  [Name in keyof GlobalEventHandlersEventMap]?:
-    | HandlerName<TFunctions, GlobalEventHandlersEventMap[Name]>
-    | HandlerReferences<TFunctions>[
-      HandlerName<TFunctions, GlobalEventHandlersEventMap[Name]>
-    ];
-};
-
-type EventAttributes<TBindings> =
-  & {
-    [Name in keyof TBindings & string as `on${Name}`]: ActivatedClientFunction;
-  }
-  & {
-    [Name in keyof TBindings & string as `tt-handler-${Name}`]: string;
-  };
-
-export type Events<TFunctions> = <
-  const TBindings extends EventBindings<TFunctions>,
->(
-  bindings:
-    & TBindings
-    & Record<
-      Exclude<keyof TBindings, keyof GlobalEventHandlersEventMap>,
-      never
-    >,
-) => EventAttributes<TBindings>;
-
-export function createEvents<TFunctions>(
-  resolveHandler: (name: string) => unknown,
-): Events<TFunctions> {
-  return ((bindings: Record<string, unknown>) => {
-    const attributes: Record<string, string> = {};
-    for (const [eventName, binding] of Object.entries(bindings)) {
-      if (!/^[a-z]+$/.test(eventName)) {
-        throw new TypeError(`Invalid event name: ${eventName}`);
-      }
-      const details = typeof binding === "object" && binding !== null
-        ? referenceDetails.get(binding)
-        : undefined;
-      const handlerName = typeof binding === "string" ? binding : details?.name;
-      if (handlerName === undefined) {
-        throw new TypeError("Expected an imported handler reference or name");
-      }
-      const resolved = resolveHandler(handlerName);
-      if (details && resolved !== details.resolved) {
-        throw new TypeError(`Event handler is not imported: ${handlerName}`);
-      }
-      const match = typeof resolved === "string"
-        ? handlerReferencePattern.exec(resolved)
-        : null;
-      if (!match) {
-        throw new TypeError(`Event handler is not imported: ${handlerName}`);
-      }
-      attributes[`on${eventName}`] = eventHandlerBody;
-      attributes[`tt-handler-${eventName}`] = match[1];
-    }
-    return attributes;
-  }) as unknown as Events<TFunctions>;
 }

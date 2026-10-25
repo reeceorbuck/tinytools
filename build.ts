@@ -56,16 +56,18 @@ export function buildLayeredCssContent(styles: ScopedStyleEntry[]): string {
     byLayer.set(style.layer, current);
   }
 
-  return STYLE_LAYER_ORDER
-    .flatMap((layer) => {
+  // Every bundle states the order, so it holds whichever loads first.
+  return [
+    `@layer ${STYLE_LAYER_ORDER.join(", ")};`,
+    ...STYLE_LAYER_ORDER.flatMap((layer) => {
       const layerContent = byLayer.get(layer);
       if (!layerContent || layerContent.length === 0) {
         return [];
       }
 
       return [`@layer ${layer} {${layerContent.join("\n")}}`];
-    })
-    .join("\n");
+    }),
+  ].join("\n");
 }
 
 /** Options for the build process */

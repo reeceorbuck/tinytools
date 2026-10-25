@@ -36,8 +36,8 @@ import { templateTools } from "../handlers/templateTools.ts";
 /** An upgraded custom element: its controller aborts when it disconnects. */
 export type PartialAbortableHTMLElement = LifecycleElement;
 
-/** The trigger of `ActivateParsedHandler` and the forwarding of `<upgrade-preceding>`. */
-const lifecycleHandlers = new Handlers(import.meta.url, {
+/** The forwarding of `<upgrade-preceding>`. */
+const proxyHandlers = new Handlers(import.meta.url, {
   /** Runs the preceding element's `onConnect` handlers; bound to a proxy's `onConnect`. */
   forwardConnect: function (this: HTMLElement): void {
     const target = this.previousElementSibling;
@@ -52,6 +52,10 @@ const lifecycleHandlers = new Handlers(import.meta.url, {
       tiny.runHandler(target, new Event("disconnect"));
     }
   },
+});
+
+/** The trigger of `ActivateParsedHandler`. */
+const parsedHandlers = new Handlers(import.meta.url, {
   /**
    * Runs the previous sibling's `onParsed` handlers once, then removes this
    * trigger. `parsed` is not a browser event, so it is dispatched through
@@ -99,7 +103,7 @@ function preloadHref(
 export async function ActivateParsedHandler(
   { children }: PropsWithChildren,
 ): Promise<HtmlEscapedString> {
-  const { fn } = await tiny.imports(lifecycleHandlers);
+  const { fn } = await tiny.imports(parsedHandlers);
   return (
     <>
       {childList(children).map((child) => (
@@ -107,7 +111,7 @@ export async function ActivateParsedHandler(
           {child}
           <link
             rel="modulepreload"
-            href={preloadHref(lifecycleHandlers, "referParsed")}
+            href={preloadHref(parsedHandlers, "referParsed")}
             onLoad={fn.referParsed}
           />
         </>
@@ -202,7 +206,7 @@ export async function UpgradeCustomElement(
   }
   if (tags.every(Boolean)) return <>{children}</>;
   recordLifecycleTag(PROXY_TAG);
-  const { fn } = await tiny.imports(lifecycleHandlers);
+  const { fn } = await tiny.imports(proxyHandlers);
   return (
     <>
       {children.map((child, index) => (

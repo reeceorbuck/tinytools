@@ -1,82 +1,78 @@
 import { type Signal, type SignalValue, tiny } from "../mod.ts";
 
-type EffectFn = () => void;
-
 /** The event a `tiny.Signals` signal dispatches to its subscribers. */
 export interface SignalEvent extends Event {
   signal: Signal<SignalValue>;
 }
 
-/** An upgraded custom element (see `UpgradeCustomElement`) receiving signal events. */
+/** An upgraded custom element (a lifecycle element) receiving signal events. */
 export interface SignalElement extends HTMLElement {
   abortController: AbortController;
 }
 
 /**
- * Writes the signal value into the element's `property`: as a string for
- * `value`, as a boolean for other properties, and as the text of a `data-*`
- * or `aria-*` attribute (removed when the value is `null` or `undefined`).
- * When the element was given a signal as that property (`<input
- * value={signal.query} />`), its `tt-<property>-signal` names that signal and
- * any other signal the element subscribes to is ignored. The property is only
- * written when it differs, so typing is not interrupted by its own signal
- * coming back.
- *
- * Listed in `signalTools` so the setters below can call it: each handler is
- * a function of the same bundle module.
+ * The setters the JSX runtime binds for a signal given as an element property
+ * or attribute, or placed as a child. Apart from `signalTools`, so a page
+ * only loads the helpers it binds.
  */
-function setBoundProperty(
-  this: Element,
-  event: SignalEvent,
-  property: string,
-): void {
-  const bound = this.getAttribute(`tt-${property}-signal`);
-  if (bound) {
-    const dot = bound.indexOf(".");
-    const handler = (globalThis as {
-      handlers?: Record<string, Record<string, (this: Element) => unknown>>;
-    }).handlers?.[bound.slice(0, dot)]?.[bound.slice(dot + 1)];
-    // Run without an event, a signal's handler returns the signal; a
-    // per-instance one then resolves the instance enclosing this element.
-    const signal = handler?.call(this) as
-      | { forInstance?(element: Element): unknown }
-      | undefined;
-    const own = typeof signal?.forInstance === "function"
-      ? signal.forInstance(this)
-      : signal;
-    if (own !== event.signal) return;
-  }
-  const { value } = event.signal;
-  if (/^(data|aria)-./.test(property)) {
-    const text = value?.toString() ?? null;
-    if (this.getAttribute(property) === text) return;
-    if (text === null) this.removeAttribute(property);
-    else this.setAttribute(property, text);
-    return;
-  }
-  const next = property === "value" ? value?.toString() ?? "" : Boolean(value);
-  const element = this as unknown as Record<string, unknown>;
-  if (element[property] !== next) element[property] = next;
-}
+export const signalBindingTools = new tiny.Handlers(import.meta.url, {
+  /**
+   * Writes the signal into each property or attribute the element was given
+   * it as (`<input value={signal.query} />`, `<div data-status={signal.status}>`),
+   * found by their `tt-<name>-signal` attributes; ones bound to other signals
+   * are left alone. `value` takes the value as a string, `data-*` and
+   * `aria-*` attributes as their text (removed for `null`), and other
+   * properties (`checked`, `hidden`, ...) as a boolean. A property is only
+   * written when it differs, so typing is not interrupted by its own signal
+   * coming back. The JSX runtime binds this for you.
+   */
+  setBound: function (this: Element, event: SignalEvent): void {
+    const element = this as unknown as Record<string, unknown>;
+    const { value } = event.signal;
+    for (const { name, value: bound } of [...this.attributes]) {
+      const property =
+        /^tt-(value|checked|selected|disabled|hidden|(?:data|aria)-.+)-signal$/
+          .exec(name)?.[1];
+      if (!property) continue;
+      const dot = bound.indexOf(".");
+      // Run without an event, a signal's handler returns the signal; a
+      // per-instance one then resolves the instance enclosing this element.
+      const signal = (globalThis as {
+        handlers?: Record<
+          string,
+          Record<string, (this: Element) => Record<string, unknown>>
+        >;
+      }).handlers?.[bound.slice(0, dot)]?.[bound.slice(dot + 1)]?.call(this);
+      const forInstance = signal?.forInstance as
+        | ((element: Element) => unknown)
+        | undefined;
+      if ((forInstance?.call(signal, this) ?? signal) !== event.signal) {
+        continue;
+      }
+      if (/^(data|aria)-/.test(property)) {
+        const text = value?.toString() ?? null;
+        if (this.getAttribute(property) === text) continue;
+        if (text === null) this.removeAttribute(property);
+        else this.setAttribute(property, text);
+        continue;
+      }
+      const next = property === "value"
+        ? value?.toString() ?? ""
+        : Boolean(value);
+      if (element[property] !== next) element[property] = next;
+    }
+  },
+  /** Writes the signal value as the element's text (`<signal-text>`). */
+  setTextContent: function (this: Element, event: SignalEvent): void {
+    this.textContent = `${event.signal.value}`;
+  },
+});
 
 /**
  * Helpers for consuming `tiny.Signals` values in the browser. Bind them to the
  * `onSignal` event of an element subscribed with `onConnect={signal.name}`.
  */
 export const signalTools = new tiny.Handlers(import.meta.url, {
-  setBoundProperty,
-  /**
-   * Writes the signal into each `data-*` and `aria-*` attribute the element
-   * was given it as (`<div data-status={signal.status}>`), found by their
-   * `tt-<attribute>-signal` attributes; attributes bound to other signals are
-   * left alone.
-   */
-  setBoundAttributes: function (this: Element, event: SignalEvent): void {
-    for (const { name } of [...this.attributes]) {
-      const attribute = /^tt-((?:data|aria)-.+)-signal$/.exec(name)?.[1];
-      if (attribute) setBoundProperty.call(this, event, attribute);
-    }
-  },
   /**
    * Runs the element's `onSignal` handler once for each signal it has
    * subscribed to so far, with that signal's current value. Subscribing alone
@@ -88,28 +84,13 @@ export const signalTools = new tiny.Handlers(import.meta.url, {
     this.dispatchEvent(new Event("tt-fire-signals"));
   },
   /** Writes the signal value as the element's text. */
-  setTextContent: function (this: SignalElement, event: SignalEvent): void {
+  setTextContent: function (this: Element, event: SignalEvent): void {
     this.textContent = `${event.signal.value}`;
   },
-  /** Writes the signal value into an input (see `setBoundProperty`). */
+  /** Writes the signal value into an input, when it differs. */
   setValue: function (this: HTMLInputElement, event: SignalEvent): void {
-    setBoundProperty.call(this, event, "value");
-  },
-  /** Checks a checkbox or radio while the signal value is truthy. */
-  setChecked: function (this: HTMLInputElement, event: SignalEvent): void {
-    setBoundProperty.call(this, event, "checked");
-  },
-  /** Selects an option while the signal value is truthy. */
-  setSelected: function (this: HTMLOptionElement, event: SignalEvent): void {
-    setBoundProperty.call(this, event, "selected");
-  },
-  /** Disables a form control while the signal value is truthy. */
-  setDisabled: function (this: HTMLInputElement, event: SignalEvent): void {
-    setBoundProperty.call(this, event, "disabled");
-  },
-  /** Hides the element while the signal value is truthy. */
-  setHidden: function (this: HTMLElement, event: SignalEvent): void {
-    setBoundProperty.call(this, event, "hidden");
+    const next = event.signal.value?.toString() ?? "";
+    if (this.value !== next) this.value = next;
   },
   /** Sets the custom property `--<signal name>` to the signal value. */
   setCssProperty: function (this: HTMLElement, event: SignalEvent): void {
@@ -119,23 +100,5 @@ export const signalTools = new tiny.Handlers(import.meta.url, {
       return;
     }
     this.style.setProperty(`--${name}`, value?.toString() ?? "");
-  },
-});
-
-export const outdatedSignalTools = new tiny.Handlers(import.meta.url, {
-  /** Runs `callback` whenever any of `dependencies` changes, until the controller aborts. */
-  // I think this is no longer required since html attributes can now directly bind to signal values.
-  effect: function (
-    callback: EffectFn,
-    dependencies: Signal<SignalValue>[],
-    abortController: AbortController,
-  ): void {
-    const target = new EventTarget();
-    for (const signal of dependencies) {
-      signal.subscribe(target);
-    }
-    target.addEventListener("signal", callback, {
-      signal: abortController.signal,
-    });
   },
 });

@@ -20,24 +20,17 @@ const tools = new Handlers(import.meta.url, {
 });
 
 Deno.test("compiled TSX supports direct references, spreads and component forwarding", async () => {
-  const { fn, handlers, events } = await imports(tools);
+  const { fn } = await imports(tools);
   const direct = String(
     <button type="button" onClick={fn.click}>Count</button>,
   );
-  const spread = String(
-    <button type="button" {...events({ click: fn.click })}>Count</button>,
-  );
-  assertEquals(direct, spread);
   assertEquals(
     String(
       <button type="button" {...{ onClick: fn.click }}>Count</button>,
     ),
-    spread,
+    direct,
   );
-  assertStringIncludes(
-    String(<button type="button" onClick={handlers.click}>Count</button>),
-    String(handlers.click),
-  );
+  assertStringIncludes(direct, `onclick="${eventHandlerBody}"`);
   const Button = (
     props: { onClick: HandlerReference<"click", (event: MouseEvent) => void> },
   ) => <button type="button" onClick={props.onClick}>Count</button>;
@@ -82,10 +75,12 @@ async function checkTypes() {
 void checkTypes;
 
 Deno.test("compiled TSX supports space-separated handler arrays", async () => {
-  const { fn, events } = await imports(tools);
-  const names = `${events({ click: fn.click })["tt-handler-click"]} ${
-    events({ click: fn.generic })["tt-handler-click"]
-  }`;
+  const { fn } = await imports(tools);
+  const handlerOf = (html: string) =>
+    /tt-handler-click="([^"]+)"/.exec(html)?.[1];
+  const names = `${
+    handlerOf(String(<button type="button" onClick={fn.click} />))
+  } ${handlerOf(String(<button type="button" onClick={fn.generic} />))}`;
   const html = String(
     <button type="button" onClick={[fn.click, fn.generic]}>Count</button>,
   );
@@ -105,6 +100,7 @@ Deno.test("navigation event references emit bindings for explicit forwarding", a
     html,
     '.currentEntryChange"',
   );
-  assertStringIncludes(html, `oncurrententrychange="${eventHandlerBody}"`);
+  // The runtime runs it itself, so no inline attribute is rendered.
+  assertEquals(html.includes("oncurrententrychange="), false);
   assertEquals(html.includes("[object Object]"), false);
 });
