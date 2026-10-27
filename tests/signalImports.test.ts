@@ -371,6 +371,17 @@ Deno.test({
         [inner],
       );
       assertThrows(() => grouped.instance(1.5), TypeError, "whole number");
+      // A named copy is the same copy wherever it is made.
+      assertEquals(
+        await linksOf(grouped.instance("recalls").Box),
+        await linksOf(grouped.instance("recalls").Box),
+      );
+      assertEquals(
+        (await linksOf(grouped.instance("recalls").Box))[inner] ===
+          (await linksOf(grouped.instance("bookings").Box))[inner],
+        false,
+      );
+      assertThrows(() => grouped.instance("two words"), TypeError, "its id");
       // With a single level, a copy's parts share it: its roots carry the
       // link alone.
       const single = String(

@@ -3,12 +3,21 @@ import { imports } from "../clientTools.ts";
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
 import { h } from "../jsx-runtime.ts";
 import {
+  CarouselSignalComponent,
+  ComboboxSignalComponent,
+  CommandPaletteSignalComponent,
   CounterSignalComponent,
   DatePickerSignalComponent,
   DialogSignalComponent,
   DisclosureSignalComponent,
   ListSignalComponent,
+  PopoverSignalComponent,
   SearchFilterSignalComponent,
+  SelectionSignalComponent,
+  StepsSignalComponent,
+  TabsSignalComponent,
+  ToastSignalComponent,
+  TooltipSignalComponent,
 } from "../components/library/mod.ts";
 import { dateFunctions } from "../components/library/DatePicker.tsx";
 
@@ -299,4 +308,299 @@ Deno.test("the library disclosure's parts share one open state", async () => {
   const closed = await render(<other.Details summary="S" />);
   assertEquals(closed.includes("open="), false);
   assertEquals(closed.includes("data-remember"), false);
+});
+
+Deno.test("the library tabs' parts share one selected tab", async () => {
+  const { component } = await imports(TabsSignalComponent);
+  const views = component.instance();
+  const list = await render(
+    <views.List label="Views" value="xrays" remember="chart-view">
+      <views.Tab value="notes">Notes</views.Tab>
+      <views.Tab value="xrays">X-rays</views.Tab>
+    </views.List>,
+  );
+  const shown = await render(
+    <views.Panel value="xrays" selected>Films</views.Panel>,
+  );
+  const hidden = await render(<views.Panel value="notes">Notes</views.Panel>);
+  assertStringIncludes(list, 'role="tablist"');
+  assertStringIncludes(list, 'data-value="xrays" data-remember="chart-view"');
+  // The list's value is selected, and only it reachable by Tab, before the
+  // script runs.
+  assertStringIncludes(
+    list,
+    'data-value="notes" aria-selected="false" tabindex="-1"',
+  );
+  assertStringIncludes(
+    list,
+    'data-value="xrays" aria-selected="true" tabindex="0"',
+  );
+  assertEquals(shown.includes("hidden"), false);
+  assertStringIncludes(hidden, 'data-value="notes" hidden=""');
+  for (const part of [shown, hidden]) assertEquals(linkOf(part), linkOf(list));
+  // Without a value, every tab stays reachable until the first connect.
+  const other = component.instance();
+  const plain = await render(
+    <other.List>
+      <other.Tab value="a" />
+      <other.Tab value="b" />
+    </other.List>,
+  );
+  assertEquals(plain.match(/tabindex="0"/g)?.length, 2);
+  assertStringIncludes(plain, ">a</button>");
+  assertEquals(linkOf(plain) === linkOf(list), false);
+});
+
+Deno.test("the library toasts reach one toaster from any instance", async () => {
+  const { component } = await imports(ToastSignalComponent);
+  const toasts = component.instance();
+  const toaster = await render(
+    <toasts.Toaster position="top-right" duration={3000} />,
+  );
+  const trigger = await render(
+    <toasts.Trigger message="Copied" variant="success" duration={0} />,
+  );
+  const toast = await render(
+    <toasts.Toast variant="error">
+      Not saved. <a href="/retry">Retry</a>
+    </toasts.Toast>,
+  );
+  assertStringIncludes(toaster, '<tiny-toaster class="toaster_');
+  assertStringIncludes(toaster, 'popover="manual" role="region"');
+  assertStringIncludes(toaster, 'data-position="top-right"');
+  assertStringIncludes(toaster, 'data-duration="3000"');
+  // Toasts it builds take the toast class it carries.
+  assertStringIncludes(toaster, 'data-toast-class="toast_');
+  assertStringIncludes(trigger, 'data-message="Copied"');
+  assertStringIncludes(trigger, 'data-variant="success" data-duration="0"');
+  assertStringIncludes(trigger, ">Copied</button>");
+  // A toast is hidden where it arrives, keeping the caller's markup.
+  assertStringIncludes(toast, '<tiny-toast hidden="" data-variant="error"');
+  assertStringIncludes(toast, '<a href="/retry">Retry</a>');
+  // Page-wide, so nothing links them to an instance.
+  for (const part of [toaster, trigger, toast]) {
+    assertEquals(linkOf(part), undefined);
+  }
+});
+
+Deno.test("the library popover's parts share one open state", async () => {
+  const { component } = await imports(PopoverSignalComponent);
+  const actions = component.instance();
+  const trigger = await render(
+    <actions.Trigger label="Patient actions">⋯</actions.Trigger>,
+  );
+  const content = await render(
+    <actions.Content menu side="top" label="Patient actions">
+      <actions.Item href="/patients/12/edit">Edit</actions.Item>
+      <actions.Separator />
+      <actions.Item variant="danger">Archive</actions.Item>
+    </actions.Content>,
+  );
+  const close = await render(<actions.Close />);
+  assertStringIncludes(trigger, 'aria-label="Patient actions"');
+  // The content's id reaches the trigger once the page's script runs.
+  assertEquals(trigger.includes("popovertarget"), false);
+  assertStringIncludes(content, 'popover="auto"');
+  assertStringIncludes(content, 'role="menu" aria-label="Patient actions"');
+  assertStringIncludes(content, 'data-side="top"');
+  assertStringIncludes(content, 'tt-handler-toggle="');
+  assertStringIncludes(content, 'role="menuitem" class="item_');
+  assertStringIncludes(content, 'href="/patients/12/edit" tabindex="-1"');
+  assertStringIncludes(content, 'data-variant="danger"');
+  assertStringIncludes(content, '<hr role="separator"');
+  assertStringIncludes(close, ">Close</button>");
+  for (const part of [content, close]) {
+    assertEquals(linkOf(part), linkOf(trigger));
+  }
+  const other = component.instance();
+  const dialog = await render(<other.Content>Hi</other.Content>);
+  assertStringIncludes(dialog, 'role="dialog"');
+});
+
+Deno.test("the library selection's parts share one set of rows", async () => {
+  const { component } = await imports(SelectionSignalComponent);
+  const picked = component.instance();
+  const row = await render(
+    <picked.Checkbox value={12} name="ids" form="recalls" label="Ann Lee" />,
+  );
+  const all = await render(<picked.SelectAll />);
+  const bar = await render(
+    <picked.Bar>
+      <picked.Count />
+      <picked.Action formaction="/recalls/send">Send</picked.Action>
+      <picked.Clear />
+    </picked.Bar>,
+  );
+  // A real checkbox, so its form submits the chosen values.
+  assertStringIncludes(row, 'type="checkbox" class="checkbox_');
+  assertStringIncludes(row, 'value="12" name="ids" form="recalls"');
+  assertStringIncludes(row, 'aria-label="Select Ann Lee"');
+  assertStringIncludes(row, 'tt-handler-disconnect="');
+  assertStringIncludes(all, 'aria-label="Select all"');
+  // The bar is hidden, and the action disabled, while nothing is chosen.
+  assertStringIncludes(bar, 'role="toolbar"');
+  assertStringIncludes(bar, 'hidden="" tt-hidden-signal="');
+  assertStringIncludes(bar, 'type="submit" formaction="/recalls/send"');
+  assertStringIncludes(bar, 'disabled="" tt-disabled-signal="');
+  assertStringIncludes(bar, ">Clear</button>");
+  for (const part of [all, bar]) assertEquals(linkOf(part), linkOf(row));
+  assertEquals(new Set(bar.match(/tt-link="[^"]+"/g)).size, 1);
+});
+
+Deno.test("the library command palette holds its items", async () => {
+  const { component } = await imports(CommandPaletteSignalComponent);
+  const commands = component.instance();
+  const trigger = await render(<commands.Trigger />);
+  const palette = await render(
+    <commands.Palette label="Go to">
+      <commands.Group heading="Pages">
+        <commands.Item href="/stock" keywords="inventory" hint="G S">
+          Stock
+        </commands.Item>
+        <commands.Item>New patient</commands.Item>
+      </commands.Group>
+    </commands.Palette>,
+  );
+  assertStringIncludes(trigger, "<kbd>Ctrl K</kbd>");
+  assertStringIncludes(palette, '<dialog class="palette_');
+  assertStringIncludes(palette, 'data-shortcut="k"');
+  assertStringIncludes(palette, 'role="combobox"');
+  assertStringIncludes(palette, 'role="group" aria-label="Pages"');
+  assertStringIncludes(
+    palette,
+    'href="/stock" tabindex="-1" data-command="" data-keywords="inventory"',
+  );
+  assertStringIncludes(palette, "<small>G S</small>");
+  assertStringIncludes(palette, 'type="button" role="option"');
+  assertStringIncludes(palette, "No results.</p>");
+  assertEquals(linkOf(trigger), linkOf(palette));
+  const quiet = component.instance();
+  const unbound = await render(<quiet.Palette shortcut={false} />);
+  assertEquals(unbound.includes("data-shortcut"), false);
+});
+
+Deno.test("the library combobox submits the option chosen", async () => {
+  const { component } = await imports(ComboboxSignalComponent);
+  const dentist = component.instance();
+  const input = await render(
+    <dentist.Input
+      name="dentist"
+      label="Dentist"
+      value="7"
+      text="Dr Amy Shah"
+      required
+    >
+      <dentist.Option value={7}>Dr Amy Shah</dentist.Option>
+      <dentist.Option value="9" keywords="hygiene" disabled>Sam</dentist.Option>
+    </dentist.Input>,
+  );
+  const value = await render(<dentist.Value />);
+  assertStringIncludes(input, 'role="combobox" aria-label="Dentist"');
+  assertStringIncludes(input, 'value="Dr Amy Shah" required=""');
+  // The hidden input submits the chosen value, not the text.
+  assertStringIncludes(
+    input,
+    '<input type="hidden" name="dentist" value="7"/>',
+  );
+  const list = /aria-controls="([^"]+)"/.exec(input)?.[1];
+  assertStringIncludes(input, `<div role="listbox" id="${list}"`);
+  assertStringIncludes(input, 'data-value="7" aria-selected="false"');
+  assertStringIncludes(input, 'data-keywords="hygiene"');
+  assertStringIncludes(input, 'aria-disabled="true"');
+  assertStringIncludes(input, "No matches.</p>");
+  assertStringIncludes(value, "<output");
+  assertEquals(linkOf(value), linkOf(input));
+  const remote = component.instance();
+  const fetched = await render(<remote.Input source="/patients/search" />);
+  assertStringIncludes(fetched, 'data-source="/patients/search"');
+  assertEquals(linkOf(fetched) === linkOf(input), false);
+});
+
+Deno.test("the library tooltip's trigger and tip share one state", async () => {
+  const { component } = await imports(TooltipSignalComponent);
+  const save = component.instance();
+  const trigger = await render(
+    <save.Trigger>
+      <button type="button">Save</button>
+    </save.Trigger>,
+  );
+  const tip = await render(<save.Tip side="bottom">Ctrl S</save.Tip>);
+  assertStringIncludes(trigger, '<button type="button">Save</button>');
+  assertStringIncludes(trigger, 'tt-handler-pointerenter="');
+  assertStringIncludes(tip, 'popover="manual" role="tooltip"');
+  assertStringIncludes(tip, 'data-side="bottom" data-open-delay="500"');
+  assertEquals(linkOf(tip), linkOf(trigger));
+  const patient = component.instance();
+  const card = await render(<patient.Card delay={200}>Ann Lee</patient.Card>);
+  assertEquals(card.includes('role="tooltip"'), false);
+  assertStringIncludes(card, 'data-open-delay="200" data-close-delay="300"');
+  assertStringIncludes(card, 'tt-handler-pointerleave="');
+});
+
+Deno.test("the library steps show one step of a form at a time", async () => {
+  const { component } = await imports(StepsSignalComponent);
+  const signup = component.instance();
+  const progress = await render(<signup.Progress />);
+  const step = await render(
+    <signup.Step title="Contact" current>
+      <input name="email" type="email" required />
+    </signup.Step>,
+  );
+  const controls = await render(
+    <div>
+      <signup.Back />
+      <signup.Next />
+      <signup.Submit>Register</signup.Submit>
+      <signup.Status />
+    </div>,
+  );
+  assertStringIncludes(progress, '<ol class="progress_');
+  assertStringIncludes(step, '<fieldset class="step_');
+  assertStringIncludes(step, 'data-title="Contact" data-current=""');
+  assertStringIncludes(step, "<legend>Contact</legend>");
+  assertStringIncludes(step, 'tt-handler-disconnect="');
+  // Before the steps connect, only the form's own submit is usable.
+  assertStringIncludes(controls, 'disabled="" tt-disabled-signal="');
+  assertStringIncludes(controls, 'hidden="" tt-hidden-signal="');
+  assertStringIncludes(
+    controls,
+    '<button type="submit" class="submit_',
+  );
+  assertEquals(/type="submit"[^>]* hidden=""/.test(controls), false);
+  for (const part of [step, controls]) {
+    assertEquals(linkOf(part), linkOf(progress));
+  }
+});
+
+Deno.test("the library carousel's controls steer one track", async () => {
+  const { component } = await imports(CarouselSignalComponent);
+  const photos = component.instance();
+  const track = await render(
+    <photos.Track label="Photos" loop autoplay={4000}>
+      <photos.Slide>A</photos.Slide>
+      <photos.Slide label="Lower arch">B</photos.Slide>
+    </photos.Track>,
+  );
+  const controls = await render(
+    <div>
+      <photos.Previous />
+      <photos.Dots />
+      <photos.Next />
+      <photos.Status />
+      <photos.Play />
+    </div>,
+  );
+  assertStringIncludes(track, 'role="region" aria-roledescription="carousel"');
+  assertStringIncludes(track, 'data-loop="" data-autoplay="4000"');
+  assertStringIncludes(track, 'tt-handler-scroll="');
+  assertStringIncludes(track, 'aria-roledescription="slide"');
+  assertStringIncludes(track, 'data-slide="" data-label="Lower arch"');
+  assertStringIncludes(controls, 'aria-label="Previous slide" disabled=""');
+  assertStringIncludes(controls, 'aria-label="Choose a slide"');
+  assertStringIncludes(controls, ">Play</button>");
+  // Placed after the track, the controls catch up with its signals as they
+  // connect.
+  assertEquals(controls.match(/signals_\w+\.fireSelfSignal/g)?.length, 4);
+  assertEquals(new Set(controls.match(/tt-link="[^"]+"/g)).size, 1);
+  assertEquals(linkOf(controls), linkOf(track));
 });

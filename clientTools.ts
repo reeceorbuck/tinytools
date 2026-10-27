@@ -2644,6 +2644,14 @@ export type ComponentLinker<TComponents> = {
    * `const [one, two] = component.instance(2)`.
    */
   instance(repeat: number): ComponentInstances<TComponents>[];
+  /**
+   * The copy named `id`: every `instance(id)` with the same `id`, in any
+   * request, is one copy, so parts rendered later (a row a server update
+   * inserts, say) join the copy the page already shows. Name it for what
+   * it belongs to, as two places sharing a name share their values:
+   * `component.instance("recalls-selection")`.
+   */
+  instance(id: string): ComponentInstances<TComponents>;
 };
 
 declare const instancedBrand: unique symbol;
@@ -2898,7 +2906,16 @@ function linkableComponents(
       ) => [name, make({ group, copy: `${group}.${copy}` })]),
     );
   return Object.assign(imported, {
-    instance: ((repeat?: number) => {
+    instance: ((repeat?: number | string) => {
+      if (typeof repeat === "string") {
+        // A link id is one token of `tt-link`'s `<level>=<id>` list.
+        if (!/^[\w.:-]+$/.test(repeat)) {
+          throw new TypeError(
+            `component.instance(id) takes letters, digits and _ . : - for its id, not "${repeat}".`,
+          );
+        }
+        return instances(repeat, 0);
+      }
       const group = newLinkId();
       if (repeat === undefined) return instances(group, 0);
       if (!Number.isInteger(repeat) || repeat < 0) {

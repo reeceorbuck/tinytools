@@ -940,6 +940,37 @@ const tasks = component.instance();
 <tasks.AddItem placeholder="New task" dismissable />;
 ```
 
+Each `instance()` is a new copy. `component.instance("recall-selection")` names
+one instead: every request making that name makes the same copy, so a row a
+server update inserts later joins the selection, list or count the page already
+shows.
+
+- `CarouselSignalComponent`: `Track` (`label`, `loop`, `autoplay` in
+  milliseconds) is a scroll-snap row of `Slide`s (`label`), so swipe, scroll and
+  the arrow keys work without the script. `Previous`, `Next`, `Dots`, `Status`
+  ("2 / 5") and `Play` (pause and resume) sit anywhere around it. Autoplay holds
+  still while the track is hovered or focused, and never starts for viewers who
+  prefer reduced motion. `--carousel-slide` sets a slide's width (default
+  `100%`). All parts expose `signal.index`, which scrolls there when set, and
+  `signal.count`.
+- `ComboboxSignalComponent`: `Input` (`name`, `label`, `placeholder`, `value`
+  and `text` for a starting choice, `source`, `empty`, `invalid`, `required`,
+  `form`, `id`) is a text box suggesting its `Option`s (`value`, `keywords`,
+  `label`, `disabled`) as you type, by every word in their text or keywords,
+  ignoring case and accents. With a `source` it fetches `<source>?q=<text>`
+  instead, expecting the HTML of `Option`s, so an endpoint renders them with the
+  same component. ↑ / ↓ move, Enter chooses, Escape closes and then clears. A
+  hidden input submits the chosen value under `name`; text matching no option
+  leaves the box invalid. `Value` shows the chosen option's text. Both expose
+  `signal.value` and `signal.label`.
+- `CommandPaletteSignalComponent`: `Palette` (`label`, `placeholder`, `empty`,
+  `shortcut`) is a modal search box over `Group`s (`heading`) of `Item`s
+  (`href`, or `onClick` for an action; `keywords`, `hint`), opened by `Trigger`
+  or Ctrl / ⌘ + `shortcut` (default `k`; `false` for none). Typing keeps the
+  items holding every word, in their text or keywords; ↑ / ↓ move and Enter
+  clicks the item, so a link navigates and a button runs its own `onClick`. The
+  shortcut listener is added by a connected palette and removed when it leaves.
+  Both expose `signal.open`.
 - `CounterSignalComponent`: `CounterDisplay` and `Increment` (`by`), sharing one
   count. Both expose `signal.count`.
 - `DatePickerSignalComponent`: `DateInput` (`name`, `value`, `type` of `date` or
@@ -981,6 +1012,15 @@ const tasks = component.instance();
   a × button that removes it. `AddItem` and `AddButton` take `dismissable` for
   the items they add. Set `--list-surface`, `--list-border`, `--list-text`,
   `--list-muted` and `--list-accent` to recolour `Item`s.
+- `PopoverSignalComponent`: `Trigger` (`label`) and `Content` (`label`, `menu`,
+  `side` of `top`, `bottom`, `left` or `right`, `id`) are the browser's
+  `popover`, placed beside the trigger with CSS anchor positioning (centred
+  where that is missing). The content's id reaches each trigger through a
+  signal, as its `popovertarget`, so light dismiss and `aria-expanded` are the
+  browser's. As a `menu`, its `Item`s (`href` or `onClick`, `variant="danger"`,
+  `disabled`) are moved through with the arrow keys and close it when chosen;
+  `Separator` divides them. `Close` closes it from inside. `Trigger`, `Content`
+  and `Close` expose `signal.open`.
 - `SearchFilterSignalComponent`: `FilterInput` (`name`, `label`, `placeholder`,
   `value`, `onInput`) filters, as it is typed, the elements marked `data-filter`
   inside `Results` (`as` for its element: `div`, `ul`, `ol`, `section` or
@@ -991,6 +1031,45 @@ const tasks = component.instance();
   nothing matches. Results are filtered as `Results` connects and as the query
   changes. `FilterInput` exposes `signal.query`; `Results` and `MatchCount`
   expose `signal.shown`, `signal.total` and `signal.summary`.
+- `SelectionSignalComponent`: `Checkbox` (`value`, `label`, `name`, `form`,
+  `checked`) chooses its row, `SelectAll` every row (mixed while some are),
+  `Count` shows "3 of 12 selected", `Bar` (a toolbar) shows only while any are
+  chosen, `Action` (`type`, by default `submit`; `formaction`, `form`, `name`,
+  `value`) is enabled only then, and `Clear` drops them all. The checkboxes are
+  real ones, so their form submits the chosen values with or without the script.
+  Shift-click chooses a range. A row (the checkbox's closest `tr`, `li` or
+  `[data-selectable]`) carries `data-selected` while chosen. Every part exposes
+  `signal.selected` and `signal.count`.
+- `StepsSignalComponent`: `Step`s (`title`, `current`, `id`) inside your own
+  `<form>` show one at a time, with `Progress` listing them, `Status` saying
+  "Step 2 of 4", and `Back`, `Next` and `Submit` (`name`, `value`, `form`,
+  `formaction`) moving through them. Next, or Enter in a field, moves on only
+  once the step's fields pass the browser's own validation; Back and the
+  progress list's finished steps go back without checking; Submit checks every
+  step and shows the first with a field to fix. Every step's fields submit
+  together, and without the script all steps show as one form. All parts expose
+  `signal.current` (the showing step's id) and `signal.index`.
+- `TabsSignalComponent`: `List` (`label`, `value`, `remember`, `vertical`) holds
+  `Tab`s (`value`, `disabled`), each showing the `Panel`s (`value`, `selected`,
+  `label`) of its value, wherever they sit. Arrow keys, Home and End move
+  between tabs. Mark the starting tab's panel `selected` so it shows before the
+  script runs. `remember` keeps the choice in the viewer's browser. All three
+  expose `signal.selected`, which selects that tab when set.
+- `ToastSignalComponent`: one `Toaster` (`position`, `duration`, `label`) on the
+  page shows the toasts raised by any `Trigger` (`message`, `description`,
+  `variant` of `success`, `error` or `info`, `duration`) or `Toast` (`variant`,
+  `duration`, its children the toast's markup). The toasts are page-wide, so a
+  `Toast` in any later response, such as a partial or a redirect's page, reaches
+  the toaster as it arrives. They pause under the pointer and close by their ×
+  or any element inside marked `data-toast-close`. None exposes signals.
+- `TooltipSignalComponent`: `Trigger` wraps an element of yours, and `Tip` (a
+  short note, `role="tooltip"`) or `Card` (richer content, `label`) shows beside
+  it after `delay` milliseconds of hover or focus and hides `closeDelay` after
+  (`side` of `top` or `bottom`). A tip describes the trigger's first focusable
+  element and hides on Escape; a card stays while the pointer is on it, so its
+  links work, and is for the pointer only, so keep what it holds reachable
+  another way. Both are `popover="manual"`, placed with CSS anchor positioning
+  or by script where that is missing. All three expose `signal.open`.
 
 ## Components
 
