@@ -15,13 +15,13 @@ performance.mark("import:@tinytools/hono-tools:start");
  *   color: white;
  * `;
  *
- * const routeHandlers = new tiny.Handlers(import.meta.url, {
+ * const routeHandlers = new tiny.Handlers({
  *   handleClick(e: MouseEvent) {
  *     console.log("Clicked!", e);
  *   },
  * });
  *
- * const routeStyles = new tiny.Styles(import.meta.url, { buttonStyle });
+ * const routeStyles = new tiny.Styles({ buttonStyle });
  *
  * const app = new Hono()
  *   .use(...tiny.middleware.core());

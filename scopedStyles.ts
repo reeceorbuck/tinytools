@@ -281,7 +281,7 @@ export type ActivateScopedStyles<T> =
  *   color: blue;
  * `;
  *
- * const styles = new tiny.Styles(import.meta.url, {
+ * const styles = new tiny.Styles({
  *   myStyle,
  * });
  * ```

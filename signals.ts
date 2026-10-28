@@ -98,6 +98,24 @@ export interface InstanceSignal<
 // deno-lint-ignore no-explicit-any
 type AnyInstanceSignal = InstanceSignal<any, any, any>;
 
+/** What a signal reference can do as a JSX handler: `signal.name.<action>`. */
+export type SignalAction = "update" | "toggle" | "fire";
+
+/**
+ * The actions a signal of type `S` offers (see `signalActions`): `fire` for
+ * a trigger, `update` for a writable signal and `toggle` too for a boolean
+ * one, none for a computed. A per-instance signal offers its instance's.
+ */
+export type SignalActionsOf<S> = S extends // deno-lint-ignore no-explicit-any
+InstanceSignal<any, infer Instance, any> ? SignalActionsOf<Instance>
+  : typeof triggerSignal extends keyof S ? "fire"
+  : typeof writableSignal extends keyof S ?
+      | "update"
+      | (S extends Signal<infer Value>
+        ? [Value] extends [boolean] ? "toggle" : never
+        : never)
+  : never;
+
 /**
  * The per-instance handles `perInstance` returns, one per signal it defines.
  * Nested per-instance signals keep their own level.
@@ -433,6 +451,22 @@ export class SignalInstance<Value = SignalValue> extends EventTarget
   read(control: Control): void {
     this.value = readControl(control, this.#value) as Value;
     if (control.name) this.name = control.name;
+  }
+
+  /** As a handler (`onInput={signal.size.update}`), reads the event's control. */
+  update(_target: unknown, event?: Event | null): void {
+    if (event) this.read(event.target as unknown as Control);
+  }
+
+  /** Flips a boolean signal (`onClick={signal.open.toggle}`). */
+  toggle(): void {
+    if (typeof this.#value !== "boolean") {
+      throw new TypeError(
+        `Only a boolean signal can be toggled: '${this.name}' holds a ${typeof this
+          .#value}.`,
+      );
+    }
+    this.value = !this.#value as Value;
   }
 
   handleEvent(target: unknown, event?: Event | null): this {
@@ -885,6 +919,43 @@ export class InstanceSignalHandle<Value = unknown>
     if (!event) return this;
     return this.forInstance(target as Element).handleEvent(target, event);
   }
+
+  /** `signal.name.update`, on the instance enclosing the element. */
+  update(target: unknown, event?: Event | null): void {
+    this.forInstance(target as Element).update(target, event);
+  }
+
+  /** `signal.name.toggle`, on the instance enclosing the element. */
+  toggle(target: unknown): void {
+    this.forInstance(target as Element).toggle();
+  }
+
+  /** `signal.name.fire`, on the instance enclosing the element. */
+  fire(target: unknown): void {
+    (this.forInstance(target as Element) as unknown as TriggerInstance).fire();
+  }
+
+  /** @internal The signal a fresh instance defines under this name. */
+  get templateSignal(): SignalInstance<unknown> | InstanceSignalHandle {
+    return this.#group.template[this.#name];
+  }
+}
+
+/**
+ * @internal The actions a signal offers in JSX for its kind, as
+ * `signal.name.<action>`: `fire` for triggers, `update` for writable
+ * signals and `toggle` too for boolean ones. Read from a factory's
+ * server-side (inert) run, where computeds are not `SignalInstance` itself.
+ */
+export function signalActions(signal: unknown): SignalAction[] {
+  if (signal instanceof InstanceSignalHandle) {
+    return signalActions(signal.templateSignal);
+  }
+  if (signal instanceof TriggerInstance) return ["fire"];
+  if (signal?.constructor !== SignalInstance) return [];
+  return typeof (signal as SignalInstance<unknown>).value === "boolean"
+    ? ["update", "toggle"]
+    : ["update"];
 }
 
 /**

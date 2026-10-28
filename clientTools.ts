@@ -34,6 +34,8 @@ import {
   InstanceSignalHandle,
   type InternalSignalTools,
   type SignalAccessors,
+  type SignalAction,
+  signalActions,
   signalClasses,
   type SignalConstant,
   type SignalConstants,
@@ -47,6 +49,7 @@ import {
   createSignalReferences,
   type HandlerReference,
   type HandlerReferences,
+  signalActionHandler,
   type SignalOrigin,
   type SignalReferences,
   type SignalRendering,
@@ -387,6 +390,59 @@ export function normalizeSourceFileUrl(
     }
     return cleaned;
   }
+}
+
+/**
+ * The readable prefix of a generated filename for an instance with no source
+ * file: the first name it defines and what it defines (`resetType_handler`,
+ * `size_signal`, `button_style`), or just the kind when it defines none.
+ */
+export function unsourcedFilenameBase(
+  firstName: string | undefined,
+  kind: "handler" | "signal" | "template" | "style",
+): string {
+  const name = firstName?.replace(/\W/g, "_");
+  return name ? `${name}_${kind}` : kind;
+}
+
+let notedUnsourced = false;
+
+/**
+ * The source file only lets `--lazy` builds track each file's assets, so a
+ * missing or unusable one is reported in that mode alone, once.
+ */
+function noteUnsourced(kind: string, sourceFileUrl: string | URL | undefined) {
+  if (
+    notedUnsourced || cache.trustCache || memoryBuild ||
+    normalizeSourceFileUrl(sourceFileUrl)
+  ) {
+    return;
+  }
+  notedUnsourced = true;
+  console.warn(
+    `[tiny-tools] \x1b[33mNote:\x1b[0m a tiny.${kind} collection has no source file URL${
+      sourceFileUrl === undefined
+        ? ""
+        : ` (received ${JSON.stringify(String(sourceFileUrl))})`
+    }. ` +
+      "Lazy mode cannot clean up the assets it replaces when its source changes. " +
+      "Pass import.meta.url as the first argument to enable that.",
+  );
+}
+
+/**
+ * Splits a collection's arguments, `(definition)` or
+ * `(import.meta.url, definition)`, into the source file and the definition.
+ */
+function sourceAndDefinition<Definition>(
+  kind: string,
+  args: readonly unknown[],
+): [sourceFileUrl: string | URL | undefined, definition: Definition] {
+  const [sourceFileUrl, definition] = args.length > 1
+    ? args as [string | URL | undefined, Definition]
+    : [undefined, args[0] as Definition];
+  noteUnsourced(kind, sourceFileUrl);
+  return [sourceFileUrl, definition];
 }
 
 function getFilenameHashFragment(filename: string): string {
@@ -1053,8 +1109,22 @@ interface ClientToolsConstructor {
   ): ClientToolsClass<TFunctions, TStyles, Empty>;
 }
 
+/**
+ * Each collection takes `import.meta.url` as an optional first argument. It
+ * only lets `--lazy` builds tie generated files to their source file, so
+ * they can remove the ones an edit replaces; without it files are named
+ * after the first name defined (`resetType_handler_<hash>`).
+ */
 interface HandlersConstructor {
   /** An async (or sync) definition that may import other tools. */
+  new <TFunctions extends Record<string, AnyFunction>>(
+    factory: HandlerFactory<TFunctions>,
+  ): ClientToolsClass<TFunctions, Record<never, never>, Record<never, never>>;
+  /** Handlers that need nothing from other tools. */
+  new <TFunctions extends Record<string, AnyFunction> = Empty>(
+    functions: TFunctions,
+  ): ClientToolsClass<TFunctions, Empty, Empty>;
+  /** As above, with `import.meta.url`. */
   new <TFunctions extends Record<string, AnyFunction>>(
     sourceFileUrl: string | URL,
     factory: HandlerFactory<TFunctions>,
@@ -1144,6 +1214,16 @@ interface SignalsConstructor {
    * of in the browser.
    */
   new <Definitions extends SignalDefinitions>(
+    definition: (
+      tools: SignalTools,
+    ) => Promise<(tools: SignalTools) => Definitions>,
+  ): SignalsCollection<Definitions, true>;
+  /** A factory that needs nothing from module scope. */
+  new <Definitions extends SignalDefinitions>(
+    factory: (tools: SignalTools) => Definitions,
+  ): SignalsCollection<Definitions, false>;
+  /** As above, with `import.meta.url` (see `HandlersConstructor`). */
+  new <Definitions extends SignalDefinitions>(
     sourceFileUrl: string | URL,
     definition: (
       tools: SignalTools,
@@ -1188,13 +1268,13 @@ interface StylesConstructor {
  *   color: white;
  * `;
  *
- * const routeHandlers = new tiny.Handlers(import.meta.url, {
+ * const routeHandlers = new tiny.Handlers({
  *   handleClick(e: MouseEvent) {
  *     console.log("Clicked", e);
  *   },
  * });
  *
- * const routeStyles = new tiny.Styles(import.meta.url, { buttonStyle });
+ * const routeStyles = new tiny.Styles({ buttonStyle });
  *
  * // Create app with middleware
  * const app = new Hono()
@@ -1253,6 +1333,11 @@ class ClientToolsClass<
   /** Stateful bundles (Signals) are unique per instance even when sources match. */
   protected get stateful(): boolean {
     return false;
+  }
+
+  /** What this instance's bundle holds, naming it when it has no source file. */
+  protected get bundleKind(): "handler" | "signal" | "template" {
+    return "handler";
   }
 
   /** Declares the `constants` a factory definition imported. */
@@ -1397,6 +1482,7 @@ class ClientToolsClass<
         sourceFileUrl: this.sourceFileUrl,
         index: this._bundleIndex,
         stateful: this.stateful,
+        kind: this.bundleKind,
         dependencies,
         prelude: this.bundlePrelude,
         styleFiles: this.bundleStyleFiles,
@@ -1407,6 +1493,16 @@ class ClientToolsClass<
       this._clientFunctions.set(fnName, instance);
     }
     this._refreshHandlerFilenames();
+  }
+
+  /**
+   * The style bundle's filename prefix: the source file's name, or without
+   * one the first style's (`button_style`).
+   */
+  private get styleBundleBase(): string {
+    const urlPath = this.sourceFileUrl.replace(/\\/g, "/");
+    return urlPath.split("/").pop()?.replace(/\.[^.]+$/, "") ||
+      unsourcedFilenameBase([...this._ownStyleNames][0], "style");
   }
 
   /**
@@ -1428,10 +1524,7 @@ class ClientToolsClass<
       .map(([, s]) => getFilenameHashFragment(s.cleanupFilenameForCurrentBuild))
       .sort();
 
-    // Use source filename as prefix for readability
-    const urlPath = this.sourceFileUrl.replace(/\\/g, "/");
-    const baseName = urlPath.split("/").pop()?.replace(/\.[^.]+$/, "") ||
-      "styles";
+    const baseName = this.styleBundleBase;
     const bundleFilename = `${baseName}_${
       generateStyleHash(STYLE_BUNDLE_FORMAT + sortedStyleHashes.join(","))
     }`;
@@ -1676,10 +1769,7 @@ class ClientToolsClass<
   ): Promise<void> {
     if (memoryBuild) return;
     if (this._ownStyleNames.size === 0) return;
-    const urlPath = this.sourceFileUrl.replace(/\\/g, "/");
-    const baseName = urlPath.split("/").pop()?.replace(/\.[^.]+$/, "") ||
-      "styles";
-    const prefix = `${baseName}_`;
+    const prefix = `${this.styleBundleBase}_`;
     let entries: string[];
     try {
       entries = await readdir(stylesDir);
@@ -1801,33 +1891,16 @@ export const ClientTools: ClientToolsConstructor =
   ClientToolsClass as ClientToolsConstructor;
 
 class HandlersClass extends ClientToolsClass<Empty, Empty, Empty> {
-  constructor(
-    sourceFileUrl: string | URL,
-    functions:
+  /** `(functions)` or `(import.meta.url, functions)`; either may be a factory. */
+  constructor(...args: unknown[]) {
+    const [sourceFileUrl, functions] = sourceAndDefinition<
       | Record<string, AnyFunction>
-      | HandlerFactory<Record<string, AnyFunction>>,
-  ) {
+      | HandlerFactory<Record<string, AnyFunction>>
+    >("Handlers", args);
     if (typeof functions === "function") {
-      if (
-        !(typeof sourceFileUrl === "string" || sourceFileUrl instanceof URL) ||
-        !normalizeSourceFileUrl(sourceFileUrl)
-      ) {
-        throw new TypeError(
-          "Handlers factory requires a valid source file URL. Pass import.meta.url.",
-        );
-      }
       super(sourceFileUrl);
       this.defineFactory(functions);
       return;
-    }
-    if (!normalizeSourceFileUrl(sourceFileUrl) && !cache.trustCache) {
-      console.warn(
-        `[tiny-tools] \x1b[33mWarning:\x1b[0m tiny.Handlers constructed without a valid source file URL (received ${
-          JSON.stringify(String(sourceFileUrl))
-        }). ` +
-          "Handler changes will not be tracked between builds and stale files will not be cleaned up. " +
-          "Pass import.meta.url as the first argument.",
-      );
     }
     super(sourceFileUrl, { functions });
   }
@@ -1974,7 +2047,7 @@ function runSignalFactory(
     if (name === "fn" || name === "constants") {
       throw new TypeError(
         `Signals factory references '${name}', which only an async definition that imports it provides: ` +
-          "new tiny.Signals(import.meta.url, async () => { const { fn, constants } = await tiny.imports(helpers, values); return ({ Signal }) => ({ ... }); }).",
+          "new tiny.Signals(async () => { const { fn, constants } = await tiny.imports(helpers, values); return ({ Signal }) => ({ ... }); }).",
       );
     }
     throw new TypeError(
@@ -1984,8 +2057,11 @@ function runSignalFactory(
   }
 }
 
-/** Runs the factory server-side (values inert) to validate it and list its signals. */
-function signalNames(factory: SignalFactory): string[] {
+/**
+ * Runs the factory server-side (values inert) to validate it and list its
+ * signals, each with the actions its kind offers.
+ */
+function signalNames(factory: SignalFactory): Map<string, SignalAction[]> {
   const tools = signalClasses(false);
   const definitions = runSignalFactory(factory, tools);
   if (
@@ -2000,7 +2076,11 @@ function signalNames(factory: SignalFactory): string[] {
       "Signals factory must synchronously return an object of Signal or Computed instances, or perInstance signals.",
     );
   }
-  return Object.keys(definitions);
+  return new Map(
+    Object.entries(definitions).map((
+      [name, signal],
+    ) => [name, signalActions(signal)]),
+  );
 }
 
 /**
@@ -2046,15 +2126,21 @@ class SignalsClass extends HandlersClass {
     return true;
   }
 
+  protected override get bundleKind(): "signal" {
+    return "signal";
+  }
+
   #prelude: { code: string; files: string[] };
+  #actionHandlers: ReadonlySet<string>;
   /** The compiled factory; set once an async definition has resolved. */
   #compiled: { factory?: SignalFactory };
   #deferred: boolean;
 
-  constructor(
-    sourceFileUrl: string | URL,
-    factoryOrDefinition: SignalFactory | SignalDefinition,
-  ) {
+  /** `(factory)` or `(import.meta.url, factory)`. */
+  constructor(...args: unknown[]) {
+    const [sourceFileUrl, factoryOrDefinition] = sourceAndDefinition<
+      SignalFactory | SignalDefinition
+    >("Signals", args);
     const deferred = factoryOrDefinition instanceof AsyncFunction;
     if (deferred && factoryOrDefinition.length > 0) {
       throw new TypeError(
@@ -2065,6 +2151,7 @@ class SignalsClass extends HandlersClass {
       factory: compileSignalFactory(factoryOrDefinition as SignalFactory),
     };
     const prelude = { code: "", files: [] as string[] };
+    const actionHandlers = new Set<string>();
     const owner: { collection?: SignalsClass } = {};
     super(sourceFileUrl, async () => {
       const scope = handlerDefinitionScope.getStore()!;
@@ -2088,10 +2175,28 @@ class SignalsClass extends HandlersClass {
           constants: scope.constants,
         });
       }
-      const names = signalNames(compiled.factory!);
+      const signals = signalNames(compiled.factory!);
+      // Each action (`signal.size.update`) is exported as a handler of its own.
+      actionHandlers.clear();
+      for (const [name, actions] of signals) {
+        for (const action of actions) {
+          const handler = signalActionHandler(name, action);
+          if (signals.has(handler)) {
+            throw new TypeError(
+              `Signal '${handler}' clashes with the handler of signal.${name}.${action}: rename it.`,
+            );
+          }
+          actionHandlers.add(handler);
+        }
+      }
+      const names = [...signals.keys()];
       const declarations = constantsDeclaration(scope.constants);
       // Module-level names in the bundle must not collide with signal exports.
-      const taken = new Set([...names, ...SIGNAL_BUNDLE_RESERVED]);
+      const taken = new Set([
+        ...names,
+        ...actionHandlers,
+        ...SIGNAL_BUNDLE_RESERVED,
+      ]);
       const free = (base: string) => {
         let name = base;
         for (let index = 2; taken.has(name); index++) name = `${base}${index}`;
@@ -2130,18 +2235,27 @@ class SignalsClass extends HandlersClass {
         `\nfor (const [name, signal] of Object.entries(${graph})) ` +
         `if (signal instanceof EventTarget) signal.name ??= name;`;
       prelude.files = tools.files;
-      return Object.fromEntries(names.map((name) => {
+      return Object.fromEntries(names.flatMap((name) => {
         const property = /^[$A-Z_a-z][$\w]*$/.test(name)
           ? `.${name}`
           : `[${JSON.stringify(name)}]`;
         return [
-          name,
-          handlerFromSource(`function (event) {
+          [
+            name,
+            handlerFromSource(`function (event) {
             return ${graph}${property}.handleEvent(this, event);
           }`),
+          ],
+          ...signals.get(name)!.map((action) => [
+            signalActionHandler(name, action),
+            handlerFromSource(`function (event) {
+            return ${graph}${property}.${action}(this, event);
+          }`),
+          ]),
         ];
       }));
     });
+    this.#actionHandlers = actionHandlers;
     this.#prelude = prelude;
     owner.collection = this;
     this.#compiled = compiled;
@@ -2159,6 +2273,15 @@ class SignalsClass extends HandlersClass {
     return `${baseName}_${
       generateHandlerHash(`${this.sourceFileUrl}#${this._bundleIndex}`)
     }`;
+  }
+
+  /**
+   * Whether `name` is the handler of a signal's action (`size$update`)
+   * rather than of a signal: it is reached only from JSX, as
+   * `signal.size.update`.
+   */
+  _isActionHandler(name: string): boolean {
+    return this.#actionHandlers.has(name);
   }
 
   #levels?: { leaves: string[]; enclosing: string[] };
@@ -2320,21 +2443,7 @@ class StylesClass extends ClientToolsClass<Empty, Empty, Empty> {
         ScopedStyleInput
       >;
 
-    const resolvedUrl = normalizeSourceFileUrl(sourceFileUrl);
-    if (!resolvedUrl && !cache.trustCache) {
-      const detail = sourceFileUrl
-        ? `Received ${
-          JSON.stringify(String(sourceFileUrl))
-        } which is not a valid file path. ` +
-          "Did you mean to use import.meta.url instead of import.meta.main?"
-        : "No source file URL was provided.";
-      console.warn(
-        `[tiny-tools] \x1b[33mWarning:\x1b[0m tiny.Styles constructed without a valid source file URL. ${detail} ` +
-          "Style changes will not be tracked between builds and stale CSS files will not be cleaned up. " +
-          "Pass import.meta.url as the first argument to enable change tracking.",
-      );
-    }
-
+    noteUnsourced("Styles", sourceFileUrl);
     super(sourceFileUrl, { styles });
   }
 }
@@ -2394,11 +2503,15 @@ type TemplatesCollection<Definitions extends TemplateDefinitions> =
 interface TemplatesConstructor {
   /**
    * Markup rendered once on the server and shipped in a bundle, for handlers
-   * to clone: `new tiny.Templates(import.meta.url, { row: () => <Row /> })`.
+   * to clone: `new tiny.Templates({ row: () => <Row /> })`.
    * Each entry renders when the collection is first needed, with every
    * handler and stylesheet its markup used recorded, so a page loading a
    * handler that imports the collection also gets those stylesheets.
    */
+  new <Definitions extends TemplateDefinitions>(
+    templates: Definitions,
+  ): TemplatesCollection<Definitions>;
+  /** As above, with `import.meta.url` (see `HandlersConstructor`). */
   new <Definitions extends TemplateDefinitions>(
     sourceFileUrl: string | URL,
     templates: Definitions,
@@ -2478,19 +2591,20 @@ function assetName(file: string): string {
 
 class TemplatesClass extends ClientToolsClass<Empty, Empty, Empty> {
   readonly _isTemplates = true as const;
+
+  protected override get bundleKind(): "template" {
+    return "template";
+  }
+
   #rendered = new Map<string, RenderedTemplate>();
   #prelude = "";
   #styleFiles = new Set<string>();
 
-  constructor(sourceFileUrl: string | URL, templates: TemplateDefinitions) {
-    if (
-      !(typeof sourceFileUrl === "string" || sourceFileUrl instanceof URL) ||
-      !normalizeSourceFileUrl(sourceFileUrl)
-    ) {
-      throw new TypeError(
-        "tiny.Templates requires a valid source file URL. Pass import.meta.url.",
-      );
-    }
+  /** `(templates)` or `(import.meta.url, templates)`. */
+  constructor(...args: unknown[]) {
+    const [sourceFileUrl, templates] = sourceAndDefinition<
+      TemplateDefinitions
+    >("Templates", args);
     if (
       !templates || typeof templates !== "object" ||
       Object.values(templates).some((entry) => typeof entry !== "function")
@@ -2985,7 +3099,9 @@ function describeImport(
       ...(tool instanceof StylesClass
         ? tool._styles.keys()
         : tool._handlerDefinitions.keys()),
-    ];
+    ].filter((name) =>
+      !(tool instanceof SignalsClass && tool._isActionHandler(name))
+    );
     file = fileOf(
       (tool as unknown as { sourceFileUrl: string }).sourceFileUrl ?? "",
     );
@@ -3085,6 +3201,8 @@ export async function imports(
     for (const tool of tools) {
       for (const [name, instance] of tool._handlerDefinitions) {
         const isSignal = tool instanceof SignalsClass;
+        // Handlers read the signal itself; its actions are for JSX.
+        if (isSignal && tool._isActionHandler(name)) continue;
         const isTemplate = tool instanceof TemplatesClass;
         const dependencyName = isSignal
           ? `signal:${name}`

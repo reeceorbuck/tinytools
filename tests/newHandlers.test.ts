@@ -15,6 +15,7 @@ import {
   registeredClientTools,
   Signals,
   Styles,
+  Templates,
 } from "../clientTools.ts";
 import { buildScriptFiles } from "../build.ts";
 import {
@@ -435,6 +436,221 @@ Deno.test({
       const globals = globalThis as Record<string, unknown>;
       delete globals.document;
       delete globals.MutationObserver;
+      await Deno.remove(directory, { recursive: true }).catch(() => {});
+      reset();
+      (await getEsbuild()).stop();
+    }
+  },
+});
+
+Deno.test({
+  name: "Signal references offer update, toggle and fire for their kind",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  async fn() {
+    reset();
+    const directory = "./.test-build-output/signal-actions";
+    const actions = new Signals(
+      import.meta.url,
+      ({ Signal, Computed, Trigger, perInstance }) => {
+        const size = new Signal(76);
+        const italic = new Signal(false);
+        const reset = new Trigger();
+        const doubled = new Computed(() => size.value * 2);
+        const row = perInstance(() => ({ open: new Signal(false) }));
+        return { size, italic, reset, doubled, ...row };
+      },
+    );
+    const consumer = new Handlers(import.meta.url, async () => {
+      const { signal } = await imports(actions);
+      return {
+        names: function () {
+          return Object.keys(signal);
+        },
+      };
+    });
+    const { parseHTML } = await import("linkedom");
+    const window = parseHTML(
+      `<html><body><p tt-instance="${actions.instanceKey}"><i id="a"></i></p></body></html>`,
+    );
+    Object.assign(globalThis, { document: window.document });
+    try {
+      await buildScriptFiles({ fresh: true, publicDir: directory });
+      const filename = actions._handlerFilenames.get("size")!;
+      const path = `${Deno.cwd()}/${directory}/handlers/${filename}.js`;
+      const code = await Deno.readTextFile(path);
+      const module = await import(pathToFileURL(path).href);
+      // Each kind exports only the actions it offers.
+      assertEquals(
+        Object.keys(module).filter((name) => name.includes("$")).sort(),
+        [
+          "italic$toggle",
+          "italic$update",
+          "open$toggle",
+          "open$update",
+          "reset$fire",
+          "size$update",
+        ],
+      );
+      assertStringIncludes(code, "signals.size.update(this, event)");
+      const element = new EventTarget();
+      module.size$update.call(element, {
+        type: "input",
+        target: { value: "120", dataset: {}, name: "size" },
+      });
+      assertEquals(module.size().value, 120);
+      // A toggle flips the value whatever the event.
+      module.italic$toggle.call(element, new Event("click"));
+      assertEquals(module.italic().value, true);
+      module.italic$update.call(element, {
+        type: "change",
+        target: { type: "checkbox", checked: false, value: "on", dataset: {} },
+      });
+      assertEquals(module.italic().value, false);
+      const fired = module.reset().value;
+      module.reset$fire.call(element, new Event("click"));
+      assertEquals(module.reset().value, fired + 1);
+      // Per-instance actions act on the instance enclosing the element.
+      const a = window.document.getElementById("a");
+      module.open$toggle.call(a, new Event("click"));
+      assertEquals(module.open().forInstance(a).value, true);
+      // Handlers see the signals, not their action handlers.
+      const consumerPath = `${Deno.cwd()}/${directory}/handlers/${
+        consumer._handlerFilenames.get("names")
+      }.js`;
+      assertEquals(
+        (await import(pathToFileURL(consumerPath).href)).names().sort(),
+        ["doubled", "italic", "open", "reset", "size"],
+      );
+      const { signal } = await imports(actions);
+      assertEquals(
+        handlerReferenceAttributes("onInput", signal.size.update),
+        {
+          oninput: "tiny.runHandler(this,event)",
+          "tt-handler-input": `${filename}.size$update`,
+        },
+      );
+      assertEquals(
+        handlerReferenceAttributes("onClick", signal.reset.fire)?.[
+          "tt-handler-click"
+        ],
+        `${filename}.reset$fire`,
+      );
+      assertThrows(
+        // @ts-expect-error A number cannot be toggled.
+        () => signal.size.toggle,
+        TypeError,
+        "signal.size.toggle is only available on a Signal holding a boolean",
+      );
+      assertThrows(
+        // @ts-expect-error A computed is read-only.
+        () => signal.doubled.update,
+        TypeError,
+        "signal.doubled.update is only available on a writable Signal",
+      );
+      const checkTypes = () => {
+        const handlers: [
+          JSX.IntrinsicElements["input"],
+          JSX.IntrinsicElements["button"],
+        ] = [
+          { onInput: signal.size.update, onChange: signal.italic.update },
+          {
+            onClick: [
+              signal.italic.toggle,
+              signal.open.toggle,
+              signal.reset.fire,
+            ],
+          },
+        ];
+        // @ts-expect-error A trigger has no value to update.
+        signal.reset.update;
+        // @ts-expect-error Only triggers fire.
+        signal.italic.fire;
+        return handlers;
+      };
+      void checkTypes;
+    } finally {
+      delete (globalThis as Record<string, unknown>).document;
+      await Deno.remove(directory, { recursive: true }).catch(() => {});
+      reset();
+      (await getEsbuild()).stop();
+    }
+  },
+});
+
+Deno.test({
+  name:
+    "Collections build without a source file, named after their first name and kind",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  async fn() {
+    reset();
+    const directory = "./.test-build-output/unsourced";
+    const sourced = new Handlers(import.meta.url, { resetType() {} });
+    const handlers = new Handlers({
+      "reset-type": function () {},
+      other: function () {},
+    });
+    const styles = new Styles({ button: "color: red;", link: "color: blue;" });
+    const helpers = new Handlers({
+      double(value: number) {
+        return value * 2;
+      },
+    });
+    const signals = new Signals(async () => {
+      const { fn } = await imports(helpers);
+      return ({ Signal, Computed }) => {
+        const size = new Signal(2);
+        return { size, doubled: new Computed(() => fn.double(size.value)) };
+      };
+    });
+    const consumer = new Handlers(async () => {
+      const { fn, signal } = await imports(helpers, signals);
+      return {
+        read: function () {
+          return fn.double(signal.doubled.value);
+        },
+      };
+    });
+    const templates = new Templates({ row: () => "row" });
+    try {
+      await buildScriptFiles({ fresh: true, publicDir: directory });
+      const load = (filename: string) =>
+        import(
+          pathToFileURL(`${Deno.cwd()}/${directory}/handlers/${filename}.js`)
+            .href
+        );
+      assertEquals(
+        (await load(consumer._handlerFilenames.get("read")!)).read(),
+        8,
+      );
+      for (
+        const [filename, pattern] of [
+          [consumer._handlerFilenames.get("read")!, /^read_handler_\w+$/],
+          [signals._handlerFilenames.get("doubled")!, /^size_signal_\w+$/],
+          [templates._handlerFilenames.get("row")!, /^row_template_\w+$/],
+        ] as const
+      ) {
+        assertEquals(pattern.test(filename), true, filename);
+      }
+      // A source file still names the bundle.
+      assertEquals(
+        /^newHandlers_test_\w+$/.test(
+          sourced._handlerFilenames.get("resetType")!,
+        ),
+        true,
+      );
+      assertEquals(
+        /^reset_type_handler_\w+$/.test(
+          handlers._handlerFilenames.get("other")!,
+        ),
+        true,
+      );
+      assertEquals(
+        /^button_style_\w+$/.test(styles._styleFilenames.get("link")!),
+        true,
+      );
+    } finally {
       await Deno.remove(directory, { recursive: true }).catch(() => {});
       reset();
       (await getEsbuild()).stop();

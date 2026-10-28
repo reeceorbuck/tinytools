@@ -87,13 +87,13 @@ import { Hono } from "hono";
 import { css, tiny } from "tinytools";
 import { buildScriptFiles } from "tinytools/build";
 
-const buttonHandlers = new tiny.Handlers(import.meta.url, {
+const buttonHandlers = new tiny.Handlers({
   handleClick(this: HTMLButtonElement, event: MouseEvent) {
     this.textContent = `Clicked (${event.type})`;
   },
 });
 
-const buttonStyles = new tiny.Styles(import.meta.url, {
+const buttonStyles = new tiny.Styles({
   button: css`
     background: royalblue;
     color: white;
@@ -139,10 +139,13 @@ Everything the browser needs is declared in **collections** at module level:
 | `tiny.Signals`  | Reactive values shared across the page | `signal.*`  |
 | `tiny.Styles`   | Scoped CSS blocks                      | `styled.*`  |
 
-The first argument is `import.meta.url`. It tells the build which source file
-owns the collection, so generated filenames stay stable across restarts and only
-files whose source changed are rebuilt. Collections constructed without it are
-rebuilt on every change and never cleaned up.
+Each takes `import.meta.url` as an optional first argument:
+`new tiny.Handlers({ ... })`. It tells the build which source
+file owns the collection, which only `--lazy` builds use: they then remove the
+generated files an edit replaces, which otherwise stay on disk until the next
+fresh build. Generated files are content-hashed either way, named after the
+source file when given (`buttons_<hash>.js`) and otherwise after the first name
+defined and the kind (`increment_handler_<hash>.js`, `button_style_<hash>.css`).
 
 > **Declare collections at module level**, never inside a route handler.
 > Creating them per request re-registers them on every request and breaks
@@ -321,7 +324,7 @@ components instead.
 ### Object form
 
 ```ts
-export const listHandlers = new tiny.Handlers(import.meta.url, {
+export const listHandlers = new tiny.Handlers({
   select(this: HTMLLIElement, event: MouseEvent) { ... },
   clear(this: HTMLButtonElement) { ... },
 });
@@ -337,7 +340,7 @@ returns the handlers. Use `tiny.imports()` inside it to make other collections
 available as `fn`:
 
 ```ts
-export const pageHandlers = new tiny.Handlers(import.meta.url, async () => {
+export const pageHandlers = new tiny.Handlers(async () => {
   const { fn } = await tiny.imports(queryParamTools);
   return {
     handleChange(this: HTMLElement, event: NavigationCurrentEntryChangeEvent) {
@@ -372,7 +375,7 @@ await definition readiness automatically.
 with its original types:
 
 ```tsx
-const text = new tiny.Handlers(import.meta.url, {
+const text = new tiny.Handlers({
   describe(value: string) {
     return value === "" ? "No text entered." : `Entered: ${value}`;
   },
@@ -393,7 +396,6 @@ dependencies exist on the server; browser globals are not provided.
 
 ```ts
 const viewerSignals = new tiny.Signals(
-  import.meta.url,
   ({ Signal, Computed }) => {
     const setContrast = new Signal(0);
     const contrast = new Computed(() => 10 ** setContrast.value);
@@ -466,6 +468,28 @@ const { fn, signal } = await tiny.imports(viewerSignals, signalTools);
 - Given as an element property or attribute (`value={signal.x}`), a signal is
   bound: see below.
 
+A reference also names an action, so the markup says what the event does to
+the signal, whatever the event is. Each signal offers the actions of its kind:
+
+```tsx
+<input type="range" onInput={signal.size.update} />;
+<input type="checkbox" checked={signal.italic} onChange={signal.italic.update} />;
+<button type="button" onClick={signal.italic.toggle}>Italic</button>;
+<button type="button" onClick={signal.reset.fire}>Reset</button>;
+```
+
+- `update` (writable signals) takes the target's value, as `input` / `change`
+  do above.
+- `toggle` (signals holding a boolean) flips the value without reading the
+  target. On a checkbox prefer `update`, which follows its `checked` even when
+  the browser restores form state the signal does not know about.
+- `fire` (triggers) fires the trigger.
+- A computed offers none. Any other action is a type error, and throws while
+  rendering.
+- Per-instance signals act on the instance enclosing the element.
+- Each action is a handler of its own in the collection's bundle
+  (`size$update`), exported only for the signals whose kind offers it.
+
 To render initial markup with the same computations, evaluate the collection on
 the server. `evaluateUsingInitialValues` runs the factory with the given values
 written to its writable signals and returns every signal's value:
@@ -499,11 +523,11 @@ const defaults = new tiny.Constants<{ contrast: number; shade: string }>({
   shade: "B1",
 });
 
-const helpers = new tiny.Handlers(import.meta.url, {
+const helpers = new tiny.Handlers({
   describe(shade: string) {/* ... */},
 });
 
-const viewerSignals = new tiny.Signals(import.meta.url, async () => {
+const viewerSignals = new tiny.Signals(async () => {
   const { fn, constants } = await tiny.imports(helpers, defaults);
   return ({ Computed, signalsFrom }) => {
     const signals = signalsFrom(constants);
@@ -550,7 +574,7 @@ declares `constants` for the code that ships to the browser:
 ```ts
 const limits = new tiny.Constants({ maxLength: 280 });
 
-const formHandlers = new tiny.Handlers(import.meta.url, async () => {
+const formHandlers = new tiny.Handlers(async () => {
   const { constants } = await tiny.imports(limits);
   return {
     checkLength(this: HTMLTextAreaElement) {
@@ -679,7 +703,6 @@ see only that instance:
 
 ```tsx
 const layerSignals = new tiny.Signals(
-  import.meta.url,
   ({ Signal, Computed, perInstance }) => {
     const layer = perInstance(() => {
       const material = new Signal<string>("composite");
@@ -782,7 +805,6 @@ instance, and its computeds can read the outer instance's signals:
 
 ```tsx
 const noteSignals = new tiny.Signals(
-  import.meta.url,
   ({ Signal, Computed, perInstance }) => {
     const note = perInstance(() => {
       const isolation = new Signal<string>("rdam");
@@ -827,7 +849,7 @@ const noteSignals = new tiny.Signals(
 block into a hashed class name and emits it inside an `@scope` rule:
 
 ```ts
-const cardStyles = new tiny.Styles(import.meta.url, {
+const cardStyles = new tiny.Styles({
   card: css`
     padding: 16px;
     h3 {
@@ -882,14 +904,14 @@ handlers to clone, so what interaction adds to a page need not sit in it as an
 inert `<template>`:
 
 ```tsx
-const rowTemplates = new tiny.Templates(import.meta.url, {
+const rowTemplates = new tiny.Templates({
   row: async () => {
     const { fn, styled } = await tiny.imports(rowHandlers, rowStyles);
     return <li class={styled.row} onClick={fn.pick}>$[label]</li>;
   },
 });
 
-const listHandlers = new tiny.Handlers(import.meta.url, async () => {
+const listHandlers = new tiny.Handlers(async () => {
   const { template } = await tiny.imports(rowTemplates);
   return {
     addRow(this: HTMLElement) {

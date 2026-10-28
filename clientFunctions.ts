@@ -21,6 +21,7 @@ import {
   memoryAssets,
   memoryBuild,
   normalizeSourceFileUrl,
+  unsourcedFilenameBase,
 } from "./clientTools.ts";
 
 /** Global registry of every handler function, keyed by the original function. */
@@ -105,7 +106,9 @@ const importsBySourceFileUrl = new Map<
 export function getImportRegistry(
   sourceFileUrl?: string,
 ): Map<string, ClientFunctionImpl> {
-  const key = normalizeSourceFileUrl(sourceFileUrl) ?? "__global__";
+  const key = normalizeSourceFileUrl(sourceFileUrl);
+  // Without a source file there are no siblings to reach.
+  if (!key) return new Map();
   let registry = importsBySourceFileUrl.get(key);
   if (!registry) importsBySourceFileUrl.set(key, registry = new Map());
   return registry;
@@ -184,6 +187,8 @@ export type HandlerBundleOptions = {
   index: number;
   /** Stateful bundles are unique per instance even when sources match. */
   stateful: boolean;
+  /** What the bundle holds, naming it when it has no source file. */
+  kind: "handler" | "signal" | "template";
   /** Explicit `tiny.imports()` dependencies; absent for object-form bundles. */
   dependencies?: ReadonlyMap<string, ClientFunctionImpl>;
   prelude?: string;
@@ -205,6 +210,7 @@ export class HandlerBundle {
   readonly sourceFileUrl?: string;
   readonly index: number;
   readonly stateful: boolean;
+  readonly kind: HandlerBundleOptions["kind"];
   readonly prelude: string;
   /** Stylesheets the markup this bundle carries needs (see `styleFileDependencies`). */
   readonly styleFiles: ReadonlySet<string>;
@@ -219,6 +225,7 @@ export class HandlerBundle {
     this.sourceFileUrl = normalizeSourceFileUrl(options.sourceFileUrl);
     this.index = options.index;
     this.stateful = options.stateful;
+    this.kind = options.kind;
     this.prelude = options.prelude ?? "";
     this.styleFiles = new Set(options.styleFiles);
     this.runtimeFiles = new Set(options.runtimeFiles);
@@ -337,7 +344,8 @@ export class HandlerBundle {
     ).sort();
     parts.unshift(hashIdentity(this.identity));
     const baseName = this.sourceFileUrl?.replace(/\\/g, "/").split("/").pop()
-      ?.replace(/\.[^.]+$/, "").replace(/\W/g, "_") || "handlers";
+      ?.replace(/\.[^.]+$/, "").replace(/\W/g, "_") ||
+      unsourcedFilenameBase(this.functions.keys().next().value, this.kind);
     const filename = `${baseName}_${generateHandlerHash(parts.join("\n"))}`;
     if (this.sourceFileUrl) {
       cache.files[this.sourceFileUrl] ??= emptySourceFileCacheEntry();

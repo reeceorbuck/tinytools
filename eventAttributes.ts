@@ -1,5 +1,9 @@
 import type { JSX } from "./jsx-runtime.ts";
-import type { InstanceSignal } from "./signals.ts";
+import type {
+  InstanceSignal,
+  SignalAction,
+  SignalActionsOf,
+} from "./signals.ts";
 
 /**
  * The inline attribute body every TinyTools event binding emits. It is shared by
@@ -89,8 +93,36 @@ export type SignalReferences<TSignals> = {
     & SignalOrigin<Pick<TSignals, Name>>
     // deno-lint-ignore no-explicit-any
     & (TSignals[Name] extends (...args: any[]) => infer Signal
-      ? Signal & RenderableSignal<Signal>
+      ? Signal & RenderableSignal<Signal> & SignalActions<Name & string, Signal>
       : never);
+};
+
+/**
+ * The actions a signal reference offers as a JSX handler, for its kind:
+ * `onInput={signal.size.update}` takes the control's value,
+ * `onClick={signal.open.toggle}` flips a boolean and
+ * `onClick={signal.addRow.fire}` fires a trigger.
+ */
+export type SignalActions<TName extends string, Signal> = {
+  readonly [Action in SignalActionsOf<Signal>]: HandlerReference<
+    `${TName}$${Action}`,
+    (event: Event) => void
+  >;
+};
+
+/** The handler name of `signal.name.<action>`, as its bundle exports it. */
+export function signalActionHandler(
+  name: string,
+  action: SignalAction,
+): string {
+  return `${name}$${action}`;
+}
+
+/** What each action needs, for the error when a signal lacks it. */
+const signalActionKinds: Record<SignalAction, string> = {
+  update: "a writable Signal",
+  toggle: "a Signal holding a boolean",
+  fire: "a Trigger",
 };
 
 declare const signalOriginBrand: unique symbol;
@@ -465,6 +497,21 @@ export function createSignalReferences<TSignals>(
           `Signal '${name}' is only a handler reference while rendering. Read signal values in client handlers.`,
         );
       };
+      /** `signal.name.<action>`: a reference to the action's own handler. */
+      const action = (verb: SignalAction) => {
+        const handler = signalActionHandler(name, verb);
+        const resolved = resolveHandler(handler);
+        if (typeof resolved !== "string") {
+          throw new TypeError(
+            `signal.${name}.${verb} is only available on ${
+              signalActionKinds[verb]
+            }.`,
+          );
+        }
+        const reference = Object.freeze({});
+        referenceDetails.set(reference, { name: handler, resolved, links });
+        return reference;
+      };
       /**
        * A reference rendering `initialOf()` as the value it starts with, or,
        * when `omitted`, no initial value at all.
@@ -482,6 +529,9 @@ export function createSignalReferences<TSignals>(
             value: (initial?: unknown) =>
               createReference(() => initial, initial === undefined),
           },
+          update: { get: () => action("update") },
+          toggle: { get: () => action("toggle") },
+          fire: { get: () => action("fire") },
           // A template literal (`${signal.x}`) would stringify the reference.
           [Symbol.toPrimitive]: {
             value: () => {
