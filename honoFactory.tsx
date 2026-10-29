@@ -24,6 +24,7 @@ import {
   setGeneratedStyleHashLength,
   SignalComponent,
   Signals,
+  sourcedConstructor,
   Styles,
   Templates,
 } from "./clientTools.ts";
@@ -476,6 +477,11 @@ export type TinyApi = {
   readonly imports: typeof imports;
   readonly component: typeof component;
   readonly SignalComponent: typeof SignalComponent;
+  /**
+   * This API with `sourceFileUrl` given to every `Handlers`, `Signals`,
+   * `Styles` and `Templates`: `const tiny = optimized(import.meta.url)`.
+   */
+  readonly optimized: (sourceFileUrl: string | URL) => TinyApi;
   readonly middleware: {
     readonly core: (options?: ClientToolsOptions) => MiddlewareHandler[];
     readonly layout: (component: RouteLayoutComponent) => MiddlewareHandler;
@@ -484,6 +490,20 @@ export type TinyApi = {
     ) => MiddlewareHandler;
   };
 };
+
+/**
+ * `tiny` for one source file, so its collections need no `import.meta.url`
+ * of their own: `const tiny = optimized(import.meta.url)`.
+ */
+export function optimized(sourceFileUrl: string | URL): TinyApi {
+  return {
+    ...tiny,
+    Handlers: sourcedConstructor(Handlers, sourceFileUrl),
+    Signals: sourcedConstructor(Signals, sourceFileUrl),
+    Styles: sourcedConstructor(Styles, sourceFileUrl),
+    Templates: sourcedConstructor(Templates, sourceFileUrl),
+  };
+}
 
 export const tiny: TinyApi = {
   Hono: TinyHono,
@@ -496,6 +516,7 @@ export const tiny: TinyApi = {
   imports,
   component,
   SignalComponent,
+  optimized,
   runHandler,
   defineLifecycleElement,
   middleware: {

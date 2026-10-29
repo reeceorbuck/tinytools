@@ -154,8 +154,8 @@ Deno.test("Signals definitions reject captures, signal imports and non-factories
     );
 
     const notAFactory = new Signals(
-      import.meta.url,
       // @ts-expect-error the definition must resolve to a factory
+      import.meta.url,
       async () => {
         await imports(helpers);
         return { shade: 1 };

@@ -33,6 +33,8 @@ import {
   type InstanceSeed,
   InstanceSignalHandle,
   type InternalSignalTools,
+  type ReadonlySignal,
+  type Signal,
   type SignalAccessors,
   type SignalAction,
   signalActions,
@@ -42,6 +44,7 @@ import {
   type SignalDefinitions,
   type SignalInputs,
   type SignalTools,
+  type SignalValue,
   type SignalValues,
 } from "./signals.ts";
 import {
@@ -990,6 +993,27 @@ type HandlerFactory<T extends Record<string, AnyFunction>> = () =>
   | T
   | Promise<T>;
 
+/** What `tiny.imports(...tools)` resolves to. */
+type ImportsOf<TTools extends readonly Importable[]> = ImportedTools<
+  UnionToIntersection<ExtractFunctions<TTools[number]>>,
+  UnionToIntersection<ExtractStyles<TTools[number]>>,
+  UnionToIntersection<ExtractSignals<TTools[number]>>,
+  UnionToIntersection<ExtractConstants<TTools[number]>>,
+  UnionToIntersection<ExtractTemplates<TTools[number]>>,
+  UnionToIntersection<ExtractComponents<TTools[number]>>
+>;
+
+/** The tools given to `tiny.Handlers(tools, factory)`, as a list. */
+type ToolList<TTools> = TTools extends readonly Importable[] ? TTools
+  : [TTools];
+
+/** A handler factory given its tools: `({ signal }) => ({ ... })`. */
+type ImportingHandlerFactory<
+  T extends Record<string, AnyFunction>,
+  // deno-lint-ignore no-explicit-any
+  Imported = any,
+> = (imported: Imported) => T | Promise<T>;
+
 type HandlerDefinitionScope = {
   owner: AnyClientToolsInstance;
   dependencies: Map<string, ClientFunctionImpl>;
@@ -1134,6 +1158,30 @@ interface HandlersConstructor {
     sourceFileUrl: string | URL,
     functions: TFunctions,
   ): ClientToolsClass<TFunctions, Empty, Empty>;
+  /**
+   * Handlers given the tools before them, one or an array, imported as
+   * `tiny.imports(...tools)` would: `new tiny.Handlers(counter, ({ signal })
+   * => ({ add() { signal.count.value++; } }))` or `new tiny.Handlers([base,
+   * counter], ({ signal, fn }) => ...)`. Destructure what the handlers use
+   * under its own name (`signal`, `fn`, `constants`): those names are what
+   * the browser bundle resolves.
+   */
+  new <
+    const TTools extends Importable | readonly [Importable, ...Importable[]],
+    TFunctions extends Record<string, AnyFunction>,
+  >(
+    tools: TTools,
+    factory: ImportingHandlerFactory<TFunctions, ImportsOf<ToolList<TTools>>>,
+  ): ClientToolsClass<TFunctions, Record<never, never>, Record<never, never>>;
+  /** As above, with `import.meta.url`. */
+  new <
+    const TTools extends Importable | readonly [Importable, ...Importable[]],
+    TFunctions extends Record<string, AnyFunction>,
+  >(
+    sourceFileUrl: string | URL,
+    tools: TTools,
+    factory: ImportingHandlerFactory<TFunctions, ImportsOf<ToolList<TTools>>>,
+  ): ClientToolsClass<TFunctions, Record<never, never>, Record<never, never>>;
 }
 
 /** A `tiny.Signals` collection; `Deferred` marks the async definition form. */
@@ -1201,6 +1249,30 @@ type SignalsCollection<
  * contextual type whichever overload TypeScript tries first; an async
  * definition simply ignores the parameter.
  */
+/**
+ * The type of a signal made from an initial value: a lone literal widens
+ * (`Signal<number>`, not `Signal<0>`), a union of literals given with `as`
+ * is kept (`"B1" as "B1" | "A1"`).
+ */
+type WidenedValue<Value, All = Value> = Value extends boolean ? boolean
+  : Value extends number ? number
+  : Value extends string ? [All] extends [Value] ? string : Value
+  : Value;
+
+type ValueSignals<Values extends Record<string, SignalValue>> = {
+  [Name in keyof Values]: Signal<WidenedValue<Values[Name]>>;
+};
+
+/** What `define` returns in `tiny.Signals(tools, define)`. */
+type SignalShape = Record<string, (() => unknown) | SignalValue>;
+
+/** Each function a computed of its result, each value a writable signal. */
+type ShapeSignals<Shape extends SignalShape> = {
+  [Name in keyof Shape]: Shape[Name] extends () => infer Value
+    ? ReadonlySignal<Value>
+    : Signal<WidenedValue<Shape[Name]>>;
+};
+
 interface SignalsConstructor {
   /**
    * An async definition that imports handlers and constants, then returns
@@ -1234,6 +1306,42 @@ interface SignalsConstructor {
     sourceFileUrl: string | URL,
     factory: (tools: SignalTools) => Definitions,
   ): SignalsCollection<Definitions, false>;
+  /**
+   * One writable signal per initial value: `new tiny.Signals({ count: 0 })`.
+   * Use a factory for `Computed`, `Trigger` or `perInstance`.
+   */
+  new <Values extends Record<string, SignalValue>>(
+    values: Values,
+  ): SignalsCollection<ValueSignals<Values>, false>;
+  /** As above, with `import.meta.url`. */
+  new <Values extends Record<string, SignalValue>>(
+    sourceFileUrl: string | URL,
+    values: Values,
+  ): SignalsCollection<ValueSignals<Values>, false>;
+  /**
+   * Signals reading the tools before them, one or an array, imported as
+   * `tiny.imports(...tools)` would: `new tiny.Signals(counter, ({ signal })
+   * => ({ isEven: () => signal.count.value % 2 === 0 }))`. Each function
+   * returned becomes a `Computed`, each other value a writable signal. As in
+   * a handler, destructure `signal`, `fn` and `constants` by those names.
+   * Per-instance signals of another collection cannot be read.
+   */
+  new <
+    const TTools extends Importable | readonly [Importable, ...Importable[]],
+    Shape extends SignalShape,
+  >(
+    tools: TTools,
+    define: (imported: ImportsOf<ToolList<TTools>>) => Shape,
+  ): SignalsCollection<ShapeSignals<Shape>, true>;
+  /** As above, with `import.meta.url`. */
+  new <
+    const TTools extends Importable | readonly [Importable, ...Importable[]],
+    Shape extends SignalShape,
+  >(
+    sourceFileUrl: string | URL,
+    tools: TTools,
+    define: (imported: ImportsOf<ToolList<TTools>>) => Shape,
+  ): SignalsCollection<ShapeSignals<Shape>, true>;
 }
 
 interface StylesConstructor {
@@ -1891,15 +1999,47 @@ export const ClientTools: ClientToolsConstructor =
   ClientToolsClass as ClientToolsConstructor;
 
 class HandlersClass extends ClientToolsClass<Empty, Empty, Empty> {
-  /** `(functions)` or `(import.meta.url, functions)`; either may be a factory. */
+  /**
+   * `(functions)` or `(import.meta.url, functions)`; either may be a factory.
+   * Tools between them, one or an array (`(import.meta.url, [a, b],
+   * factory)`), are imported for the factory and passed to it, as
+   * `tiny.imports(a, b)` would.
+   */
   constructor(...args: unknown[]) {
-    const [sourceFileUrl, functions] = sourceAndDefinition<
+    const sourced = args.length > 1 &&
+      (args[0] === undefined || typeof args[0] === "string" ||
+        args[0] instanceof URL);
+    const sourceFileUrl = sourced ? args[0] as string | URL : undefined;
+    const rest = sourced ? args.slice(1) : args;
+    if (rest.length > 2) {
+      throw new TypeError(
+        "tiny.Handlers takes its tools as one argument: an array for several, ([a, b], factory).",
+      );
+    }
+    const tools = (rest.length > 1 ? [rest[0]].flat() : []) as Importable[];
+    let functions = rest.at(-1) as
       | Record<string, AnyFunction>
       | HandlerFactory<Record<string, AnyFunction>>
-    >("Handlers", args);
+      | ImportingHandlerFactory<Record<string, AnyFunction>>;
+    noteUnsourced("Handlers", sourceFileUrl);
+    if (rest.length > 1) {
+      if (typeof functions !== "function") {
+        throw new TypeError(
+          "tiny.Handlers(tools, factory) needs a factory: ({ signal }) => ({ ... }).",
+        );
+      }
+      // Taken now, while the definition's own line is on the stack.
+      const site = cache.trustCache ? undefined : importCallSite();
+      const define = functions as ImportingHandlerFactory<
+        Record<string, AnyFunction>
+      >;
+      functions = async () => define(await importsAt(site, tools));
+    }
     if (typeof functions === "function") {
       super(sourceFileUrl);
-      this.defineFactory(functions);
+      this.defineFactory(
+        functions as HandlerFactory<Record<string, AnyFunction>>,
+      );
       return;
     }
     super(sourceFileUrl, { functions });
@@ -2003,10 +2143,16 @@ function compileSignalFactory(
   scope: {
     references?: Record<string, AnyFunction>;
     constants?: Record<string, SignalConstant>;
+    /** Other collections' signals, for a definition that imports them. */
+    signal?: object;
   } = {},
 ): SignalFactory {
   const names: string[] = [];
   const values: unknown[] = [];
+  if (scope.signal) {
+    names.push("signal");
+    values.push(scope.signal);
+  }
   if (scope.references) {
     names.push("fn");
     values.push(scope.references);
@@ -2022,6 +2168,62 @@ function compileSignalFactory(
   } catch (error) {
     throw new TypeError(
       `Signals factory must be an arrow function or function expression: ${
+        (error as Error).message
+      }`,
+    );
+  }
+}
+
+/**
+ * The factory for `new tiny.Signals({ count: 0 })`: one writable signal per
+ * value, built by `signalsFrom` from the values inlined as JSON.
+ */
+function valuesFactory(values: Record<string, SignalValue>): SignalFactory {
+  if (!values || typeof values !== "object" || Array.isArray(values)) {
+    throw new TypeError(
+      "tiny.Signals takes a factory or an object of initial values.",
+    );
+  }
+  for (const [name, value] of Object.entries(values)) {
+    const valid = value === null || typeof value === "string" ||
+      typeof value === "boolean" ||
+      (typeof value === "number" && Number.isFinite(value)) ||
+      (Array.isArray(value) && value.every((item) => typeof item === "string"));
+    if (!valid) {
+      throw new TypeError(
+        `Signal '${name}' needs a string, finite number, boolean, null or string array; use the factory form for anything else.`,
+      );
+    }
+  }
+  return new Function(
+    `return ({ signalsFrom }) => signalsFrom(${JSON.stringify(values)});`,
+  )() as SignalFactory;
+}
+
+/**
+ * The factory for `new tiny.Signals(tools, ({ signal }) => ({ ... }))`: the
+ * definition's source called with what it imports, each function it returns
+ * becoming a `Computed` and each other value a writable `Signal`. Its source
+ * is what ships, so `signal`, `fn` and `constants` resolve as in a handler.
+ */
+function importedShapeFactory(
+  define: AnyFunction,
+  imported: ReadonlySet<string>,
+): SignalFactory {
+  try {
+    return new Function(`return ({ Signal, Computed }) => {
+  const shape = (${define})({ ${[...imported].join(", ")} });
+  const signals = {};
+  for (const [name, value] of Object.entries(shape)) {
+    signals[name] = typeof value === "function"
+      ? new Computed(() => value())
+      : new Signal(value);
+  }
+  return signals;
+};`)() as SignalFactory;
+  } catch (error) {
+    throw new TypeError(
+      `tiny.Signals(tools, define) needs define to be an arrow function or function expression: ${
         (error as Error).message
       }`,
     );
@@ -2085,15 +2287,19 @@ function signalNames(factory: SignalFactory): Map<string, SignalAction[]> {
 
 /**
  * The `fn` an async definition's factory sees on the server: each imported
- * handler called directly. Signals collections cannot be imported, since
- * their graphs live in the browser.
+ * handler called directly. Signals of other collections are read through
+ * `signal` only in the `(tools, define)` form, which builds their graphs on
+ * the server (`signalsProvided`); an async definition cannot import them.
  */
 function serverReferences(
   dependencies: ReadonlyMap<string, ClientFunctionImpl>,
+  signalsProvided = false,
 ): Record<string, AnyFunction> {
   const references: Record<string, AnyFunction> = Object.create(null);
   for (const [key, instance] of dependencies) {
     if (key.startsWith("signal:")) {
+      // Read through `signal`, from the graphs `SignalUpstream` builds.
+      if (signalsProvided) continue;
       throw new TypeError(
         `A Signals definition can import handlers only; '${
           key.slice(7)
@@ -2112,6 +2318,70 @@ function serverReferences(
  * factory once against the shared signal runtime (signals.ts), and each
  * signal is exported as an accessor that can be referenced like any handler.
  */
+/**
+ * Turns `(tools, define)` into an async definition: it imports `tools` and
+ * returns `define` as a factory (see `importedShapeFactory`), recording the
+ * signals collections among them in `upstream`.
+ */
+function importingDefinition(
+  [tools, define]: unknown[],
+  upstream: SignalUpstream,
+): SignalDefinition {
+  if (typeof define !== "function" || define instanceof AsyncFunction) {
+    throw new TypeError(
+      "tiny.Signals(tools, define) needs a synchronous define: ({ signal }) => ({ total: () => ... }).",
+    );
+  }
+  const list = [tools].flat() as Importable[];
+  const imported = new Set<string>();
+  for (const tool of list) {
+    const collection = signalInputs.get(tool as AnyClientToolsInstance)
+      ?.collection ?? tool;
+    if (collection instanceof SignalsClass) {
+      upstream.collections.push(collection);
+      imported.add("signal");
+    } else if (collection instanceof ConstantsClass) {
+      imported.add("constants");
+    } else if (
+      collection instanceof TemplatesClass ||
+      collection instanceof SignalComponent
+    ) {
+      throw new TypeError(
+        "tiny.Signals(tools, define) imports signals, handlers and constants only.",
+      );
+    } else {
+      imported.add("fn");
+    }
+  }
+  const factory = importedShapeFactory(define as AnyFunction, imported);
+  // Taken now, while the definition's own line is on the stack.
+  const site = cache.trustCache ? undefined : importCallSite();
+  return async () => {
+    await importsAt(site, list);
+    return factory;
+  };
+}
+
+/**
+ * The `signal` a factory reading other collections sees on the server: the
+ * signals of their graphs for the current run.
+ */
+function upstreamSignals(upstream: SignalUpstream): object {
+  return new Proxy(Object.create(null), {
+    get(_, name) {
+      const signal = upstream.current[name as string];
+      if (signal instanceof InstanceSignalHandle) {
+        throw new TypeError(
+          `signal.${
+            String(name)
+          } is per-instance: another collection cannot read it.`,
+        );
+      }
+      return signal;
+    },
+  });
+}
+
 /** What each `collection.withInputs()` stands for, for `tiny.imports()`. */
 const signalInputs = new WeakMap<object, SignalEvaluation>();
 
@@ -2119,6 +2389,18 @@ type SignalEvaluation = {
   collection: SignalsClass;
   inputs: Record<string, unknown>;
   seed?: Record<string, unknown>;
+};
+
+/**
+ * The collections whose signals a `tiny.Signals(tools, define)` collection
+ * reads. Each server run of its factory first builds their graphs, with the
+ * inputs `tiny.imports()` gave them in `evaluations`, into `current`, which
+ * the factory's `signal` reads.
+ */
+type SignalUpstream = {
+  collections: SignalsClass[];
+  current: Record<string, unknown>;
+  evaluations?: ReadonlyMap<SignalsClass, SignalEvaluation>;
 };
 
 class SignalsClass extends HandlersClass {
@@ -2136,11 +2418,37 @@ class SignalsClass extends HandlersClass {
   #compiled: { factory?: SignalFactory };
   #deferred: boolean;
 
-  /** `(factory)` or `(import.meta.url, factory)`. */
+  #upstream: SignalUpstream;
+
+  /**
+   * `(factory)` or `(import.meta.url, factory)`; either may be plain values.
+   * Tools between them, one or an array (`(import.meta.url, [a, b],
+   * define)`), are imported and passed to `define`, which returns computeds
+   * as functions and writable signals as values.
+   */
   constructor(...args: unknown[]) {
-    const [sourceFileUrl, factoryOrDefinition] = sourceAndDefinition<
-      SignalFactory | SignalDefinition
+    const upstream: SignalUpstream = { collections: [], current: {} };
+    const sourced = args.length > 1 &&
+      (args[0] === undefined || typeof args[0] === "string" ||
+        args[0] instanceof URL);
+    const rest = sourced ? args.slice(1) : args;
+    if (rest.length > 2) {
+      throw new TypeError(
+        "tiny.Signals takes its tools as one argument: an array for several, ([a, b], define).",
+      );
+    }
+    if (rest.length === 2) {
+      args = [
+        sourced ? args[0] : undefined,
+        importingDefinition(rest, upstream),
+      ];
+    }
+    const [sourceFileUrl, given] = sourceAndDefinition<
+      SignalFactory | SignalDefinition | Record<string, SignalValue>
     >("Signals", args);
+    const factoryOrDefinition = typeof given === "function"
+      ? given
+      : valuesFactory(given);
     const deferred = factoryOrDefinition instanceof AsyncFunction;
     if (deferred && factoryOrDefinition.length > 0) {
       throw new TypeError(
@@ -2170,10 +2478,23 @@ class SignalsClass extends HandlersClass {
           // Checked: the accessors this returns are generated, not shipped.
           scope.imports = undefined;
         }
-        compiled.factory = compileSignalFactory(factory, {
-          references: serverReferences(scope.dependencies),
+        const imported = upstream.collections.length > 0;
+        const run = compileSignalFactory(factory, {
+          references: serverReferences(scope.dependencies, imported),
           constants: scope.constants,
+          signal: imported ? upstreamSignals(upstream) : undefined,
         });
+        compiled.factory = imported
+          ? (tools) => {
+            upstream.current = Object.assign(
+              {},
+              ...upstream.collections.map((collection) =>
+                collection._graph(upstream.evaluations)
+              ),
+            );
+            return run(tools);
+          }
+          : run;
       }
       const signals = signalNames(compiled.factory!);
       // Each action (`signal.size.update`) is exported as a handler of its own.
@@ -2260,6 +2581,7 @@ class SignalsClass extends HandlersClass {
     owner.collection = this;
     this.#compiled = compiled;
     this.#deferred = deferred;
+    this.#upstream = upstream;
   }
 
   /**
@@ -2330,12 +2652,33 @@ class SignalsClass extends HandlersClass {
     return JSON.stringify({ [this.instanceKeyFor(name)]: values });
   }
 
-  /** `evaluateUsingInitialValues()` for a collection already defined. */
+  /**
+   * `evaluateUsingInitialValues()` for a collection already defined, with
+   * the inputs `tiny.imports()` gave the collections it reads.
+   */
   _initialValues(
     inputs: Record<string, unknown> = {},
     seed?: Record<string, unknown>,
+    evaluations?: ReadonlyMap<SignalsClass, SignalEvaluation>,
   ): Record<string, unknown> {
-    return this.#evaluate(inputs, seed);
+    this.#upstream.evaluations = evaluations;
+    try {
+      return this.#evaluate(inputs, seed);
+    } finally {
+      this.#upstream.evaluations = undefined;
+    }
+  }
+
+  /** A fresh graph of this collection's signals, for one that reads them. */
+  _graph(
+    evaluations?: ReadonlyMap<SignalsClass, SignalEvaluation>,
+  ): Record<string, unknown> {
+    this.#upstream.evaluations = evaluations;
+    try {
+      return this.#build(evaluations?.get(this)?.inputs ?? {}).graph;
+    } finally {
+      this.#upstream.evaluations = undefined;
+    }
   }
 
   withInputs(
@@ -2363,10 +2706,10 @@ class SignalsClass extends HandlersClass {
     return this.#evaluate(inputs, seed);
   }
 
-  #evaluate(
+  /** Runs the factory with `inputs` written to its writable signals. */
+  #build(
     inputs: Record<string, unknown>,
-    seed?: Record<string, unknown>,
-  ): Record<string, unknown> {
+  ): { tools: InternalSignalTools; graph: SignalDefinitions } {
     const tools: InternalSignalTools = signalClasses(true, this.instanceKey);
     const graph = runSignalFactory(this.#compiled.factory!, tools);
     for (const [name, value] of Object.entries(inputs)) {
@@ -2383,6 +2726,14 @@ class SignalsClass extends HandlersClass {
       // Assigning to a computed signal throws: only writable signals are inputs.
       (graph[name] as { value: unknown }).value = value;
     }
+    return { tools, graph };
+  }
+
+  #evaluate(
+    inputs: Record<string, unknown>,
+    seed?: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const { tools, graph } = this.#build(inputs);
     for (const name of Object.keys(seed ?? {})) {
       if (!(graph[name] instanceof tools.InstanceSignal)) {
         throw new TypeError(
@@ -2685,6 +3036,27 @@ export const Signals: SignalsConstructor =
 
 export const Styles: StylesConstructor =
   StylesClass as unknown as StylesConstructor;
+
+/**
+ * `collection` given `sourceFileUrl` first, unless a call passes its own.
+ * Kept in this file so `importCallSite()` skips the trap's frame.
+ */
+export function sourcedConstructor<
+  T extends abstract new (...args: never[]) => unknown,
+>(
+  collection: T,
+  sourceFileUrl: string | URL,
+): T {
+  return new Proxy(collection, {
+    construct: (target, args) =>
+      Reflect.construct(
+        target,
+        typeof args[0] === "string" || args[0] instanceof URL
+          ? args
+          : [sourceFileUrl, ...args],
+      ),
+  });
+}
 
 // ============================================================================
 // Components with instances
@@ -3135,24 +3507,24 @@ export async function imports<
   const TTools extends [Importable, ...Importable[]],
 >(
   ...tools: TTools
-): Promise<
-  ImportedTools<
-    UnionToIntersection<ExtractFunctions<TTools[number]>>,
-    UnionToIntersection<ExtractStyles<TTools[number]>>,
-    UnionToIntersection<ExtractSignals<TTools[number]>>,
-    UnionToIntersection<ExtractConstants<TTools[number]>>,
-    UnionToIntersection<ExtractTemplates<TTools[number]>>,
-    UnionToIntersection<ExtractComponents<TTools[number]>>
-  >
->;
-export async function imports(
+): Promise<ImportsOf<TTools>>;
+export function imports(
   ...given: Importable[]
 ): Promise<
   ImportedTools<unknown, unknown, unknown, unknown, unknown, unknown>
 > {
   // Where the call is, for the unused-import report: taken before the first
   // await, while the caller is still on the stack.
-  const site = cache.trustCache ? undefined : importCallSite();
+  return importsAt(cache.trustCache ? undefined : importCallSite(), given);
+}
+
+/** `tiny.imports(...given)`, reporting unused imports against `site`. */
+async function importsAt(
+  site: string | undefined,
+  given: readonly Importable[],
+): Promise<
+  ImportedTools<unknown, unknown, unknown, unknown, unknown, unknown>
+> {
   const evaluations = new Map<SignalsClass, SignalEvaluation>();
   const components = given.filter((item) => item instanceof SignalComponent);
   const imported = [
@@ -3564,7 +3936,11 @@ async function signalRendering(
       const evaluation = evaluations.get(owner);
       initialValues.set(
         owner,
-        owner._initialValues(evaluation?.inputs, evaluation?.seed),
+        owner._initialValues(
+          evaluation?.inputs,
+          evaluation?.seed,
+          evaluations,
+        ),
       );
     }
     return initialValues.get(owner)![name];

@@ -40,6 +40,7 @@ performance.mark("import:@tinytools/hono-tools:start");
 // Core setup and middleware exports
 export {
   type ClientToolsOptions,
+  optimized,
   type RouteLayoutComponent,
   type RouteLayoutProps,
   tiny,

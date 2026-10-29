@@ -140,12 +140,26 @@ Everything the browser needs is declared in **collections** at module level:
 | `tiny.Styles`   | Scoped CSS blocks                      | `styled.*`  |
 
 Each takes `import.meta.url` as an optional first argument:
-`new tiny.Handlers({ ... })`. It tells the build which source
-file owns the collection, which only `--lazy` builds use: they then remove the
-generated files an edit replaces, which otherwise stay on disk until the next
-fresh build. Generated files are content-hashed either way, named after the
-source file when given (`buttons_<hash>.js`) and otherwise after the first name
-defined and the kind (`increment_handler_<hash>.js`, `button_style_<hash>.css`).
+`new tiny.Handlers({ ... })`. It tells the build which source file owns the
+collection, which only `--lazy` builds use: they then remove the generated files
+an edit replaces, which otherwise stay on disk until the next fresh build.
+Generated files are content-hashed either way, named after the source file when
+given (`buttons_<hash>.js`) and otherwise after the first name defined and the
+kind (`increment_handler_<hash>.js`, `button_style_<hash>.css`).
+
+To give it once for a whole file, use `optimized` in place of `tiny`. Every
+`Handlers`, `Signals`, `Styles` and `Templates` made from it gets the URL, and
+the rest of `tiny` is unchanged:
+
+```ts
+import { optimized } from "@tinytools/hono-tools";
+const tiny = optimized(import.meta.url);
+
+const counter = new tiny.Signals({ count: 0 });
+```
+
+`tiny.optimized(import.meta.url)` is the same, for a file that also imports
+`tiny`.
 
 > **Declare collections at module level**, never inside a route handler.
 > Creating them per request re-registers them on every request and breaks
@@ -369,6 +383,22 @@ Rules for factory code, which is emitted as a browser module:
 Factory bodies never run during definition or building. Imports and full builds
 await definition readiness automatically.
 
+When a factory only imports, pass the collections before it instead: one, or an
+array for several. They are imported as `tiny.imports(...)` would and passed to
+the factory, so destructure them by their usual names (`signal`, `fn`,
+`constants`):
+
+```ts
+export const clicks = new tiny.Handlers(counter, ({ signal }) => ({
+  add() {
+    signal.count.value++;
+  },
+}));
+```
+
+`import.meta.url`, when given, still comes first:
+`new tiny.Handlers(import.meta.url, [counter, helpers], ({ signal, fn }) => ...)`.
+
 ### Running handlers on the server
 
 `collection.run.name(...)` calls a registered function directly on the server
@@ -404,6 +434,28 @@ const viewerSignals = new tiny.Signals(
   },
 );
 ```
+
+When every signal is a plain `Signal`, pass the initial values instead of a
+factory: `new tiny.Signals({ count: 0, query: "" })`, or
+`new tiny.Signals(import.meta.url, { ... })`. Each becomes a writable signal
+named after its key.
+
+To derive signals from another collection, pass it (or an array) before a
+function that receives it as `tiny.imports()` would. Each function returned
+becomes a `Computed`, each other value a writable signal:
+
+```ts
+const counter = new tiny.Signals({ count: 0 });
+const parity = new tiny.Signals(counter, ({ signal }) => ({
+  isEven: () => signal.count.value % 2 === 0,
+}));
+```
+
+The browser bundle imports the counter's, so `isEven` follows `count` live. On
+the server, initial values are computed from the other collection's, including
+inputs it was given with `withInputs()` in the same `tiny.imports()` call.
+Per-instance signals of another collection cannot be read; use one collection
+with `perInstance` for those.
 
 - Initial values are string, number, boolean, `null` (the default) or an array
   of strings. A control writes its value in the shape of the signal's current
@@ -468,18 +520,22 @@ const { fn, signal } = await tiny.imports(viewerSignals, signalTools);
 - Given as an element property or attribute (`value={signal.x}`), a signal is
   bound: see below.
 
-A reference also names an action, so the markup says what the event does to
-the signal, whatever the event is. Each signal offers the actions of its kind:
+A reference also names an action, so the markup says what the event does to the
+signal, whatever the event is. Each signal offers the actions of its kind:
 
 ```tsx
 <input type="range" onInput={signal.size.update} />;
-<input type="checkbox" checked={signal.italic} onChange={signal.italic.update} />;
+<input
+  type="checkbox"
+  checked={signal.italic}
+  onChange={signal.italic.update}
+/>;
 <button type="button" onClick={signal.italic.toggle}>Italic</button>;
 <button type="button" onClick={signal.reset.fire}>Reset</button>;
 ```
 
-- `update` (writable signals) takes the target's value, as `input` / `change`
-  do above.
+- `update` (writable signals) takes the target's value, as `input` / `change` do
+  above.
 - `toggle` (signals holding a boolean) flips the value without reading the
   target. On a checkbox prefer `update`, which follows its `checked` even when
   the browser restores form state the signal does not know about.

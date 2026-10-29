@@ -1,0 +1,2 @@
+# Always LF on disk, whatever core.autocrlf says, so git and deno fmt agree.
+* text=auto eol=lf
