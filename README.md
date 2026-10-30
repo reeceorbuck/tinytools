@@ -457,6 +457,42 @@ inputs it was given with `withInputs()` in the same `tiny.imports()` call.
 Per-instance signals of another collection cannot be read; use one collection
 with `perInstance` for those.
 
+A computed written as a method reads the collection's own signals as `this`, in
+any order:
+
+```ts
+const filter = new tiny.Signals(labels, ({ constants }) => ({
+  areas: [] as readonly string[],
+  summary() {
+    return this.areas.value.map((id) => constants.labels[id]).join(", ");
+  },
+}));
+```
+
+The function also receives the builders (`Signal`, `Computed`, `Trigger`,
+`perInstance`, `signalsFrom`), and anything built with them is kept as it is.
+Its `perInstance` takes a shape too, nested levels included, and `this` in an
+instance's computeds is that instance's own signals:
+
+```ts
+const notes = new tiny.Signals(
+  defaults,
+  ({ constants, perInstance }) =>
+    perInstance(() => ({
+      ...constants.note, // each value a writable signal per instance
+      ...perInstance("entry", () => ({
+        product: "A",
+        description() {
+          return `${this.product.value}`;
+        },
+      })),
+      noteText() {
+        return `${this.next.value}: ${this.description.all.value.join("; ")}`;
+      },
+    })),
+);
+```
+
 - Initial values are string, number, boolean, `null` (the default) or an array
   of strings. A control writes its value in the shape of the signal's current
   value: a numeric signal reads a number, a boolean signal a checkbox's state,
@@ -1061,7 +1097,11 @@ shows.
   the page loads) is a `<dialog>`, modal by default, opened by `Open` and closed
   by `Close` (children for either's content), Escape, a click on its backdrop or
   a form inside it submitting (unless prevented, or marked `data-keep-open`).
-  All three expose `signal.open`. `Confirm` (`message`, `confirmLabel`,
+  All three expose `signal.open`. Given an `id`, the page's own invoker buttons
+  (`commandfor`, `command="show-modal"`) open it too, such as a popover menu's
+  `Item`. With `restoreOnClose`, its content goes back to how it was rendered
+  whenever it closes, so a form whose responses replace it with errors or a
+  confirmation starts afresh. `Confirm` (`message`, `confirmLabel`,
   `cancelLabel`) stands alone: it wraps a submit button of your own, and its
   dialog asks before the button's form submits, in place of `confirm()`; without
   the script the button submits at once. It is your markup, not a component
@@ -1090,25 +1130,27 @@ shows.
   a × button that removes it. `AddItem` and `AddButton` take `dismissable` for
   the items they add. Set `--list-surface`, `--list-border`, `--list-text`,
   `--list-muted` and `--list-accent` to recolour `Item`s.
-- `PopoverSignalComponent`: `Trigger` (`label`) and `Content` (`label`, `menu`,
-  `side` of `top`, `bottom`, `left` or `right`, `id`) are the browser's
-  `popover`, placed beside the trigger with CSS anchor positioning (centred
-  where that is missing). The content's id reaches each trigger through a
-  signal, as its `popovertarget`, so light dismiss and `aria-expanded` are the
-  browser's. As a `menu`, its `Item`s (`href` or `onClick`, `variant="danger"`,
-  `disabled`) are moved through with the arrow keys and close it when chosen;
-  `Separator` divides them. `Close` closes it from inside. `Trigger`, `Content`
-  and `Close` expose `signal.open`.
+- `PopoverSignalComponent`: `Trigger` (`label`, `menu` for
+  `aria-haspopup="menu"`, `class` for a trigger you style yourself) and
+  `Content` (`label`, `menu`, `side` of `top`, `bottom`, `left` or `right`,
+  `matchTriggerWidth`, `id`) are the browser's `popover`, placed beside the
+  trigger with CSS anchor positioning (centred where that is missing). The
+  content's id reaches each trigger through a signal, as its `popovertarget`, so
+  light dismiss and `aria-expanded` are the browser's. As a `menu`, its `Item`s
+  (`href` or `onClick`, `variant="danger"`, `disabled`, and `commandFor` with
+  `command` to invoke a dialog) are moved through with the arrow keys and close
+  it when chosen; `Separator` divides them. `Close` closes it from inside.
+  `Trigger`, `Content` and `Close` expose `signal.open`.
 - `SearchFilterSignalComponent`: `FilterInput` (`name`, `label`, `placeholder`,
-  `value`, `onInput`) filters, as it is typed, the elements marked `data-filter`
-  inside `Results` (`as` for its element: `div`, `ul`, `ol`, `section` or
-  `tbody`). Each must hold every word typed, matched against the attribute's
-  value or else the element's text, ignoring case and accents. A
-  `data-filter-group` is hidden while none of its matches shows. `MatchCount`
-  shows "3 of 40" while a query filters, and `NoMatches` its children while
-  nothing matches. Results are filtered as `Results` connects and as the query
-  changes. `FilterInput` exposes `signal.query`; `Results` and `MatchCount`
-  expose `signal.shown`, `signal.total` and `signal.summary`.
+  `value`, `onInput`, `class` for your own style) filters, as it is typed, the
+  elements marked `data-filter` inside `Results` (`as` for its element: `div`,
+  `ul`, `ol`, `section` or `tbody`). Each must hold every word typed, matched
+  against the attribute's value or else the element's text, ignoring case and
+  accents. A `data-filter-group` is hidden while none of its matches shows.
+  `MatchCount` shows "3 of 40" while a query filters, and `NoMatches` its
+  children while nothing matches. Results are filtered as `Results` connects and
+  as the query changes. `FilterInput` exposes `signal.query`; `Results` and
+  `MatchCount` expose `signal.shown`, `signal.total` and `signal.summary`.
 - `SelectionSignalComponent`: `Checkbox` (`value`, `label`, `name`, `form`,
   `checked`) chooses its row, `SelectAll` every row (mixed while some are),
   `Count` shows "3 of 12 selected", `Bar` (a toolbar) shows only while any are

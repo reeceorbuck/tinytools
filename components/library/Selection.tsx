@@ -159,7 +159,7 @@ const selectionStyles = new tiny.Styles(import.meta.url, {
     width: 1rem;
     height: 1rem;
     margin: 0;
-    accent-color: var(--selection-accent, #047857);
+    accent-color: var(--selection-accent, oklch(50.8% 0.105 165.6));
     cursor: pointer;
   `,
   bar: css`
@@ -168,9 +168,9 @@ const selectionStyles = new tiny.Styles(import.meta.url, {
     align-items: center;
     gap: 0.5rem;
     padding: 0.5rem 0.75rem;
-    border: 1px solid var(--selection-border, #a7f3d0);
+    border: 1px solid var(--selection-border, oklch(90.5% 0.089 164.2));
     border-radius: 8px;
-    background: var(--selection-surface, #ecfdf5);
+    background: var(--selection-surface, oklch(97.9% 0.021 166.1));
 
     &[hidden] {
       display: none;

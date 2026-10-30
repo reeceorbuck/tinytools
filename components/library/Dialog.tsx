@@ -27,6 +27,12 @@
  * and when a form inside it submits (unless the submit was prevented, or the
  * form is marked `data-keep-open`). Focus returns to what opened it.
  *
+ * Given an `id`, the browser's invoker commands open it too, from anywhere on
+ * the page (`<button commandfor="…" command="show-modal">`), such as a
+ * popover menu's item. With `restoreOnClose`, its content goes back to how it
+ * was rendered whenever it closes: a form whose server responses replace it
+ * with errors or a confirmation starts afresh the next time it opens.
+ *
  * Colours come from custom properties a caller may set on the panel or any
  * ancestor: `--dialog-surface`, `--dialog-border`, `--dialog-text` and
  * `--dialog-backdrop`.
@@ -48,11 +54,19 @@ const dialogSignals = new tiny.Signals(
     perInstance(() => ({ open: new Signal<boolean>(false) })),
 );
 
+/** A panel keeping its rendered content, to put back when it closes. */
+type RestorableDialog = HTMLDialogElement & { initialContent?: Node[] };
+
 const dialogHandlers = new tiny.Handlers(import.meta.url, async () => {
   const { signal } = await tiny.imports(dialogSignals);
   return {
     /** Opens a panel rendered `open`, and takes its state. */
     adoptDialog: function (this: HTMLDialogElement) {
+      if (this.hasAttribute("data-restore-on-close")) {
+        // Copied before anything is typed, as a clone keeps an input's value.
+        (this as RestorableDialog).initialContent ??= [...this.childNodes]
+          .map((node) => node.cloneNode(true));
+      }
       if (this.hasAttribute("data-start-open") && !this.open) {
         if (this.hasAttribute("data-modal")) this.showModal();
         else this.show();
@@ -67,9 +81,24 @@ const dialogHandlers = new tiny.Handlers(import.meta.url, async () => {
       else if (this.hasAttribute("data-modal")) this.showModal();
       else this.show();
     },
-    /** Notes a close however it came about: Escape, a form, `Close`. */
+    /**
+     * Notes a close however it came about: Escape, a form, `Close`. A panel
+     * restored on close gets its rendered content back.
+     */
     dialogClosed: function (this: HTMLDialogElement) {
       signal.open.forInstance(this).value = false;
+      const { initialContent } = this as RestorableDialog;
+      if (initialContent) {
+        this.replaceChildren(
+          ...initialContent.map((node) => node.cloneNode(true)),
+        );
+      }
+    },
+    /** Notes an open by something other than `Open`, such as an invoker. */
+    dialogToggled: function (this: HTMLDialogElement, event: Event) {
+      if ((event as ToggleEvent).newState === "open") {
+        signal.open.forInstance(this).value = true;
+      }
     },
     /** Closes a modal panel on a click outside its box. */
     closeOnBackdrop: function (this: HTMLDialogElement, event: MouseEvent) {
@@ -127,14 +156,14 @@ const dialogStyles = new tiny.Styles(import.meta.url, {
   panel: css`
     max-width: min(32rem, calc(100vw - 2rem));
     padding: 1.25rem;
-    border: 1px solid var(--dialog-border, #d1d5db);
+    border: 1px solid var(--dialog-border, oklch(87.2% 0.009 258.3));
     border-radius: 8px;
-    background: var(--dialog-surface, #fff);
-    color: var(--dialog-text, #111827);
-    box-shadow: 0 12px 32px rgb(17 24 39 / 0.2);
+    background: var(--dialog-surface, oklch(100% 0 0));
+    color: var(--dialog-text, oklch(21% 0.032 264.7));
+    box-shadow: 0 12px 32px oklch(21% 0.032 264.7 / 0.2);
 
     &::backdrop {
-      background: var(--dialog-backdrop, rgb(17 24 39 / 0.45));
+      background: var(--dialog-backdrop, oklch(21% 0.032 264.7 / 0.45));
     }
   `,
   closeButton: css`
@@ -199,15 +228,22 @@ export const DialogSignalComponent = new tiny.SignalComponent(
         modeless?: boolean;
         /** Opens it as the page loads. */
         open?: boolean;
+        /** Its id, for the page's own `commandfor` buttons to open it. */
+        id?: string;
+        /** Puts its content back as rendered whenever it closes. */
+        restoreOnClose?: boolean;
         children?: unknown;
       }) => (
         <dialog
+          id={props.id}
           class={styled.panel}
           aria-label={props.label}
           data-modal={props.modeless ? undefined : ""}
           data-start-open={props.open ? "" : undefined}
+          data-restore-on-close={props.restoreOnClose ? "" : undefined}
           onConnect={[signal.open, fn.adoptDialog]}
           onSignal={fn.showDialog}
+          onToggle={fn.dialogToggled}
           onClose={fn.dialogClosed}
           onClick={fn.closeOnBackdrop}
           onSubmit={fn.closeOnSubmit}

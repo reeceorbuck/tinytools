@@ -65,7 +65,7 @@ const paletteTools = new tiny.Handlers(import.meta.url, {
       other.setAttribute("aria-selected", String(other === item));
     }
     if (!item) return input.removeAttribute("aria-activedescendant");
-    item.id ||= `tiny-command-${crypto.randomUUID().slice(0, 8)}`;
+    item.id ||= `tiny-command-${Math.random().toString(36).slice(2, 10)}`;
     input.setAttribute("aria-activedescendant", item.id);
     item.scrollIntoView({ block: "nearest" });
   },
@@ -179,11 +179,11 @@ const paletteStyles = new tiny.Styles(import.meta.url, {
     max-height: min(28rem, calc(100vh - 6rem));
     margin: 12vh auto auto;
     padding: 0;
-    border: 1px solid var(--palette-border, #d1d5db);
+    border: 1px solid var(--palette-border, oklch(87.2% 0.009 258.3));
     border-radius: 10px;
-    background: var(--palette-surface, #fff);
-    color: var(--palette-text, #111827);
-    box-shadow: 0 16px 40px rgb(17 24 39 / 0.25);
+    background: var(--palette-surface, oklch(100% 0 0));
+    color: var(--palette-text, oklch(21% 0.032 264.7));
+    box-shadow: 0 16px 40px oklch(21% 0.032 264.7 / 0.25);
     overflow: hidden;
 
     &[open] {
@@ -191,12 +191,12 @@ const paletteStyles = new tiny.Styles(import.meta.url, {
       flex-direction: column;
     }
     &::backdrop {
-      background: var(--palette-backdrop, rgb(17 24 39 / 0.35));
+      background: var(--palette-backdrop, oklch(21% 0.032 264.7 / 0.35));
     }
     > input {
       padding: 0.875rem 1rem;
       border: none;
-      border-bottom: 1px solid var(--palette-border, #d1d5db);
+      border-bottom: 1px solid var(--palette-border, oklch(87.2% 0.009 258.3));
       background: none;
       color: inherit;
       font: inherit;
@@ -215,14 +215,14 @@ const paletteStyles = new tiny.Styles(import.meta.url, {
     }
     [data-heading] {
       padding: 0.375rem 0.625rem 0.25rem;
-      color: var(--palette-muted, #6b7280);
+      color: var(--palette-muted, oklch(55.1% 0.023 264.4));
       font-size: 0.75rem;
       font-weight: 600;
     }
     [data-empty] {
       margin: 0;
       padding: 1.5rem;
-      color: var(--palette-muted, #6b7280);
+      color: var(--palette-muted, oklch(55.1% 0.023 264.4));
       text-align: center;
     }
     [hidden] {
@@ -249,12 +249,12 @@ const paletteStyles = new tiny.Styles(import.meta.url, {
       display: none;
     }
     &[aria-selected="true"] {
-      background: var(--palette-active, #ecfdf5);
+      background: var(--palette-active, oklch(97.9% 0.021 166.1));
     }
     > kbd,
     > small {
       margin-left: auto;
-      color: var(--palette-muted, #6b7280);
+      color: var(--palette-muted, oklch(55.1% 0.023 264.4));
       font-size: 0.75rem;
     }
   `,
@@ -264,7 +264,7 @@ const paletteStyles = new tiny.Styles(import.meta.url, {
     gap: 1.5rem;
 
     kbd {
-      color: var(--palette-muted, #6b7280);
+      color: var(--palette-muted, oklch(55.1% 0.023 264.4));
       font-size: 0.75rem;
     }
     @media (scripting: none) {

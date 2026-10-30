@@ -32,6 +32,7 @@ import {
   type InstanceLevels,
   type InstanceSeed,
   InstanceSignalHandle,
+  type InstanceSignals,
   type InternalSignalTools,
   type ReadonlySignal,
   type Signal,
@@ -1263,15 +1264,54 @@ type ValueSignals<Values extends Record<string, SignalValue>> = {
   [Name in keyof Values]: Signal<WidenedValue<Values[Name]>>;
 };
 
-/** What `define` returns in `tiny.Signals(tools, define)`. */
-type SignalShape = Record<string, (() => unknown) | SignalValue>;
+/**
+ * What `define` returns in `tiny.Signals(tools, define)`. Its entries are not
+ * constrained here, as a narrower constraint stops `this` being inferred in
+ * its computeds: `ShapeSignals` types an invalid entry `never`, and the
+ * definition rejects it when it runs.
+ */
+type SignalShape = Record<string, unknown>;
 
-/** Each function a computed of its result, each value a writable signal. */
+/**
+ * Each built signal as it is, each function a computed of its result, each
+ * initial value a writable signal.
+ */
 type ShapeSignals<Shape extends SignalShape> = {
-  [Name in keyof Shape]: Shape[Name] extends () => infer Value
-    ? ReadonlySignal<Value>
-    : Signal<WidenedValue<Shape[Name]>>;
+  [Name in keyof Shape]: Shape[Name] extends SignalDefinitions[string]
+    ? Shape[Name]
+    : Shape[Name] extends () => infer Value ? ReadonlySignal<Value>
+    : Shape[Name] extends SignalValue ? Signal<WidenedValue<Shape[Name]>>
+    : never;
 };
+
+/**
+ * The builders `define` receives in `tiny.Signals(tools, define)`, with a
+ * `perInstance` whose callback returns a shape, as `define` does.
+ */
+type ShapeTools = Omit<SignalTools, "perInstance"> & {
+  perInstance: {
+    /** Signals every instance root gets its own copy of; see `SignalTools`. */
+    <Shape extends SignalShape>(
+      define: () => Shape & ThisType<ShapeSignals<Shape>>,
+    ): InstanceSignals<ShapeSignals<Shape>>;
+    /** A named group, required when nested inside another `perInstance`. */
+    <const Level extends string, Shape extends SignalShape>(
+      name: Level,
+      define: () => Shape & ThisType<ShapeSignals<Shape>>,
+    ): InstanceSignals<ShapeSignals<Shape>, Level>;
+  };
+};
+
+/**
+ * `define` in `tiny.Signals(tools, define)`: given what `tools` import and
+ * the signal builders, and `this` in its computeds is its own signals.
+ */
+type ShapeDefinition<
+  TTools extends Importable | readonly Importable[],
+  Shape extends SignalShape,
+> = (
+  imported: ImportsOf<ToolList<TTools>> & ShapeTools,
+) => Shape & ThisType<ShapeSignals<Shape>>;
 
 interface SignalsConstructor {
   /**
@@ -1322,16 +1362,21 @@ interface SignalsConstructor {
    * Signals reading the tools before them, one or an array, imported as
    * `tiny.imports(...tools)` would: `new tiny.Signals(counter, ({ signal })
    * => ({ isEven: () => signal.count.value % 2 === 0 }))`. Each function
-   * returned becomes a `Computed`, each other value a writable signal. As in
-   * a handler, destructure `signal`, `fn` and `constants` by those names.
-   * Per-instance signals of another collection cannot be read.
+   * returned becomes a `Computed`, each initial value a writable signal, and
+   * a signal already built is kept, so `define` may also take `Signal`,
+   * `Computed`, `Trigger`, `perInstance` and `signalsFrom` and return
+   * `{ ...perInstance(() => ({ ... })) }`. A computed written as a method
+   * reads the collection's own signals as `this`:
+   * `{ areas: [], summary() { return this.areas.value.join(", "); } }`.
+   * As in a handler, destructure `signal`, `fn` and `constants` by those
+   * names. Per-instance signals of another collection cannot be read.
    */
   new <
     const TTools extends Importable | readonly [Importable, ...Importable[]],
     Shape extends SignalShape,
   >(
     tools: TTools,
-    define: (imported: ImportsOf<ToolList<TTools>>) => Shape,
+    define: ShapeDefinition<TTools, Shape>,
   ): SignalsCollection<ShapeSignals<Shape>, true>;
   /** As above, with `import.meta.url`. */
   new <
@@ -1340,7 +1385,7 @@ interface SignalsConstructor {
   >(
     sourceFileUrl: string | URL,
     tools: TTools,
-    define: (imported: ImportsOf<ToolList<TTools>>) => Shape,
+    define: ShapeDefinition<TTools, Shape>,
   ): SignalsCollection<ShapeSignals<Shape>, true>;
 }
 
@@ -2200,26 +2245,43 @@ function valuesFactory(values: Record<string, SignalValue>): SignalFactory {
   )() as SignalFactory;
 }
 
+/** The builders a `tiny.Signals(tools, define)` definition may take. */
+const SHAPE_BUILDERS = ["Trigger", "perInstance", "signalsFrom"];
+
 /**
  * The factory for `new tiny.Signals(tools, ({ signal }) => ({ ... }))`: the
- * definition's source called with what it imports, each function it returns
- * becoming a `Computed` and each other value a writable `Signal`. Its source
- * is what ships, so `signal`, `fn` and `constants` resolve as in a handler.
+ * definition's source called with what it imports and the signal builders,
+ * each function it returns becoming a `Computed` (`this` is the collection's
+ * own signals) and each initial value a writable `Signal`; anything already
+ * built (a `Signal`, `Computed`, `Trigger` or `perInstance` result) is kept.
+ * The `perInstance` it receives builds each instance's shape the same way.
+ * Its source is what ships, so `signal`, `fn` and `constants` resolve as in
+ * a handler, and only the builders it names are imported in the browser.
  */
 function importedShapeFactory(
   define: AnyFunction,
   imported: ReadonlySet<string>,
 ): SignalFactory {
+  const source = define.toString();
+  const builders = SHAPE_BUILDERS.filter((name) =>
+    new RegExp(`\\b${name}\\b`).test(source)
+  );
+  const tools = ["Signal", "Computed", "shapeSignals", ...builders];
+  const given = [...imported, "Signal", "Computed", ...builders].map((name) =>
+    // Each instance's shape is built as the collection's is.
+    name === "perInstance" ? "perInstance: shapedPerInstance" : name
+  );
   try {
-    return new Function(`return ({ Signal, Computed }) => {
-  const shape = (${define})({ ${[...imported].join(", ")} });
-  const signals = {};
-  for (const [name, value] of Object.entries(shape)) {
-    signals[name] = typeof value === "function"
-      ? new Computed(() => value())
-      : new Signal(value);
-  }
-  return signals;
+    return new Function(`return ({ ${tools.join(", ")} }) => {
+  ${
+      builders.includes("perInstance")
+        ? `const shapedPerInstance = (...args) => {
+    const define = args.pop();
+    return perInstance(...args, () => shapeSignals(define(), Signal, Computed));
+  };`
+        : ""
+    }
+  return shapeSignals((${source})({ ${given.join(", ")} }), Signal, Computed);
 };`)() as SignalFactory;
   } catch (error) {
     throw new TypeError(

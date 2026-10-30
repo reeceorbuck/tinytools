@@ -233,7 +233,7 @@ const carouselStyles = new tiny.Styles(import.meta.url, {
       display: none;
     }
     &:focus-visible {
-      outline: 2px solid var(--carousel-accent, #047857);
+      outline: 2px solid var(--carousel-accent, oklch(50.8% 0.105 165.6));
       outline-offset: 2px;
     }
   `,
@@ -246,9 +246,9 @@ const carouselStyles = new tiny.Styles(import.meta.url, {
     place-items: center;
     width: 2.25rem;
     height: 2.25rem;
-    border: 1px solid var(--carousel-border, #d1d5db);
+    border: 1px solid var(--carousel-border, oklch(87.2% 0.009 258.3));
     border-radius: 50%;
-    background: #fff;
+    background: oklch(100% 0 0);
     color: inherit;
     font: inherit;
     font-size: 1.25rem;
@@ -273,13 +273,13 @@ const carouselStyles = new tiny.Styles(import.meta.url, {
       padding: 0;
       border: none;
       border-radius: 999px;
-      background: var(--carousel-muted, #d1d5db);
+      background: var(--carousel-muted, oklch(87.2% 0.009 258.3));
       cursor: pointer;
       transition: width 150ms ease;
     }
     > button[aria-current="true"] {
       width: 1.5rem;
-      background: var(--carousel-accent, #047857);
+      background: var(--carousel-accent, oklch(50.8% 0.105 165.6));
     }
     @media (prefers-reduced-motion: reduce) {
       > button {
@@ -289,9 +289,9 @@ const carouselStyles = new tiny.Styles(import.meta.url, {
   `,
   play: css`
     padding: 0.25rem 0.75rem;
-    border: 1px solid var(--carousel-border, #d1d5db);
+    border: 1px solid var(--carousel-border, oklch(87.2% 0.009 258.3));
     border-radius: 999px;
-    background: #fff;
+    background: oklch(100% 0 0);
     color: inherit;
     font: inherit;
     font-size: 0.8125rem;

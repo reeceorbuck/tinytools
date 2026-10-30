@@ -13,9 +13,14 @@ import { navigationUrlTools } from "../handlers/navigationUrlTools.ts";
 import { clientRouteTools } from "../handlers/clientRouteTools.ts";
 import { transparent } from "../componentScope.ts";
 import { processIncomingDataTools } from "../handlers/processIncomingData.ts";
+import { precommitFallbackTools } from "../handlers/precommitFallback.ts";
 
 const ClientRouterHandlers = new Handlers(import.meta.url, async () => {
-  const { fn } = await imports(navigationUrlTools, clientRouteTools);
+  const { fn } = await imports(
+    navigationUrlTools,
+    clientRouteTools,
+    precommitFallbackTools,
+  );
   return {
     matchClientRoutes: function (
       this: PartialAbortableHTMLElement,
@@ -157,6 +162,7 @@ const ClientRouterHandlers = new Handlers(import.meta.url, async () => {
           return Promise.resolve();
         },
       });
+      if (redirectUrl) fn.redirectWithoutPrecommit(event, redirectUrl);
     },
   };
 });

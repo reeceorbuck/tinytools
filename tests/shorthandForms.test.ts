@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url";
 import { getEsbuild } from "../esbuildInit.ts";
 import {
   cache,
+  Constants,
   Handlers,
   imports,
   registeredClientTools,
@@ -291,6 +292,184 @@ Deno.test("Signals cannot read another collection's per-instance signals", async
     "per-instance",
   );
   reset();
+});
+
+Deno.test({
+  name: "Signals shorthand computeds read own signals as this, in any order",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  async fn() {
+    reset();
+    const directory = "./.test-build-output/shorthand-own";
+    const labels = new Constants({ labels: { a: "Area A" } });
+    const filter = new Signals(labels, ({ constants }) => ({
+      // Reads a computed declared after it.
+      summary() {
+        return this.named.value || "everything";
+      },
+      areas: [] as readonly string[],
+      named() {
+        return this.areas.value
+          .map((id) => (constants.labels as Record<string, string>)[id] ?? id)
+          .join(", ");
+      },
+    }));
+    const checkTypes = async () => {
+      const { signal } = await imports(filter);
+      const summary: string = signal.summary.value;
+      // @ts-expect-error a computed is read-only
+      signal.named.value = "x";
+      void summary;
+      new Signals(labels, () => ({
+        areas: [] as readonly string[],
+        bad() {
+          // @ts-expect-error areas holds strings
+          return this.areas.value[0] * 2;
+        },
+      }));
+    };
+    void checkTypes;
+    try {
+      assertEquals(await filter.evaluateUsingInitialValues({ areas: ["a"] }), {
+        summary: "Area A",
+        areas: ["a"],
+        named: "Area A",
+      });
+      await buildScriptFiles({ fresh: true, publicDir: directory });
+      const module = await import(
+        pathToFileURL(
+          `${Deno.cwd()}/${directory}/handlers/${
+            filter._handlerFilenames.get("summary")
+          }.js`,
+        ).href
+      );
+      assertEquals(module.summary().value, "everything");
+      module.areas().value = ["a", "b"];
+      assertEquals(module.summary().value, "Area A, b");
+    } finally {
+      await Deno.remove(directory, { recursive: true }).catch(() => {});
+      reset();
+      (await getEsbuild()).stop();
+    }
+  },
+});
+
+Deno.test({
+  name: "Signals shorthand keeps signals built with the builders it takes",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  async fn() {
+    reset();
+    const directory = "./.test-build-output/shorthand-builders";
+    const defaults = new Constants({ entry: { quantity: 1, product: "A" } });
+    const notes = new Signals(
+      defaults,
+      ({ constants, Computed, Trigger, perInstance, signalsFrom }) => ({
+        ...perInstance(() => {
+          const entry = signalsFrom(constants.entry);
+          const text = new Computed(() =>
+            `${entry.quantity.value}x ${entry.product.value}`
+          );
+          return { ...entry, text, add: new Trigger() };
+        }),
+        heading: "Notes",
+      }),
+    );
+    const checkTypes = async () => {
+      const { signal } = await imports(notes);
+      const heading: Signal<string> = signal.heading;
+      void [heading, notes.instanceKey, signal.text.all];
+    };
+    void checkTypes;
+    try {
+      assertEquals(await notes.evaluateUsingInitialValues(), {
+        quantity: 1,
+        product: "A",
+        text: "1x A",
+        add: 0,
+        heading: "Notes",
+      });
+      await buildScriptFiles({ fresh: true, publicDir: directory });
+      const code = await Deno.readTextFile(
+        `${Deno.cwd()}/${directory}/handlers/${
+          notes._handlerFilenames.get("text")
+        }.js`,
+      );
+      assertStringIncludes(code, "perInstanceFor");
+      assertStringIncludes(code, "TriggerInstance");
+    } finally {
+      await Deno.remove(directory, { recursive: true }).catch(() => {});
+      reset();
+      (await getEsbuild()).stop();
+    }
+  },
+});
+
+Deno.test({
+  name: "Signals shorthand perInstance takes a shape, nested levels too",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  async fn() {
+    reset();
+    const directory = "./.test-build-output/shorthand-instance-shape";
+    const defaults = new Constants({ note: { next: "Review", count: 2 } });
+    const notes = new Signals(
+      defaults,
+      ({ constants, perInstance }) =>
+        perInstance(() => ({
+          ...perInstance("entry", () => ({
+            product: "A",
+            description() {
+              return `${this.product.value} x${this.quantity.value}`;
+            },
+            quantity: 1,
+          })),
+          ...constants.note,
+          noteText() {
+            return `${this.next.value}: ${
+              this.description.all.value.join("; ") ||
+              this.description.initialValue
+            }`;
+          },
+        })),
+    );
+    const checkTypes = async () => {
+      const { signal } = await imports(notes);
+      void [signal.noteText.all, signal.description.all, signal.next.all];
+      void notes.instanceKeyFor("entry");
+      new Signals(defaults, ({ perInstance }) =>
+        perInstance(() => ({
+          next: "x",
+          bad() {
+            // @ts-expect-error next holds a string
+            return this.next.value * 2;
+          },
+        })));
+    };
+    void checkTypes;
+    try {
+      assertEquals(await notes.evaluateUsingInitialValues(), {
+        product: "A",
+        description: "A x1",
+        quantity: 1,
+        next: "Review",
+        count: 2,
+        noteText: "Review: A x1",
+      });
+      await buildScriptFiles({ fresh: true, publicDir: directory });
+      const code = await Deno.readTextFile(
+        `${Deno.cwd()}/${directory}/handlers/${
+          notes._handlerFilenames.get("noteText")
+        }.js`,
+      );
+      assertStringIncludes(code, "shapeSignals");
+      assertStringIncludes(code, "perInstanceFor");
+    } finally {
+      await Deno.remove(directory, { recursive: true }).catch(() => {});
+      reset();
+      (await getEsbuild()).stop();
+    }
+  },
 });
 
 Deno.test({

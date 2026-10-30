@@ -10,6 +10,7 @@ import {
 } from "./navigationUrlTools.ts";
 import { processIncomingDataTools } from "./processIncomingData.ts";
 import { queryParamTools } from "./queryParams.ts";
+import { precommitFallbackTools } from "./precommitFallback.ts";
 
 export type AppNavigation = Navigation & {
   inflightGetRequests?: Map<string, AbortController>;
@@ -138,6 +139,7 @@ export const navigationTools = new Handlers(import.meta.url, async () => {
     navigationUrlTools,
     performFetchAndUpdateTools,
     queryParamTools,
+    precommitFallbackTools,
   );
   return {
     /**
@@ -250,10 +252,10 @@ export const navigationTools = new Handlers(import.meta.url, async () => {
             }
           },
         });
+        if (shouldRedirect) fn.redirectWithoutPrecommit(e, displayUrl.href);
       } catch (err) {
         console.error("Error handling navigation event: ", err);
         // Going to allow the navigation to proceed as if Navigation API is not supported if there is an error in the handler
-        // Right now Safari doesnt support precommitHandler, so this is a workaround for that,
         // But it will also suppress obvious other errors so need to be careful about that
         // e.preventDefault();
       }

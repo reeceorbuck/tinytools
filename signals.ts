@@ -504,6 +504,46 @@ export function signalsFrom(
   );
 }
 
+/**
+ * The signals of a shape, as `tiny.Signals(tools, define)` and its
+ * `perInstance` return it: each function a computed whose `this` is the
+ * shape's own signals, each initial value a writable signal, and anything
+ * already built kept. Computeds run when built, so each is built when first
+ * read: one may read a sibling declared after it. The classes are passed in
+ * so the server can check a factory with inert computeds.
+ */
+export function shapeSignals(
+  shape: Record<string, unknown>,
+  Signal: new (value: unknown) => unknown,
+  Computed: new (compute: () => unknown) => unknown,
+): Record<string, unknown> {
+  const signals: Record<string, unknown> = {};
+  const pending = new Map<string | symbol, () => unknown>();
+  const own = new Proxy(signals, {
+    get(target, name) {
+      if (pending.has(name)) build(name as string);
+      return target[name as string];
+    },
+  });
+  function build(name: string) {
+    const compute = pending.get(name)!;
+    pending.delete(name);
+    signals[name] = new Computed(() => compute.call(own));
+  }
+  for (const [name, value] of Object.entries(shape)) {
+    if (typeof value === "function") pending.set(name, value as () => unknown);
+    else if (value && typeof value === "object" && !Array.isArray(value)) {
+      signals[name] = value;
+    } else signals[name] = new Signal(value);
+  }
+  for (const name of [...pending.keys()]) {
+    if (pending.has(name)) build(name as string);
+  }
+  return Object.fromEntries(
+    Object.keys(shape).map((name) => [name, signals[name]]),
+  );
+}
+
 export class TriggerInstance extends SignalInstance<number> implements Trigger {
   constructor() {
     super(0);
@@ -1010,6 +1050,7 @@ class InertComputed<Value> extends SignalInstance<Value> {
 /** The toolkit a collection's factory receives, with the per-instance handle class. */
 export type InternalSignalTools = SignalTools & {
   InstanceSignal: typeof InstanceSignalHandle;
+  shapeSignals: typeof shapeSignals;
 };
 
 /**
@@ -1032,6 +1073,7 @@ export function signalClasses(
     signalsFrom: signalsFrom as SignalTools["signalsFrom"],
     perInstance: perInstanceFor(instanceKey),
     InstanceSignal: InstanceSignalHandle,
+    shapeSignals,
   };
 }
 

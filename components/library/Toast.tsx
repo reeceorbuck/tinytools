@@ -231,18 +231,18 @@ const toastStyles = new tiny.Styles(import.meta.url, {
     }
   `,
   toast: css`
-    --toast-accent: var(--toast-border, #d1d5db);
+    --toast-accent: var(--toast-border, oklch(87.2% 0.009 258.3));
 
     display: flex;
     align-items: start;
     gap: 0.75rem;
     padding: 0.75rem 0.75rem 0.75rem 1rem;
-    border: 1px solid var(--toast-border, #d1d5db);
+    border: 1px solid var(--toast-border, oklch(87.2% 0.009 258.3));
     border-left: 4px solid var(--toast-accent);
     border-radius: 8px;
-    background: var(--toast-surface, #fff);
-    color: var(--toast-text, #111827);
-    box-shadow: 0 8px 24px rgb(17 24 39 / 0.16);
+    background: var(--toast-surface, oklch(100% 0 0));
+    color: var(--toast-text, oklch(21% 0.032 264.7));
+    box-shadow: 0 8px 24px oklch(21% 0.032 264.7 / 0.16);
     transition: opacity 200ms ease, translate 200ms ease;
 
     @starting-style {
@@ -254,13 +254,13 @@ const toastStyles = new tiny.Styles(import.meta.url, {
       translate: 1rem 0;
     }
     &[data-variant="success"] {
-      --toast-accent: var(--toast-success, #047857);
+      --toast-accent: var(--toast-success, oklch(50.8% 0.105 165.6));
     }
     &[data-variant="error"] {
-      --toast-accent: var(--toast-error, #b91c1c);
+      --toast-accent: var(--toast-error, oklch(50.5% 0.19 27.5));
     }
     &[data-variant="info"] {
-      --toast-accent: var(--toast-info, #1d4ed8);
+      --toast-accent: var(--toast-info, oklch(48.8% 0.217 264.4));
     }
     > div {
       flex: 1;
@@ -268,7 +268,7 @@ const toastStyles = new tiny.Styles(import.meta.url, {
     }
     p {
       margin: 0.125rem 0 0;
-      color: var(--toast-muted, #4b5563);
+      color: var(--toast-muted, oklch(44.6% 0.026 256.8));
       font-size: 0.875rem;
     }
     @media (prefers-reduced-motion: reduce) {
@@ -286,15 +286,15 @@ const toastStyles = new tiny.Styles(import.meta.url, {
     border: none;
     border-radius: 4px;
     background: none;
-    color: var(--toast-muted, #4b5563);
+    color: var(--toast-muted, oklch(44.6% 0.026 256.8));
     font-size: 1.125rem;
     line-height: 1;
     cursor: pointer;
 
     &:hover,
     &:focus-visible {
-      background: var(--toast-border, #d1d5db);
-      color: var(--toast-text, #111827);
+      background: var(--toast-border, oklch(87.2% 0.009 258.3));
+      color: var(--toast-text, oklch(21% 0.032 264.7));
     }
   `,
   // The buttons need the page's script, so they stay hidden without it.

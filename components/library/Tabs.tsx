@@ -115,12 +115,12 @@ const tabsStyles = new tiny.Styles(import.meta.url, {
   list: css`
     display: flex;
     gap: 0.25rem;
-    border-bottom: 1px solid var(--tabs-border, #d1d5db);
+    border-bottom: 1px solid var(--tabs-border, oklch(87.2% 0.009 258.3));
 
     &[aria-orientation="vertical"] {
       flex-direction: column;
       border-bottom: none;
-      border-right: 1px solid var(--tabs-border, #d1d5db);
+      border-right: 1px solid var(--tabs-border, oklch(87.2% 0.009 258.3));
     }
   `,
   tab: css`
@@ -129,20 +129,20 @@ const tabsStyles = new tiny.Styles(import.meta.url, {
     border-bottom: 2px solid transparent;
     margin-bottom: -1px;
     background: none;
-    color: var(--tabs-muted, #4b5563);
+    color: var(--tabs-muted, oklch(44.6% 0.026 256.8));
     font: inherit;
     font-weight: 500;
     cursor: pointer;
 
     &:hover {
-      color: var(--tabs-text, #111827);
+      color: var(--tabs-text, oklch(21% 0.032 264.7));
     }
     &[aria-selected="true"] {
-      border-bottom-color: var(--tabs-accent, #047857);
-      color: var(--tabs-text, #111827);
+      border-bottom-color: var(--tabs-accent, oklch(50.8% 0.105 165.6));
+      color: var(--tabs-text, oklch(21% 0.032 264.7));
     }
     &:focus-visible {
-      outline: 2px solid var(--tabs-accent, #047857);
+      outline: 2px solid var(--tabs-accent, oklch(50.8% 0.105 165.6));
       outline-offset: -2px;
       border-radius: 4px;
     }
@@ -153,12 +153,12 @@ const tabsStyles = new tiny.Styles(import.meta.url, {
       text-align: start;
     }
     [aria-orientation="vertical"] > &[aria-selected="true"] {
-      border-right-color: var(--tabs-accent, #047857);
+      border-right-color: var(--tabs-accent, oklch(50.8% 0.105 165.6));
     }
   `,
   panel: css`
     &:focus-visible {
-      outline: 2px solid var(--tabs-accent, #047857);
+      outline: 2px solid var(--tabs-accent, oklch(50.8% 0.105 165.6));
       outline-offset: 2px;
     }
   `,

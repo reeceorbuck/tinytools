@@ -20,6 +20,19 @@
  * `popovertarget`, so the trigger and content sit wherever the page puts
  * them. Where anchor positioning is missing the content shows centred.
  *
+ * A trigger the page styles itself, such as an avatar card, takes a `class`.
+ * An item can open a dialog through `commandFor` and `command`, the
+ * browser's invoker commands, closing the menu as it does:
+ *
+ * ```tsx
+ * <account.Trigger class={styled.accountCard} menu>…</account.Trigger>
+ * <account.Content menu side="top" matchTriggerWidth label="Account">
+ *   <account.Item commandFor="password-dialog" command="show-modal">
+ *     Change password
+ *   </account.Item>
+ * </account.Content>
+ * ```
+ *
  * Colours come from custom properties a caller may set on the content or any
  * ancestor: `--popover-surface`, `--popover-border`, `--popover-text`,
  * `--popover-muted` and `--popover-accent`.
@@ -60,7 +73,7 @@ const popoverHandlers = new tiny.Handlers(import.meta.url, async () => {
   return {
     /** Gives the content an id, and its triggers that id. */
     adoptContent: function (this: HTMLElement) {
-      this.id ||= `tiny-popover-${crypto.randomUUID().slice(0, 8)}`;
+      this.id ||= `tiny-popover-${Math.random().toString(36).slice(2, 10)}`;
       signal.target.forInstance(this).value = this.id;
       signal.open.forInstance(this).value = this.matches(":popover-open");
     },
@@ -118,11 +131,11 @@ const popoverStyles = new tiny.Styles(import.meta.url, {
     min-width: 10rem;
     max-width: min(24rem, calc(100vw - 1rem));
     padding: 0.75rem;
-    border: 1px solid var(--popover-border, #d1d5db);
+    border: 1px solid var(--popover-border, oklch(87.2% 0.009 258.3));
     border-radius: 8px;
-    background: var(--popover-surface, #fff);
-    color: var(--popover-text, #111827);
-    box-shadow: 0 8px 24px rgb(17 24 39 / 0.16);
+    background: var(--popover-surface, oklch(100% 0 0));
+    color: var(--popover-text, oklch(21% 0.032 264.7));
+    box-shadow: 0 8px 24px oklch(21% 0.032 264.7 / 0.16);
     transition: opacity 120ms ease, display 120ms allow-discrete,
       overlay 120ms allow-discrete;
 
@@ -160,6 +173,12 @@ const popoverStyles = new tiny.Styles(import.meta.url, {
         margin: 0 0.25rem;
         position-area: left span-bottom;
       }
+      &[data-match-trigger-width] {
+        box-sizing: border-box;
+        min-width: 0;
+        max-width: none;
+        width: anchor-size(width);
+      }
     }
     @media (prefers-reduced-motion: reduce) {
       transition: none;
@@ -184,17 +203,17 @@ const popoverStyles = new tiny.Styles(import.meta.url, {
     &:hover,
     &:focus-visible {
       outline: none;
-      background: var(--popover-accent, #ecfdf5);
+      background: var(--popover-accent, oklch(97.9% 0.021 166.1));
     }
     &[data-variant="danger"] {
-      color: #b91c1c;
+      color: oklch(50.5% 0.19 27.5);
     }
   `,
   separator: css`
     height: 1px;
     margin: 0.25rem 0;
     border: none;
-    background: var(--popover-border, #d1d5db);
+    background: var(--popover-border, oklch(87.2% 0.009 258.3));
   `,
   // The triggers need the page's script, so they stay hidden without it.
   scripted: css`
@@ -221,11 +240,16 @@ export const PopoverSignalComponent = new tiny.SignalComponent(
       Trigger: instanced((props: {
         /** Names the button, for one showing only an icon. */
         label?: string;
+        /** Opens a `menu` Content, telling assistive technology so. */
+        menu?: boolean;
+        /** The page's own style, for a trigger it designs itself. */
+        class?: string;
         children?: unknown;
       }) => (
         <button
           type="button"
-          class={styled.scripted}
+          class={styled.mergeClasses(styled.scripted, props.class)}
+          aria-haspopup={props.menu ? "menu" : undefined}
           aria-label={props.label}
           title={props.label}
           onConnect={[signal.target, fn.linkTrigger]}
@@ -241,6 +265,8 @@ export const PopoverSignalComponent = new tiny.SignalComponent(
         menu?: boolean;
         /** Which side of the trigger it shows on; default `bottom`. */
         side?: "top" | "bottom" | "left" | "right";
+        /** As wide as the trigger, where anchor positioning is supported. */
+        matchTriggerWidth?: boolean;
         /** Its id, for a `popovertarget` of the page's own. */
         id?: string;
         children?: unknown;
@@ -252,6 +278,7 @@ export const PopoverSignalComponent = new tiny.SignalComponent(
           role={props.menu ? "menu" : "dialog"}
           aria-label={props.label}
           data-side={props.side}
+          data-match-trigger-width={props.matchTriggerWidth ? "" : undefined}
           onConnect={[signal.open, fn.adoptContent]}
           onSignal={fn.showContent}
           onToggle={fn.contentToggled}
@@ -278,6 +305,12 @@ export const PopoverSignalComponent = new tiny.SignalComponent(
         href?: string;
         /** Runs when it is chosen, by click or Enter. */
         onClick?: HandlerProp<(event: MouseEvent) => unknown>;
+        /**
+         * The id of an element a button item invokes, such as a `<dialog>`,
+         * with `command` saying what to do, such as `show-modal`.
+         */
+        commandFor?: string;
+        command?: string;
         /** `danger` for a destructive choice. */
         variant?: "danger";
         disabled?: boolean;
@@ -304,6 +337,8 @@ export const PopoverSignalComponent = new tiny.SignalComponent(
               tabindex="-1"
               data-variant={props.variant}
               disabled={props.disabled}
+              commandfor={props.commandFor}
+              command={props.command}
               onClick={props.onClick}
             >
               {props.children}

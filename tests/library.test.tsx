@@ -1,4 +1,4 @@
-import { assertEquals, assertStringIncludes } from "@std/assert";
+import { assertEquals, assertMatch, assertStringIncludes } from "@std/assert";
 import { imports } from "../clientTools.ts";
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
 import { h } from "../jsx-runtime.ts";
@@ -220,6 +220,8 @@ Deno.test("the library search filter's parts share one query", async () => {
   assertStringIncludes(input, 'name="search"');
   assertStringIncludes(input, 'aria-label="Filter items"');
   assertStringIncludes(input, 'placeholder="Filter items" value="glo"');
+  const styledInput = await render(<filter.FilterInput class="navFilter" />);
+  assertMatch(styledInput, /class="filterInput_[^"]* navFilter[ "]/);
   assertStringIncludes(results, "<tbody ");
   assertStringIncludes(results, '<tr data-filter="nitrile gloves">');
   // The count is empty, and the message hidden, until a query filters.
@@ -254,6 +256,19 @@ Deno.test("the library dialog's parts share one open state", async () => {
   const modeless = await render(<other.Panel modeless>Note</other.Panel>);
   assertEquals(modeless.includes("data-modal"), false);
   assertEquals(linkOf(modeless) === linkOf(panel), false);
+  assertEquals(panel.includes("data-restore-on-close"), false);
+  // An id lets the page's invoker buttons open it; an open from them is
+  // noted through `toggle`.
+  const invoked = component.instance();
+  const restorable = await render(
+    <invoked.Panel id="password-dialog" restoreOnClose>Form</invoked.Panel>,
+  );
+  assertStringIncludes(
+    restorable,
+    '<dialog id="password-dialog" class="panel_',
+  );
+  assertStringIncludes(restorable, 'data-restore-on-close=""');
+  assertStringIncludes(restorable, 'tt-handler-toggle="');
 });
 
 Deno.test("a library confirm asks before the button it wraps", async () => {
@@ -415,6 +430,31 @@ Deno.test("the library popover's parts share one open state", async () => {
   const other = component.instance();
   const dialog = await render(<other.Content>Hi</other.Content>);
   assertStringIncludes(dialog, 'role="dialog"');
+  assertEquals(trigger.includes("aria-haspopup"), false);
+  assertEquals(content.includes("data-match-trigger-width"), false);
+});
+
+Deno.test("a library popover menu can be styled and invoke a dialog", async () => {
+  const { component } = await imports(PopoverSignalComponent);
+  const account = component.instance();
+  const trigger = await render(
+    <account.Trigger class="accountCard" menu>Ann Lee</account.Trigger>,
+  );
+  const content = await render(
+    <account.Content menu side="top" matchTriggerWidth label="Account">
+      <account.Item commandFor="password-dialog" command="show-modal">
+        Change password
+      </account.Item>
+    </account.Content>,
+  );
+  // The page's class joins the component's own.
+  assertMatch(trigger, /class="scripted_[^"]* accountCard[ "]/);
+  assertStringIncludes(trigger, 'aria-haspopup="menu"');
+  assertStringIncludes(content, 'data-match-trigger-width=""');
+  assertStringIncludes(
+    content,
+    'commandfor="password-dialog" command="show-modal"',
+  );
 });
 
 Deno.test("the library selection's parts share one set of rows", async () => {

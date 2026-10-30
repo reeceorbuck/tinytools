@@ -3,7 +3,7 @@
  * only the parts its collections use: `tt-signal` (`Signal`, `signalsFrom`
  * and dependency tracking) always, and `tt-computed`, `tt-trigger` and
  * `tt-instance` (`perInstance`) only for collections whose factory takes
- * them. Each module is built from the runtime in `signals.ts` with
+ * them, and `tt-shape` only for those written as `tiny.Signals(tools, define)`. Each module is built from the runtime in `signals.ts` with
  * `toString()`, so the server runs exactly the code the browser gets.
  *
  * @module
@@ -17,6 +17,7 @@ import {
   perInstanceFor,
   readControl,
   sameValue,
+  shapeSignals,
   SignalInstance,
   signalsFrom,
   track,
@@ -78,7 +79,15 @@ const instanceModule = runtimeModule("instance", {
   exported: [InstanceSignalHandle, perInstanceFor],
 });
 
-const modules = [signalModule, computedModule, triggerModule, instanceModule];
+const shapeModule = runtimeModule("shape", { exported: [shapeSignals] });
+
+const modules = [
+  signalModule,
+  computedModule,
+  triggerModule,
+  instanceModule,
+  shapeModule,
+];
 
 /** The signal runtime modules' sources, by file name (`tt-signal_….js`). */
 export const signalRuntimeSources: ReadonlyMap<string, string> = new Map(
@@ -94,6 +103,8 @@ export const signalRuntimeFiles: ReadonlyMap<string, string> = new Map(
 const toolSources = {
   Signal: [signalModule, "SignalInstance"],
   signalsFrom: [signalModule, "signalsFrom"],
+  // Internal: what `tiny.Signals(tools, define)` builds its shapes with.
+  shapeSignals: [shapeModule, "shapeSignals"],
   Computed: [computedModule, "ComputedInstance"],
   Trigger: [triggerModule, "TriggerInstance"],
   // Called with the collection's instance key (see `toolBinding`).

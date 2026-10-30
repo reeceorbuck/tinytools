@@ -134,7 +134,7 @@ const tooltipHandlers = new tiny.Handlers(import.meta.url, async () => {
   return {
     /** Gives the content an id, and its triggers that id. */
     adoptTip: function (this: HTMLElement) {
-      this.id ||= `tiny-tip-${crypto.randomUUID().slice(0, 8)}`;
+      this.id ||= `tiny-tip-${Math.random().toString(36).slice(2, 10)}`;
       signal.target.forInstance(this).value = this.id;
       signal.open.forInstance(this).value = this.matches(":popover-open");
     },
@@ -207,8 +207,8 @@ const tooltipStyles = new tiny.Styles(import.meta.url, {
     padding: 0.3rem 0.55rem;
     border: none;
     border-radius: 6px;
-    background: var(--tooltip-surface, #111827);
-    color: var(--tooltip-text, #f9fafb);
+    background: var(--tooltip-surface, oklch(21% 0.032 264.7));
+    color: var(--tooltip-text, oklch(98.5% 0.002 247.8));
     font-size: 0.8125rem;
     line-height: 1.35;
     pointer-events: none;
@@ -241,11 +241,11 @@ const tooltipStyles = new tiny.Styles(import.meta.url, {
     width: max-content;
     max-width: min(20rem, calc(100vw - 1rem));
     padding: 0.875rem 1rem;
-    border: 1px solid var(--hovercard-border, #d1d5db);
+    border: 1px solid var(--hovercard-border, oklch(87.2% 0.009 258.3));
     border-radius: 10px;
-    background: var(--hovercard-surface, #fff);
-    color: var(--hovercard-text, #111827);
-    box-shadow: 0 8px 24px rgb(17 24 39 / 0.16);
+    background: var(--hovercard-surface, oklch(100% 0 0));
+    color: var(--hovercard-text, oklch(21% 0.032 264.7));
+    box-shadow: 0 8px 24px oklch(21% 0.032 264.7 / 0.16);
     transition: opacity 150ms ease, translate 150ms ease,
       display 150ms allow-discrete, overlay 150ms allow-discrete;
 

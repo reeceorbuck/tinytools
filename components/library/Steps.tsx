@@ -104,7 +104,7 @@ const stepsHandlers = new tiny.Handlers(import.meta.url, async () => {
      * `current` or is the first to connect.
      */
     joinSteps: function (this: HTMLFieldSetElement) {
-      this.id ||= `tiny-step-${crypto.randomUUID().slice(0, 8)}`;
+      this.id ||= `tiny-step-${Math.random().toString(36).slice(2, 10)}`;
       const steps = signal.steps.forInstance(this);
       const current = signal.current.forInstance(this);
       const entry = { id: this.id, title: this.dataset.title ?? "" };
@@ -258,16 +258,16 @@ const stepsStyles = new tiny.Styles(import.meta.url, {
       flex: 1;
       align-items: center;
       gap: 0.5rem;
-      color: var(--steps-muted, #6b7280);
+      color: var(--steps-muted, oklch(55.1% 0.023 264.4));
     }
     > li:not(:last-child)::after {
       content: "";
       flex: 1;
       height: 2px;
-      background: var(--steps-border, #d1d5db);
+      background: var(--steps-border, oklch(87.2% 0.009 258.3));
     }
     > li[data-state="done"]::after {
-      background: var(--steps-accent, #047857);
+      background: var(--steps-accent, oklch(50.8% 0.105 165.6));
     }
     button {
       display: flex;
@@ -291,26 +291,26 @@ const stepsStyles = new tiny.Styles(import.meta.url, {
       place-items: center;
       width: 1.75rem;
       height: 1.75rem;
-      border: 2px solid var(--steps-border, #d1d5db);
+      border: 2px solid var(--steps-border, oklch(87.2% 0.009 258.3));
       border-radius: 50%;
       font-size: 0.8125rem;
       font-weight: 600;
     }
     [data-state="current"] {
-      color: var(--steps-text, #111827);
+      color: var(--steps-text, oklch(21% 0.032 264.7));
       font-weight: 600;
     }
     [data-state="current"] span {
-      border-color: var(--steps-accent, #047857);
-      color: var(--steps-accent, #047857);
+      border-color: var(--steps-accent, oklch(50.8% 0.105 165.6));
+      color: var(--steps-accent, oklch(50.8% 0.105 165.6));
     }
     [data-state="done"] {
-      color: var(--steps-text, #111827);
+      color: var(--steps-text, oklch(21% 0.032 264.7));
     }
     [data-state="done"] span {
-      border-color: var(--steps-accent, #047857);
-      background: var(--steps-accent, #047857);
-      color: #fff;
+      border-color: var(--steps-accent, oklch(50.8% 0.105 165.6));
+      background: var(--steps-accent, oklch(50.8% 0.105 165.6));
+      color: oklch(100% 0 0);
     }
     @media (scripting: none) {
       display: none;

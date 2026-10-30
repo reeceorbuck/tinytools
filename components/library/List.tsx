@@ -69,7 +69,7 @@ const listStyles = new tiny.Styles(import.meta.url, {
     list-style: none;
 
     &:focus-visible {
-      outline: 2px solid var(--list-accent, #047857);
+      outline: 2px solid var(--list-accent, oklch(50.8% 0.105 165.6));
       outline-offset: 2px;
     }
   `,
@@ -82,10 +82,10 @@ const listStyles = new tiny.Styles(import.meta.url, {
     gap: 0.75rem;
     min-height: 2.75rem;
     padding: 0.5rem 0.5rem 0.5rem 0.75rem;
-    border: 1px solid var(--list-border, #d1d5db);
+    border: 1px solid var(--list-border, oklch(87.2% 0.009 258.3));
     border-radius: 6px;
-    background: var(--list-surface, #fff);
-    color: var(--list-text, #111827);
+    background: var(--list-surface, oklch(100% 0 0));
+    color: var(--list-text, oklch(21% 0.032 264.7));
     transition: transform var(--list-shift-duration) ease,
       box-shadow var(--list-shift-duration) ease;
 
@@ -95,17 +95,17 @@ const listStyles = new tiny.Styles(import.meta.url, {
     }
     &[draggable="true"]::before {
       content: "⠿";
-      color: var(--list-muted, #4b5563);
+      color: var(--list-muted, oklch(44.6% 0.026 256.8));
     }
     &:focus-visible {
-      outline: 2px solid var(--list-accent, #047857);
+      outline: 2px solid var(--list-accent, oklch(50.8% 0.105 165.6));
       outline-offset: 2px;
     }
     &[data-dragging] {
       z-index: 1;
       cursor: grabbing;
-      box-shadow: 0 6px 16px rgb(17 24 39 / 0.16),
-        0 2px 4px rgb(17 24 39 / 0.08);
+      box-shadow: 0 6px 16px oklch(21% 0.032 264.7 / 0.16),
+        0 2px 4px oklch(21% 0.032 264.7 / 0.08);
       /* Follows the cursor exactly; only the settle after release animates. */
       transition: box-shadow var(--list-shift-duration) ease;
     }
@@ -125,15 +125,15 @@ const listStyles = new tiny.Styles(import.meta.url, {
     border: none;
     border-radius: 4px;
     background: none;
-    color: var(--list-muted, #4b5563);
+    color: var(--list-muted, oklch(44.6% 0.026 256.8));
     font-size: 1.25rem;
     line-height: 1;
     cursor: pointer;
 
     &:hover,
     &:focus-visible {
-      background: var(--list-border, #d1d5db);
-      color: var(--list-text, #111827);
+      background: var(--list-border, oklch(87.2% 0.009 258.3));
+      color: var(--list-text, oklch(21% 0.032 264.7));
     }
   `,
   /** Announcements for screen readers only. */
@@ -153,12 +153,12 @@ const listStyles = new tiny.Styles(import.meta.url, {
       flex: 1;
       min-width: 0;
       padding: 0.5rem 0.75rem;
-      border: 1px solid var(--list-border, #d1d5db);
+      border: 1px solid var(--list-border, oklch(87.2% 0.009 258.3));
       border-radius: 6px;
       font: inherit;
     }
     input:focus-visible {
-      outline: 2px solid var(--list-accent, #047857);
+      outline: 2px solid var(--list-accent, oklch(50.8% 0.105 165.6));
       outline-offset: 1px;
     }
   `,

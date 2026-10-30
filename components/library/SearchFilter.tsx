@@ -143,12 +143,14 @@ export const SearchFilterSignalComponent = new tiny.SignalComponent(
         /** The query to start with, such as the request's own. */
         value?: string;
         id?: string;
+        /** The page's own style for the box. */
+        class?: string;
         /** Runs on every keystroke, after the filter (to submit, say). */
         onInput?: InputHandler;
       }) => (
         <input
           type="search"
-          class={styled.filterInput}
+          class={styled.mergeClasses(styled.filterInput, props.class)}
           name={props.name ?? "search"}
           id={props.id}
           aria-label={props.label ?? "Filter"}
