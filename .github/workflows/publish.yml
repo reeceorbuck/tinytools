@@ -1,15 +1,15 @@
 name: Publish
 
-# Publishes to JSR from CI so each version carries provenance. A version
-# that is already published is skipped, so only a bumped `version` in
-# deno.json publishes anything.
+# Publishes to JSR and npm from CI so each version carries provenance. A
+# version that is already published is skipped, so only a bumped `version`
+# in deno.json publishes anything.
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
 jobs:
-  publish:
+  jsr:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -24,3 +24,46 @@ jobs:
       # untracked deno.lock would make the tree dirty and stop the publish.
       - run: deno install --no-lock
       - run: deno publish
+
+  npm:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      # npm publish fails on an existing version rather than skipping it.
+      - id: version
+        run: |
+          version=$(jq -r .version deno.json)
+          name=$(jq -r .name package.json)
+          if npm view "$name@$version" version --registry https://registry.npmjs.org | grep -q .; then
+            echo "$name@$version is already on npm, skipping"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.version.outputs.publish == 'true'
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - if: steps.version.outputs.publish == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - if: steps.version.outputs.publish == 'true'
+        uses: oven-sh/setup-bun@v2
+      # Trusted publishing (OIDC, no token) needs npm 11.5.1 or later.
+      - if: steps.version.outputs.publish == 'true'
+        run: npm install -g npm@latest
+      - if: steps.version.outputs.publish == 'true'
+        run: deno install --no-lock
+      # Builds, packs and runs the package under Node and Bun.
+      - if: steps.version.outputs.publish == 'true'
+        run: deno task test:npm
+      - if: steps.version.outputs.publish == 'true'
+        run: deno task build:npm
+      - if: steps.version.outputs.publish == 'true'
+        working-directory: npm
+        run: npm publish --access public
