@@ -19,4 +19,7 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
+      # package.json makes Deno resolve npm packages, and the types for
+      # node: imports (@types/node), from node_modules.
+      - run: deno install
       - run: deno publish

@@ -17,6 +17,9 @@
       "optional": true
     }
   },
+  "devDependencies": {
+    "@types/node": "^24"
+  },
   "engines": {
     "node": ">=24.0.0"
   }
