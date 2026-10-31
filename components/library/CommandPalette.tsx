@@ -1,3 +1,6 @@
+/** @jsxRuntime classic */
+/** @jsx h */
+/** @jsxFrag Fragment */
 /**
  * A command palette: a search box over the page's links and actions, opened
  * with Ctrl + K (⌘ K on a Mac) or a trigger, and driven from the keyboard.

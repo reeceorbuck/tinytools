@@ -1,3 +1,6 @@
+/** @jsxRuntime classic */
+/** @jsx h */
+/** @jsxFrag Fragment */
 /**
  * Tooltips and hover cards: a note, or a card of richer content, shown beside
  * an element while the pointer rests on it or it has focus.

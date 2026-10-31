@@ -1,3 +1,6 @@
+/** @jsxRuntime classic */
+/** @jsx h */
+/** @jsxFrag Fragment */
 /**
  * Row selection: a checkbox per row, one selecting them all, a count of the
  * chosen and actions enabled while any are. Each part sits wherever the page

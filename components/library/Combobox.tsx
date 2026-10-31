@@ -1,3 +1,6 @@
+/** @jsxRuntime classic */
+/** @jsx h */
+/** @jsxFrag Fragment */
 /**
  * A combobox: a text box suggesting options as you type, from its own list or
  * from the server, choosing one with the mouse or the keyboard.

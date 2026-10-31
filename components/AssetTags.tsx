@@ -1,3 +1,6 @@
+/** @jsxRuntime classic */
+/** @jsx h */
+/** @jsxFrag Fragment */
 import { tryGetContext } from "hono/context-storage";
 import { transparent } from "../componentScope.ts";
 import {

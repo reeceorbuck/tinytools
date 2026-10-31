@@ -1,3 +1,6 @@
+/** @jsxRuntime classic */
+/** @jsx h */
+/** @jsxFrag Fragment */
 /**
  * Suspense Component for @tinytools/hono-tools
  *

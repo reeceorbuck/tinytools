@@ -1,3 +1,6 @@
+/** @jsxRuntime classic */
+/** @jsx h */
+/** @jsxFrag Fragment */
 /**
  * A carousel: slides in a row that scrolls a slide at a time, by swipe,
  * scroll, its buttons or its dots, optionally moving on by itself.

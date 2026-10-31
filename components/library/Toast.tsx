@@ -1,3 +1,6 @@
+/** @jsxRuntime classic */
+/** @jsx h */
+/** @jsxFrag Fragment */
 /**
  * Toasts: brief notices stacked in a corner of the page, dismissed after a
  * few seconds or by their ×. A `Toaster` shows them; a `Trigger` button

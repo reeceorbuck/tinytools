@@ -1,3 +1,6 @@
+/** @jsxRuntime classic */
+/** @jsx h */
+/** @jsxFrag Fragment */
 /**
  * A popover: content floating beside the button that opens it, closed by a
  * click elsewhere or Escape. As a menu, its items are moved through with the

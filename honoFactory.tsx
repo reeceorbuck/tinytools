@@ -1,3 +1,6 @@
+/** @jsxRuntime classic */
+/** @jsx h */
+/** @jsxFrag Fragment */
 /** Hono middleware and request rendering for TinyTools. */
 import { component } from "./componentScope.ts";
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory

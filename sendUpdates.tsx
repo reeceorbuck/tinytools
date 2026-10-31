@@ -1,3 +1,6 @@
+/** @jsxRuntime classic */
+/** @jsx h */
+/** @jsxFrag Fragment */
 import { renderToReadableStream } from "hono/jsx/streaming";
 import { AssetTags, NewPartial } from "./components/mod.ts";
 import { LifecycleTags } from "./components/AssetTags.tsx";

@@ -1,3 +1,6 @@
+/** @jsxRuntime classic */
+/** @jsx h */
+/** @jsxFrag Fragment */
 /**
  * Tabs: a row of tabs choosing which of their panels shows. The tab list and
  * each panel sit wherever the page puts them, so the tabs can live in a

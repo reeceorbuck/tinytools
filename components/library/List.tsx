@@ -1,3 +1,6 @@
+/** @jsxRuntime classic */
+/** @jsx h */
+/** @jsxFrag Fragment */
 /**
  * A list people add to, and optionally reorder (by dragging, or Alt + ↑ / ↓)
  * and dismiss items from.

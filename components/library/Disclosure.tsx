@@ -1,3 +1,6 @@
+/** @jsxRuntime classic */
+/** @jsx h */
+/** @jsxFrag Fragment */
 /**
  * A `<details>` section whose open state other parts can follow and set, and
  * which can remember it per viewer.

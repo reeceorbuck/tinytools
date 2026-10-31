@@ -1,3 +1,6 @@
+/** @jsxRuntime classic */
+/** @jsx h */
+/** @jsxFrag Fragment */
 /**
  * A multi-step form: one form shown a step at a time, each step checked
  * before the next, with a progress list and Back and Next buttons.

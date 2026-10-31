@@ -1,3 +1,6 @@
+/** @jsxRuntime classic */
+/** @jsx h */
+/** @jsxFrag Fragment */
 /**
  * A search box filtering what the page lists, as it is typed, with a count of
  * the matches and a message for none. Each part sits wherever the page puts

@@ -1,3 +1,6 @@
+/** @jsxRuntime classic */
+/** @jsx h */
+/** @jsxFrag Fragment */
 /**
  * A dialog opened by buttons wherever the page puts them, and a wrapper
  * asking to confirm before a submit button's form submits.

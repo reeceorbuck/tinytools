@@ -1,3 +1,6 @@
+/** @jsxRuntime classic */
+/** @jsx h */
+/** @jsxFrag Fragment */
 /**
  * A date or week input, with any of: buttons that step it, a today button and
  * the name of its day. Each part sits wherever the page puts it.
