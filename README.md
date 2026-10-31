@@ -71,12 +71,30 @@ Handler code is checked against the DOM types, so keep `dom` in `lib`.
 ### Node.js and Bun
 
 ```sh
-npm install @tinyenterprise/hono-tools
+npm install @tinyenterprise/hono-tools hono
+# Node.js only, for serving the generated assets:
+npm install @hono/node-server
 ```
 
 Import from `@tinyenterprise/hono-tools` (and its `/build`, `/components`,
-`/handlers` and `/library` subpaths) in place of `tinytools`. On Node.js, also
-install `@hono/node-server` for static file serving.
+`/handlers` and `/library` subpaths) in place of `tinytools`, and point
+`jsxImportSource` at it in `tsconfig.json`:
+
+```json
+{
+  "compilerOptions": {
+    "module": "nodenext",
+    "jsx": "react-jsx",
+    "jsxImportSource": "@tinyenterprise/hono-tools",
+    "lib": ["esnext", "dom", "dom.iterable"]
+  }
+}
+```
+
+Bun runs `.tsx` directly. Node.js (24 or later) strips types but does not
+compile JSX, so run `.tsx` with a loader such as [tsx](https://tsx.is)
+(`npx tsx server.tsx --lazy`). Handler bundles are built from the source the
+runtime reports for each function, so build and serve with the same runtime.
 
 ## Quick start
 

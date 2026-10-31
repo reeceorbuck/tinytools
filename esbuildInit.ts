@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+
 // deno-lint-ignore no-explicit-any
 type EsbuildAPI = any;
 
@@ -19,12 +21,16 @@ export async function getEsbuild(): Promise<EsbuildAPI> {
   } catch {
     // Fall back to the browser WASM build (no child_process needed)
     console.log("Native esbuild unavailable, falling back to esbuild-wasm");
+    // A literal specifier, so JSR rewrites it through the import map.
+    // @ts-ignore: tsc (the npm build) finds no types for the browser build
     const browserModule = await import("esbuild-wasm/lib/browser.min.js");
     const browser = browserModule.default ?? browserModule;
-    const wasmUrl = import.meta.resolve("esbuild-wasm/esbuild.wasm");
-    const wasmModule = await WebAssembly.compile(
-      await (await fetch(wasmUrl)).arrayBuffer(),
-    );
+    const wasmUrl = new URL(import.meta.resolve("esbuild-wasm/esbuild.wasm"));
+    // Node's fetch does not read file: URLs
+    const wasmBytes = wasmUrl.protocol === "file:"
+      ? new Uint8Array(await readFile(wasmUrl))
+      : await (await fetch(wasmUrl)).arrayBuffer();
+    const wasmModule = await WebAssembly.compile(wasmBytes);
     await browser.initialize({ wasmModule, worker: false });
     api = browser;
   }

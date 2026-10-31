@@ -4,14 +4,6 @@
   "description": "A lightweight enhancement layer for Hono web applications. Provides type-safe client functions, scoped styles, and enhanced JSX event handlers. Works with Deno, Bun, and Node.js.",
   "type": "module",
   "license": "MIT",
-  "exports": {
-    ".": "./mod.ts",
-    "./jsx-runtime": "./jsx-runtime.ts",
-    "./jsx-dev-runtime": "./jsx-dev-runtime.ts",
-    "./build": "./build.ts",
-    "./components": "./components/mod.ts",
-    "./handlers": "./handlers/mod.ts"
-  },
   "dependencies": {
     "hono": "^4.13.13",
     "esbuild": "^0.28.2",
@@ -26,36 +18,6 @@
     }
   },
   "engines": {
-    "node": ">=22.0.0"
-  },
-  "files": [
-    "mod.ts",
-    "titled.ts",
-    "urlStyleVariables.ts",
-    "jsx-runtime.ts",
-    "jsx-dev-runtime.ts",
-    "build.ts",
-    "esbuildInit.ts",
-    "handlerNamespace.ts",
-    "signals.ts",
-    "signalModules.ts",
-    "importUsage.ts",
-    "lifecycleBindings.ts",
-    "lifecycleElement.ts",
-    "lifecycleFallback.ts",
-    "clientFunctions.ts",
-    "clientTools.ts",
-    "eventAttributes.ts",
-    "scopedStyles.ts",
-    "componentScope.ts",
-    "honoFactory.tsx",
-    "sendUpdates.tsx",
-    "sse.ts",
-    "startupPerformanceSummary.ts",
-    "components/**/*.ts",
-    "components/**/*.tsx",
-    "handlers/**/*.ts",
-    "README.md",
-    "LICENSE"
-  ]
+    "node": ">=24.0.0"
+  }
 }

@@ -24,6 +24,7 @@ import {
 } from "./scopedStyles.ts";
 import { tryGetContext } from "hono/context-storage";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { pathToFileURL } from "node:url";
 import type { Context } from "hono";
 import { raw } from "hono/html";
 import type { HtmlEscapedString } from "hono/utils/html";
@@ -362,8 +363,13 @@ export function generateStyleHash(str: string): string {
   return generateHash(str, "style");
 }
 
-/** Base URL for the current working directory, used to produce portable relative paths */
-const CWD_URL = new URL(`file:///${process.cwd().replace(/\\/g, "/")}/`);
+/**
+ * Base URL for the current working directory, used to produce portable
+ * relative paths. `pathToFileURL` gives `file:///home/…` on POSIX, where
+ * prefixing `file:///` by hand would give `file:////home/…`, which no
+ * `import.meta.url` starts with.
+ */
+const CWD_URL = pathToFileURL(`${process.cwd()}/`);
 
 export function normalizeSourceFileUrl(
   sourceFileUrl: string | URL | undefined,
@@ -1448,7 +1454,7 @@ interface StylesConstructor {
  * });
  * ```
  */
-class ClientToolsClass<
+export class ClientToolsClass<
   AccumulatedFunctions = Empty,
   AccumulatedStyles = Empty,
   AccumulatedGlobalStyles = Empty,

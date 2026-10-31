@@ -47,15 +47,21 @@ type SiteRecord = {
 };
 
 const sites = new Map<string, SiteRecord>();
-const thisFile = import.meta.url;
-const clientToolsFile = new URL("./clientTools.ts", import.meta.url).href;
+/** This file and clientTools, as `.ts` (JSR) or compiled `.js` (npm). */
+const ownFiles = [
+  import.meta.url,
+  import.meta.url.replace(/importUsage(\.[jt]s)$/, "clientTools$1"),
+];
 
 /** The location of the code calling `tiny.imports()`, if the stack shows it. */
 export function importCallSite(): string | undefined {
   const lines = new Error().stack?.split("\n").slice(1) ?? [];
   for (const line of lines) {
-    if (line.includes(thisFile) || line.includes(clientToolsFile)) continue;
-    const match = /((?:file|https?|jsr):[^\s()]+:\d+:\d+)\)?\s*$/.exec(line);
+    if (ownFiles.some((file) => line.includes(file))) continue;
+    // A URL, or the plain path some runtimes and loaders (tsx) report.
+    const match =
+      /(?:\(|at )((?:(?:file|https?|jsr):[^\s()]+|[A-Za-z]:\\[^()]+|\/[^()]+):\d+:\d+)\)?\s*$/
+        .exec(line);
     if (match) return match[1];
   }
   return undefined;

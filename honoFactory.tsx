@@ -155,12 +155,10 @@ async function resolveRendererChildren(children: Child): Promise<string> {
 async function detectServeStatic(): Promise<
   NonNullable<ClientToolsOptions["serveStatic"]>
 > {
-  try {
-    return (await import("hono/deno")).serveStatic;
-  } catch { /* not available */ }
-  try {
-    return (await import("hono/bun")).serveStatic;
-  } catch { /* not available */ }
+  // Chosen by runtime, not by which import succeeds: each adapter imports
+  // anywhere, then fails on the first request outside its own runtime.
+  if ("Deno" in globalThis) return (await import("hono/deno")).serveStatic;
+  if ("Bun" in globalThis) return (await import("hono/bun")).serveStatic;
   try {
     // deno-lint-ignore no-explicit-any
     return (await import("@hono/node-server/serve-static" as any)).serveStatic;
