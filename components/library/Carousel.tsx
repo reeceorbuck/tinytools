@@ -246,9 +246,9 @@ const carouselStyles = new tiny.Styles(import.meta.url, {
     place-items: center;
     width: 2.25rem;
     height: 2.25rem;
-    border: 1px solid var(--carousel-border, oklch(87.2% 0.009 258.3));
+    border: 1px solid var(--carousel-border, light-dark(oklch(87.2% 0.009 258.3), oklch(32.8% 0.007 258.3)));
     border-radius: 50%;
-    background: oklch(100% 0 0);
+    background: light-dark(oklch(100% 0 0), oklch(20% 0 0));
     color: inherit;
     font: inherit;
     font-size: 1.25rem;
@@ -273,7 +273,7 @@ const carouselStyles = new tiny.Styles(import.meta.url, {
       padding: 0;
       border: none;
       border-radius: 999px;
-      background: var(--carousel-muted, oklch(87.2% 0.009 258.3));
+      background: var(--carousel-muted, light-dark(oklch(87.2% 0.009 258.3), oklch(32.8% 0.007 258.3)));
       cursor: pointer;
       transition: width 150ms ease;
     }
@@ -289,9 +289,9 @@ const carouselStyles = new tiny.Styles(import.meta.url, {
   `,
   play: css`
     padding: 0.25rem 0.75rem;
-    border: 1px solid var(--carousel-border, oklch(87.2% 0.009 258.3));
+    border: 1px solid var(--carousel-border, light-dark(oklch(87.2% 0.009 258.3), oklch(32.8% 0.007 258.3)));
     border-radius: 999px;
-    background: oklch(100% 0 0);
+    background: light-dark(oklch(100% 0 0), oklch(20% 0 0));
     color: inherit;
     font: inherit;
     font-size: 0.8125rem;

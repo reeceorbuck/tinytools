@@ -241,10 +241,10 @@ const tooltipStyles = new tiny.Styles(import.meta.url, {
     width: max-content;
     max-width: min(20rem, calc(100vw - 1rem));
     padding: 0.875rem 1rem;
-    border: 1px solid var(--hovercard-border, oklch(87.2% 0.009 258.3));
+    border: 1px solid var(--hovercard-border, light-dark(oklch(87.2% 0.009 258.3), oklch(32.8% 0.007 258.3)));
     border-radius: 10px;
-    background: var(--hovercard-surface, oklch(100% 0 0));
-    color: var(--hovercard-text, oklch(21% 0.032 264.7));
+    background: var(--hovercard-surface, light-dark(oklch(100% 0 0), oklch(20% 0 0)));
+    color: var(--hovercard-text, light-dark(oklch(21% 0.032 264.7), oklch(97% 0.032 264.7)));
     box-shadow: 0 8px 24px oklch(21% 0.032 264.7 / 0.16);
     transition: opacity 150ms ease, translate 150ms ease,
       display 150ms allow-discrete, overlay 150ms allow-discrete;

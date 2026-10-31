@@ -223,7 +223,9 @@ equivalent; a plain `new tiny.Hono()` installs nothing.
 | `generatedStyleHashLength`    | `5`           | Style filename hash length.                             |
 
 The renderer wraps `c.render(content, { title })` in a full document on normal
-requests. When the request carries a `source-url` header (a partial navigation)
+requests. `head` adds markup to that document's `<head>` (a meta description,
+icons, font links) and `lang` sets `<html lang>`; both apply to full pages only,
+since a partial response updates the title alone. When the request carries a `source-url` header (a partial navigation)
 it instead returns an `<update>` document: a head section that imports any new
 scripts and stylesheets and sets the title, followed by the rendered partials.
 

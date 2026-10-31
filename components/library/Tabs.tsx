@@ -115,12 +115,12 @@ const tabsStyles = new tiny.Styles(import.meta.url, {
   list: css`
     display: flex;
     gap: 0.25rem;
-    border-bottom: 1px solid var(--tabs-border, oklch(87.2% 0.009 258.3));
+    border-bottom: 1px solid var(--tabs-border, light-dark(oklch(87.2% 0.009 258.3), oklch(32.8% 0.007 258.3)));
 
     &[aria-orientation="vertical"] {
       flex-direction: column;
       border-bottom: none;
-      border-right: 1px solid var(--tabs-border, oklch(87.2% 0.009 258.3));
+      border-right: 1px solid var(--tabs-border, light-dark(oklch(87.2% 0.009 258.3), oklch(32.8% 0.007 258.3)));
     }
   `,
   tab: css`
@@ -129,17 +129,17 @@ const tabsStyles = new tiny.Styles(import.meta.url, {
     border-bottom: 2px solid transparent;
     margin-bottom: -1px;
     background: none;
-    color: var(--tabs-muted, oklch(44.6% 0.026 256.8));
+    color: var(--tabs-muted, light-dark(oklch(44.6% 0.026 256.8), oklch(75.4% 0.026 256.8)));
     font: inherit;
     font-weight: 500;
     cursor: pointer;
 
     &:hover {
-      color: var(--tabs-text, oklch(21% 0.032 264.7));
+      color: var(--tabs-text, light-dark(oklch(21% 0.032 264.7), oklch(97% 0.032 264.7)));
     }
     &[aria-selected="true"] {
       border-bottom-color: var(--tabs-accent, oklch(50.8% 0.105 165.6));
-      color: var(--tabs-text, oklch(21% 0.032 264.7));
+      color: var(--tabs-text, light-dark(oklch(21% 0.032 264.7), oklch(97% 0.032 264.7)));
     }
     &:focus-visible {
       outline: 2px solid var(--tabs-accent, oklch(50.8% 0.105 165.6));

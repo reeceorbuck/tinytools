@@ -280,12 +280,12 @@ const comboboxStyles = new tiny.Styles(import.meta.url, {
       box-sizing: border-box;
       width: 100%;
       padding: 0.45rem 2rem 0.45rem 0.6rem;
-      border: 1px solid var(--combobox-border, oklch(87.2% 0.009 258.3));
+      border: 1px solid var(--combobox-border, light-dark(oklch(87.2% 0.009 258.3), oklch(32.8% 0.007 258.3)));
       border-radius: 6px;
-      background: var(--combobox-surface, oklch(100% 0 0))
+      background: var(--combobox-surface, light-dark(oklch(100% 0 0), oklch(20% 0 0)))
         url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5 6 7.5 9 4.5' fill='none' stroke='%236b7280' stroke-width='1.5'/%3E%3C/svg%3E")
         no-repeat right 0.6rem center;
-      color: var(--combobox-text, oklch(21% 0.032 264.7));
+      color: var(--combobox-text, light-dark(oklch(21% 0.032 264.7), oklch(97% 0.032 264.7)));
       font: inherit;
     }
     > input:focus-visible {
@@ -306,10 +306,10 @@ const comboboxStyles = new tiny.Styles(import.meta.url, {
       margin: 0;
       padding: 0.25rem;
       overflow-y: auto;
-      border: 1px solid var(--combobox-border, oklch(87.2% 0.009 258.3));
+      border: 1px solid var(--combobox-border, light-dark(oklch(87.2% 0.009 258.3), oklch(32.8% 0.007 258.3)));
       border-radius: 8px;
-      background: var(--combobox-surface, oklch(100% 0 0));
-      color: var(--combobox-text, oklch(21% 0.032 264.7));
+      background: var(--combobox-surface, light-dark(oklch(100% 0 0), oklch(20% 0 0)));
+      color: var(--combobox-text, light-dark(oklch(21% 0.032 264.7), oklch(97% 0.032 264.7)));
       box-shadow: 0 8px 24px oklch(21% 0.032 264.7 / 0.16);
     }
     [role="option"] {
@@ -321,7 +321,7 @@ const comboboxStyles = new tiny.Styles(import.meta.url, {
       cursor: pointer;
     }
     [role="option"][data-active] {
-      background: var(--combobox-active, oklch(97.9% 0.021 166.1));
+      background: var(--combobox-active, light-dark(oklch(97.9% 0.021 166.1), oklch(22.1% 0.016 166.1)));
     }
     [role="option"][aria-selected="true"] {
       font-weight: 600;
@@ -336,7 +336,7 @@ const comboboxStyles = new tiny.Styles(import.meta.url, {
     }
     [role="option"] small,
     [data-empty] {
-      color: var(--combobox-muted, oklch(55.1% 0.023 264.4));
+      color: var(--combobox-muted, light-dark(oklch(55.1% 0.023 264.4), oklch(64.9% 0.023 264.4)));
     }
     [data-empty] {
       margin: 0;

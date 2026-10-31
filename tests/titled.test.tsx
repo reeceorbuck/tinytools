@@ -57,3 +57,26 @@ Deno.test("titled - explicit render title takes precedence", async () => {
   assertEquals(response.status, 200);
   assertStringIncludes(await response.text(), "<title>Dynamic title</title>");
 });
+
+Deno.test("render head and lang - full pages only", async () => {
+  const app = new Hono()
+    .use(...tiny.middleware.core())
+    .use(tiny.middleware.layout(({ children }) => <body>{children}</body>))
+    .get("/", (c) =>
+      // deno-lint-ignore no-explicit-any
+      (c.render as any)(<p>Content</p>, {
+        title: "Home",
+        lang: "en-AU",
+        head: <meta name="description" content="A page" />,
+      }));
+
+  const full = await (await app.request("/")).text();
+  assertStringIncludes(full, '<html lang="en-AU"');
+  assertStringIncludes(full, '<meta name="description" content="A page"/>');
+
+  const partial = await (await app.request(
+    new Request("http://localhost/", { headers: { "source-url": "/other" } }),
+  )).text();
+  assertStringIncludes(partial, "<title>Home</title>");
+  assertEquals(partial.includes('name="description"'), false);
+});

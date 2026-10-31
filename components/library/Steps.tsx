@@ -258,13 +258,13 @@ const stepsStyles = new tiny.Styles(import.meta.url, {
       flex: 1;
       align-items: center;
       gap: 0.5rem;
-      color: var(--steps-muted, oklch(55.1% 0.023 264.4));
+      color: var(--steps-muted, light-dark(oklch(55.1% 0.023 264.4), oklch(64.9% 0.023 264.4)));
     }
     > li:not(:last-child)::after {
       content: "";
       flex: 1;
       height: 2px;
-      background: var(--steps-border, oklch(87.2% 0.009 258.3));
+      background: var(--steps-border, light-dark(oklch(87.2% 0.009 258.3), oklch(32.8% 0.007 258.3)));
     }
     > li[data-state="done"]::after {
       background: var(--steps-accent, oklch(50.8% 0.105 165.6));
@@ -291,21 +291,21 @@ const stepsStyles = new tiny.Styles(import.meta.url, {
       place-items: center;
       width: 1.75rem;
       height: 1.75rem;
-      border: 2px solid var(--steps-border, oklch(87.2% 0.009 258.3));
+      border: 2px solid var(--steps-border, light-dark(oklch(87.2% 0.009 258.3), oklch(32.8% 0.007 258.3)));
       border-radius: 50%;
       font-size: 0.8125rem;
       font-weight: 600;
     }
     [data-state="current"] {
-      color: var(--steps-text, oklch(21% 0.032 264.7));
+      color: var(--steps-text, light-dark(oklch(21% 0.032 264.7), oklch(97% 0.032 264.7)));
       font-weight: 600;
     }
     [data-state="current"] span {
       border-color: var(--steps-accent, oklch(50.8% 0.105 165.6));
-      color: var(--steps-accent, oklch(50.8% 0.105 165.6));
+      color: var(--steps-accent, light-dark(oklch(50.8% 0.105 165.6), oklch(75% 0.105 165.6)));
     }
     [data-state="done"] {
-      color: var(--steps-text, oklch(21% 0.032 264.7));
+      color: var(--steps-text, light-dark(oklch(21% 0.032 264.7), oklch(97% 0.032 264.7)));
     }
     [data-state="done"] span {
       border-color: var(--steps-accent, oklch(50.8% 0.105 165.6));

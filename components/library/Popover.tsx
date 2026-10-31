@@ -131,10 +131,10 @@ const popoverStyles = new tiny.Styles(import.meta.url, {
     min-width: 10rem;
     max-width: min(24rem, calc(100vw - 1rem));
     padding: 0.75rem;
-    border: 1px solid var(--popover-border, oklch(87.2% 0.009 258.3));
+    border: 1px solid var(--popover-border, light-dark(oklch(87.2% 0.009 258.3), oklch(32.8% 0.007 258.3)));
     border-radius: 8px;
-    background: var(--popover-surface, oklch(100% 0 0));
-    color: var(--popover-text, oklch(21% 0.032 264.7));
+    background: var(--popover-surface, light-dark(oklch(100% 0 0), oklch(20% 0 0)));
+    color: var(--popover-text, light-dark(oklch(21% 0.032 264.7), oklch(97% 0.032 264.7)));
     box-shadow: 0 8px 24px oklch(21% 0.032 264.7 / 0.16);
     transition: opacity 120ms ease, display 120ms allow-discrete,
       overlay 120ms allow-discrete;
@@ -203,17 +203,17 @@ const popoverStyles = new tiny.Styles(import.meta.url, {
     &:hover,
     &:focus-visible {
       outline: none;
-      background: var(--popover-accent, oklch(97.9% 0.021 166.1));
+      background: var(--popover-accent, light-dark(oklch(97.9% 0.021 166.1), oklch(22.1% 0.016 166.1)));
     }
     &[data-variant="danger"] {
-      color: oklch(50.5% 0.19 27.5);
+      color: light-dark(oklch(50.5% 0.19 27.5), oklch(75% 0.19 27.5));
     }
   `,
   separator: css`
     height: 1px;
     margin: 0.25rem 0;
     border: none;
-    background: var(--popover-border, oklch(87.2% 0.009 258.3));
+    background: var(--popover-border, light-dark(oklch(87.2% 0.009 258.3), oklch(32.8% 0.007 258.3)));
   `,
   // The triggers need the page's script, so they stay hidden without it.
   scripted: css`

@@ -353,8 +353,13 @@ export class ScopedStyleImpl {
       );
     }
 
-    const resolvedFilename = cachedFilename ??
-      `${styleName}_${generateStyleHash(hashInput)}`;
+    // Outside a trusted build the content decides, like a handler bundle's
+    // hash: css interpolated from another module changes it without
+    // touching this source file's mtime. The cached name is kept only so
+    // its stale bundle can be cleaned up.
+    const resolvedFilename = cache.trustCache && cachedFilename
+      ? cachedFilename
+      : `${styleName}_${generateStyleHash(hashInput)}`;
 
     if (normalizedSourceFileUrl) {
       cache.files[normalizedSourceFileUrl] ??= emptySourceFileCacheEntry();

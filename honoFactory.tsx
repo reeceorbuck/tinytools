@@ -84,18 +84,21 @@ function createRouteLayout(
   renderOnPartial: boolean,
 ): MiddlewareHandler {
   // deno-lint-ignore no-explicit-any
-  return jsxRenderer(async ({ children, Layout, title }: any, context) => {
-    const partialNavigation = !!context.req.header("source-url");
-    if (!partialNavigation) context.set(ROUTE_LAYOUT_APPLIED_KEY, true);
-    await children;
-    return (
-      <Layout title={title}>
-        {partialNavigation && !renderOnPartial
-          ? children
-          : LayoutComponent({ children }, context)}
-      </Layout>
-    );
-  }, { stream: true });
+  return jsxRenderer(
+    async ({ children, Layout, title, head, lang }: any, context) => {
+      const partialNavigation = !!context.req.header("source-url");
+      if (!partialNavigation) context.set(ROUTE_LAYOUT_APPLIED_KEY, true);
+      await children;
+      return (
+        <Layout title={title} head={head} lang={lang}>
+          {partialNavigation && !renderOnPartial
+            ? children
+            : LayoutComponent({ children }, context)}
+        </Layout>
+      );
+    },
+    { stream: true },
+  );
 }
 
 export type ClientToolsOptions = {
@@ -305,7 +308,7 @@ function createCoreMiddleware(
       await next();
     },
     // deno-lint-ignore no-explicit-any
-    jsxRenderer(async ({ children, title }: any, context) => {
+    jsxRenderer(async ({ children, title, head, lang }: any, context) => {
       title ??= getContextTitle(context);
       const routeLayoutApplied = context.get(ROUTE_LAYOUT_APPLIED_KEY) === true;
       const { fn } = await imports(headHandler);
@@ -362,13 +365,14 @@ function createCoreMiddleware(
       // Content streamed after the head needs no second copy of the runtime.
       if (lifecycleTags.length) context.set(LIFECYCLE_RUNTIME_SENT_KEY, true);
       return (
-        <html>
+        <html lang={lang}>
           <head>
             {title !== undefined && <title>{title}</title>}
             <meta
               name="viewport"
               content="width=device-width, initial-scale=1"
             />
+            {head}
             <AssetTags
               accessedHandlerFiles={handlerFiles}
               accessedStyleFiles={styleFiles}

@@ -179,10 +179,10 @@ const paletteStyles = new tiny.Styles(import.meta.url, {
     max-height: min(28rem, calc(100vh - 6rem));
     margin: 12vh auto auto;
     padding: 0;
-    border: 1px solid var(--palette-border, oklch(87.2% 0.009 258.3));
+    border: 1px solid var(--palette-border, light-dark(oklch(87.2% 0.009 258.3), oklch(32.8% 0.007 258.3)));
     border-radius: 10px;
-    background: var(--palette-surface, oklch(100% 0 0));
-    color: var(--palette-text, oklch(21% 0.032 264.7));
+    background: var(--palette-surface, light-dark(oklch(100% 0 0), oklch(20% 0 0)));
+    color: var(--palette-text, light-dark(oklch(21% 0.032 264.7), oklch(97% 0.032 264.7)));
     box-shadow: 0 16px 40px oklch(21% 0.032 264.7 / 0.25);
     overflow: hidden;
 
@@ -196,7 +196,7 @@ const paletteStyles = new tiny.Styles(import.meta.url, {
     > input {
       padding: 0.875rem 1rem;
       border: none;
-      border-bottom: 1px solid var(--palette-border, oklch(87.2% 0.009 258.3));
+      border-bottom: 1px solid var(--palette-border, light-dark(oklch(87.2% 0.009 258.3), oklch(32.8% 0.007 258.3)));
       background: none;
       color: inherit;
       font: inherit;
@@ -215,14 +215,14 @@ const paletteStyles = new tiny.Styles(import.meta.url, {
     }
     [data-heading] {
       padding: 0.375rem 0.625rem 0.25rem;
-      color: var(--palette-muted, oklch(55.1% 0.023 264.4));
+      color: var(--palette-muted, light-dark(oklch(55.1% 0.023 264.4), oklch(64.9% 0.023 264.4)));
       font-size: 0.75rem;
       font-weight: 600;
     }
     [data-empty] {
       margin: 0;
       padding: 1.5rem;
-      color: var(--palette-muted, oklch(55.1% 0.023 264.4));
+      color: var(--palette-muted, light-dark(oklch(55.1% 0.023 264.4), oklch(64.9% 0.023 264.4)));
       text-align: center;
     }
     [hidden] {
@@ -249,12 +249,12 @@ const paletteStyles = new tiny.Styles(import.meta.url, {
       display: none;
     }
     &[aria-selected="true"] {
-      background: var(--palette-active, oklch(97.9% 0.021 166.1));
+      background: var(--palette-active, light-dark(oklch(97.9% 0.021 166.1), oklch(22.1% 0.016 166.1)));
     }
     > kbd,
     > small {
       margin-left: auto;
-      color: var(--palette-muted, oklch(55.1% 0.023 264.4));
+      color: var(--palette-muted, light-dark(oklch(55.1% 0.023 264.4), oklch(64.9% 0.023 264.4)));
       font-size: 0.75rem;
     }
   `,
@@ -264,7 +264,7 @@ const paletteStyles = new tiny.Styles(import.meta.url, {
     gap: 1.5rem;
 
     kbd {
-      color: var(--palette-muted, oklch(55.1% 0.023 264.4));
+      color: var(--palette-muted, light-dark(oklch(55.1% 0.023 264.4), oklch(64.9% 0.023 264.4)));
       font-size: 0.75rem;
     }
     @media (scripting: none) {

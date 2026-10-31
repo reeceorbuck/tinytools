@@ -248,6 +248,58 @@ Deno.test({
 
 Deno.test({
   name:
+    "style bundle hash - css interpolated from another module rebuilds the bundle without touching the source",
+  async fn() {
+    await cleanupTestDirs();
+    fullReset();
+
+    const sourceUrl = await writeFakeSource("sharedCss", "// v1");
+
+    // ---- Process load 1: a style interpolating a shared css constant ----
+    const shared1 = css`
+      color: red;
+    `;
+    const tools1 = new Styles(sourceUrl, {
+      foo: css`
+        display: flex;
+        ${shared1};
+      `,
+    });
+    const bundle1 = await buildAndGetBundleFilename(tools1, "foo");
+
+    // ---- Process load 2: only the shared module changed, so the source's
+    // mtime is the same ----
+    simulateProcessRestart();
+    const shared2 = css`
+      color: blue;
+    `;
+    const tools2 = new Styles(sourceUrl, {
+      foo: css`
+        display: flex;
+        ${shared2};
+      `,
+    });
+    const bundle2 = await buildAndGetBundleFilename(tools2, "foo");
+
+    assertNotEquals(
+      bundle2,
+      bundle1,
+      "Bundle filename must change when interpolated css from another module changes",
+    );
+    const bundleCss = await Deno.readTextFile(`./public/styles/${bundle2}.css`);
+    assert(
+      bundleCss.includes("color: blue"),
+      "The rebuilt bundle must carry the new interpolated css",
+    );
+
+    await cleanupTestDirs();
+  },
+  sanitizeOps: false,
+  sanitizeResources: false,
+});
+
+Deno.test({
+  name:
     "style bundle hash - adding a new style key across process restart produces a new bundle filename",
   async fn() {
     await cleanupTestDirs();

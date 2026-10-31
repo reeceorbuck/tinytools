@@ -1787,7 +1787,7 @@ Deno.test({
 
 Deno.test({
   name:
-    "buildScriptFiles - cache with mismatched hash algorithm version is discarded",
+    "buildScriptFiles - only trusted builds take a cached style filename without hashing",
   async fn() {
     await cleanupTestDirs();
     resetRegistries();
@@ -1803,20 +1803,37 @@ Deno.test({
       },
     };
 
-    // With the cache populated, the constructor trusts the cached filename
-    const tools = new Styles(fakeUrl, {
+    // A trusted (production) build takes the cached filename without
+    // hashing. Stale algorithm caches are wiped by the hashAlgorithm version
+    // check when the cache is loaded from disk.
+    (cache as { trustCache: boolean }).trustCache = true;
+    try {
+      const trusted = new Styles(fakeUrl, {
+        panel: css`
+          color: hotpink;
+        `,
+      });
+      assertEquals(
+        trusted.generatedStyleNames.get("panel"),
+        "panel_deadbe",
+        "A trusted build should take the cached filename",
+      );
+    } finally {
+      (cache as { trustCache: boolean }).trustCache = false;
+    }
+
+    // Lazy builds hash the content, since css interpolated from another
+    // module can change without the source file's mtime.
+    cache.resetTransientState();
+    const lazy = new Styles(fakeUrl, {
       panel: css`
         color: hotpink;
       `,
     });
-
-    // The constructor trusts the cache on a warm start — this is expected
-    // for startup performance. Stale algorithm caches are wiped by the
-    // hashAlgorithm version check when the cache is loaded from disk.
-    assertEquals(
-      tools.generatedStyleNames.get("panel"),
+    assertNotEquals(
+      lazy.generatedStyleNames.get("panel"),
       "panel_deadbe",
-      "Constructor should trust the cache when it exists (lazy hashing)",
+      "A lazy build should not take a cached filename the content doesn't match",
     );
 
     await cleanupTestDirs();

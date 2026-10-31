@@ -156,10 +156,10 @@ const dialogStyles = new tiny.Styles(import.meta.url, {
   panel: css`
     max-width: min(32rem, calc(100vw - 2rem));
     padding: 1.25rem;
-    border: 1px solid var(--dialog-border, oklch(87.2% 0.009 258.3));
+    border: 1px solid var(--dialog-border, light-dark(oklch(87.2% 0.009 258.3), oklch(32.8% 0.007 258.3)));
     border-radius: 8px;
-    background: var(--dialog-surface, oklch(100% 0 0));
-    color: var(--dialog-text, oklch(21% 0.032 264.7));
+    background: var(--dialog-surface, light-dark(oklch(100% 0 0), oklch(20% 0 0)));
+    color: var(--dialog-text, light-dark(oklch(21% 0.032 264.7), oklch(97% 0.032 264.7)));
     box-shadow: 0 12px 32px oklch(21% 0.032 264.7 / 0.2);
 
     &::backdrop {

@@ -177,6 +177,8 @@ export const DatePickerSignalComponent = new tiny.SignalComponent(
     return {
       DateInput: instanced((props: {
         name: string;
+        /** For a `<label for>`. */
+        id?: string;
         value?: string;
         /** A `week` input steps a week at a time. */
         type?: "date" | "week";
@@ -189,6 +191,7 @@ export const DatePickerSignalComponent = new tiny.SignalComponent(
       }) => (
         <input
           type={props.type ?? "date"}
+          id={props.id}
           name={props.name}
           value={props.value ?? ""}
           data-skip-weekends={props.skipWeekends || undefined}
