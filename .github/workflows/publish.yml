@@ -20,6 +20,7 @@ jobs:
         with:
           deno-version: v2.x
       # package.json makes Deno resolve npm packages, and the types for
-      # node: imports (@types/node), from node_modules.
-      - run: deno install
+      # node: imports (@types/node), from node_modules. No lockfile, as an
+      # untracked deno.lock would make the tree dirty and stop the publish.
+      - run: deno install --no-lock
       - run: deno publish
