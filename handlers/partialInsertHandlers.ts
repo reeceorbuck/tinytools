@@ -6,9 +6,31 @@ import { Handlers } from "../clientTools.ts";
  * missing target is skipped silently. `updateRoot` is set when the partial is applied to
  * cached content rather than the live document.
  */
-type PartialTemplate = HTMLTemplateElement & { updateRoot?: DocumentFragment };
+type PartialTemplate = HTMLTemplateElement & {
+  updateRoot?: DocumentFragment;
+};
 
-export const partialInsertHandlers = new Handlers(import.meta.url, {
+/**
+ * Insertion handlers that apply a partial's template to the element whose id
+ * is in its `for-partial-id`, then remove the template. Pass one as the
+ * `onLoad` of a `NewPartial`; `PartialReplace` and `PartialDelete` pick theirs
+ * for you.
+ */
+export const partialInsertHandlers: Handlers<{
+  /** Replaces the target's children with the template's content. */
+  partialReplace(this: PartialTemplate): void;
+  /** Replaces the target itself with the template's content. */
+  partialBlast(this: PartialTemplate): void;
+  /**
+   * Merges each child of the template into the target, matching an existing
+   * child by `id` (or `match-id`) and then by `group-name`. The `existing`
+   * and `group` attributes say what to do with a match, `new` what to do
+   * with an unmatched child, and `insert-before` where to place it.
+   */
+  partialMergeContent(this: PartialTemplate): void;
+  /** Removes the target from the page. */
+  partialDelete(this: PartialTemplate): void;
+}> = new Handlers(import.meta.url, {
   partialReplace: function (this: PartialTemplate) {
     const partialId = this.getAttribute("for-partial-id");
     if (!partialId) {

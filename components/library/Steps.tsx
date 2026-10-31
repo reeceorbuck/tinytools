@@ -36,12 +36,52 @@
 
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
 import { h } from "../../jsx-runtime.ts";
-import { tiny } from "../../mod.ts";
+import {
+  type InstancedComponent,
+  type InstanceSignals,
+  type ReadonlySignal,
+  type Signal,
+  type SignalComponent,
+  tiny,
+} from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
 import { signalTools } from "../../handlers/signals.ts";
 
 /** A step, as the progress list and buttons know it. */
 type StepEntry = { id: string; title: string };
+
+/** The signals the steps' parts expose. */
+type StepsExposed = InstanceSignals<{
+  current: Signal<string>;
+  index: ReadonlySignal<number>;
+}>;
+
+/** A step's props. */
+type StepProps = {
+  /** Its heading, also its name in the progress list. */
+  title: string;
+  /** Shows it first, rather than the first step. */
+  current?: boolean;
+  /** Its id, for the page's own use. */
+  id?: string;
+  children?: unknown;
+};
+
+/** The progress list's props. */
+type ProgressProps = { label?: string };
+
+/** `Back` and `Next`'s props: their label, if not the default. */
+type MoveProps = { children?: unknown };
+
+/** The submit button's props. */
+type SubmitProps = {
+  name?: string;
+  value?: string;
+  /** The form it sends, if it sits outside it. */
+  form?: string;
+  formaction?: string;
+  children?: unknown;
+};
 
 /**
  * Per instance: the steps in page order, and the id of the one showing.
@@ -338,7 +378,14 @@ const stepsStyles = new tiny.Styles(import.meta.url, {
  * move through them and send the form. All expose `signal.current`, the
  * showing step's id, and `signal.index`, its place.
  */
-export const StepsSignalComponent = new tiny.SignalComponent(
+export const StepsSignalComponent: SignalComponent<{
+  Step: InstancedComponent<StepsExposed, StepProps>;
+  Progress: InstancedComponent<StepsExposed, ProgressProps>;
+  Status: InstancedComponent<StepsExposed, Record<never, never>>;
+  Back: InstancedComponent<StepsExposed, MoveProps>;
+  Next: InstancedComponent<StepsExposed, MoveProps>;
+  Submit: InstancedComponent<StepsExposed, SubmitProps>;
+}> = new tiny.SignalComponent(
   async ({ instanced }) => {
     const { fn, signal, styled } = await tiny.imports(
       stepsSignals,
@@ -350,15 +397,7 @@ export const StepsSignalComponent = new tiny.SignalComponent(
     // these signals, so each catches up with `fireSelfSignal`.
     const exposed = [signal.current, signal.index];
     return {
-      Step: instanced((props: {
-        /** Its heading, also its name in the progress list. */
-        title: string;
-        /** Shows it first, rather than the first step. */
-        current?: boolean;
-        /** Its id, for the page's own use. */
-        id?: string;
-        children?: unknown;
-      }) => (
+      Step: instanced((props: StepProps) => (
         <fieldset
           id={props.id}
           class={styled.step}
@@ -374,7 +413,7 @@ export const StepsSignalComponent = new tiny.SignalComponent(
           {props.children}
         </fieldset>
       ), exposed),
-      Progress: instanced((props: { label?: string }) => (
+      Progress: instanced((props: ProgressProps) => (
         <ol
           class={styled.progress}
           aria-label={props.label ?? "Progress"}
@@ -392,7 +431,7 @@ export const StepsSignalComponent = new tiny.SignalComponent(
         ),
         exposed,
       ),
-      Back: instanced((props: { children?: unknown }) => (
+      Back: instanced((props: MoveProps) => (
         <button
           type="button"
           class={styled.scripted}
@@ -403,7 +442,7 @@ export const StepsSignalComponent = new tiny.SignalComponent(
           {props.children ?? "Back"}
         </button>
       ), exposed),
-      Next: instanced((props: { children?: unknown }) => (
+      Next: instanced((props: MoveProps) => (
         <button
           type="button"
           class={styled.scripted}
@@ -414,14 +453,7 @@ export const StepsSignalComponent = new tiny.SignalComponent(
           {props.children ?? "Next"}
         </button>
       ), exposed),
-      Submit: instanced((props: {
-        name?: string;
-        value?: string;
-        /** The form it sends, if it sits outside it. */
-        form?: string;
-        formaction?: string;
-        children?: unknown;
-      }) => (
+      Submit: instanced((props: SubmitProps) => (
         <button
           type="submit"
           class={styled.submit}

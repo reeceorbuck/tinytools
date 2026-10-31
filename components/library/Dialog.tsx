@@ -41,8 +41,14 @@
  */
 
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
-import { h } from "../../jsx-runtime.ts";
-import { tiny } from "../../mod.ts";
+import { h, type JSX } from "../../jsx-runtime.ts";
+import {
+  type InstancedComponent,
+  type InstanceSignals,
+  type Signal,
+  type SignalComponent,
+  tiny,
+} from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
 import { transparent } from "../../componentScope.ts";
 import type { SignalEvent } from "../../handlers/signals.ts";
@@ -53,6 +59,38 @@ const dialogSignals = new tiny.Signals(
   ({ Signal, perInstance }) =>
     perInstance(() => ({ open: new Signal<boolean>(false) })),
 );
+
+/** The signals the dialog's parts expose. */
+type DialogExposed = InstanceSignals<{ open: Signal<boolean> }>;
+
+/** Props for the dialog's `Open` and `Close` buttons. */
+type DialogButtonProps = { children?: unknown; label?: string };
+
+/** Props for the dialog's `Panel`. */
+type PanelProps = {
+  /** Names the dialog to assistive technology. */
+  label?: string;
+  /** Whether the page stays usable while it is open. Default false. */
+  modeless?: boolean;
+  /** Opens it as the page loads. */
+  open?: boolean;
+  /** Its id, for the page's own `commandfor` buttons to open it. */
+  id?: string;
+  /** Puts its content back as rendered whenever it closes. */
+  restoreOnClose?: boolean;
+  children?: unknown;
+};
+
+/** Props for `Confirm`. */
+type ConfirmProps = {
+  /** The question asked. */
+  message: string;
+  /** The yes button's text; by default "Confirm". */
+  confirmLabel?: string;
+  cancelLabel?: string;
+  /** The submit button to ask before, with the page's own attributes. */
+  children?: unknown;
+};
 
 /** A panel keeping its rendered content, to put back when it closes. */
 type RestorableDialog = HTMLDialogElement & { initialContent?: Node[] };
@@ -202,7 +240,12 @@ const dialogStyles = new tiny.Styles(import.meta.url, {
  * true. `Confirm` stands alone: it wraps a submit button, and its own dialog
  * asks before the button's form submits, in place of `confirm()`.
  */
-export const DialogSignalComponent = new tiny.SignalComponent(
+export const DialogSignalComponent: SignalComponent<{
+  Open: InstancedComponent<DialogExposed, DialogButtonProps>;
+  Panel: InstancedComponent<DialogExposed, PanelProps>;
+  Close: InstancedComponent<DialogExposed, DialogButtonProps>;
+  Confirm: (props: ConfirmProps) => JSX.Element;
+}> = new tiny.SignalComponent(
   async ({ instanced }) => {
     const { fn, signal, styled } = await tiny.imports(
       dialogSignals,
@@ -210,7 +253,7 @@ export const DialogSignalComponent = new tiny.SignalComponent(
       dialogStyles,
     );
     return {
-      Open: instanced((props: { children?: unknown; label?: string }) => (
+      Open: instanced((props: DialogButtonProps) => (
         <button
           type="button"
           class={styled.scripted}
@@ -221,19 +264,7 @@ export const DialogSignalComponent = new tiny.SignalComponent(
           {props.children ?? "Open"}
         </button>
       ), [signal.open]),
-      Panel: instanced((props: {
-        /** Names the dialog to assistive technology. */
-        label?: string;
-        /** Whether the page stays usable while it is open. Default false. */
-        modeless?: boolean;
-        /** Opens it as the page loads. */
-        open?: boolean;
-        /** Its id, for the page's own `commandfor` buttons to open it. */
-        id?: string;
-        /** Puts its content back as rendered whenever it closes. */
-        restoreOnClose?: boolean;
-        children?: unknown;
-      }) => (
+      Panel: instanced((props: PanelProps) => (
         <dialog
           id={props.id}
           class={styled.panel}
@@ -252,7 +283,7 @@ export const DialogSignalComponent = new tiny.SignalComponent(
         </dialog>
       ), [signal.open]),
       Close: instanced(
-        (props: { children?: unknown; label?: string }) => (
+        (props: DialogButtonProps) => (
           <button
             type="button"
             class={props.children ? undefined : styled.closeButton}
@@ -265,15 +296,7 @@ export const DialogSignalComponent = new tiny.SignalComponent(
         ),
         [signal.open],
       ),
-      Confirm: transparent((props: {
-        /** The question asked. */
-        message: string;
-        /** The yes button's text; by default "Confirm". */
-        confirmLabel?: string;
-        cancelLabel?: string;
-        /** The submit button to ask before, with the page's own attributes. */
-        children?: unknown;
-      }) => (
+      Confirm: transparent((props: ConfirmProps) => (
         <tiny-confirm onClick={fn.askToConfirm}>
           {props.children}
           <dialog

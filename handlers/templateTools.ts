@@ -56,13 +56,16 @@ async function cloneTemplate(
 }
 
 /** Cloning `tiny.Templates` entries in the browser, and `BuildFromTemplate`'s handler. */
-export const templateTools = new Handlers(import.meta.url, {
-  cloneTemplate,
+export const templateTools: Handlers<{
+  cloneTemplate: typeof cloneTemplate;
   /**
    * Replaces this `<template>` with the clone its `data-template` names,
    * filled from the template's own content. Bound to `onParsed`, so it runs
    * once the content has been parsed and never again.
    */
+  buildFromTemplate(this: HTMLTemplateElement): Promise<void>;
+}> = new Handlers(import.meta.url, {
+  cloneTemplate,
   buildFromTemplate: async function (this: HTMLTemplateElement) {
     const built = await cloneTemplate(
       this.dataset.template ?? "",

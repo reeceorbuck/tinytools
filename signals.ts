@@ -16,7 +16,9 @@ export type SignalValue =
   | null
   | readonly string[];
 
+/** A signal that can be read and subscribed to, but not written. */
 export interface ReadonlySignal<Value = SignalValue> {
+  /** The current value; reading it inside a computed makes it a dependency. */
   readonly value: Value;
   /**
    * Optional name, used by handlers such as `setCssProperty`. Set in the
@@ -33,8 +35,11 @@ export interface ReadonlySignal<Value = SignalValue> {
 /** Type-only marker telling writable signals apart from computed ones. */
 declare const writableSignal: unique symbol;
 
+/** A writable signal: setting `value` notifies its subscribers. */
 export interface Signal<Value = SignalValue> extends ReadonlySignal<Value> {
+  /** The current value; setting a different one notifies subscribers. */
   value: Value;
+  /** Type-only: marks the signal as writable. */
   readonly [writableSignal]?: true;
 }
 
@@ -51,6 +56,7 @@ declare const triggerSignal: unique symbol;
 export interface Trigger extends ReadonlySignal<unknown> {
   /** Notifies subscribers and dependent computeds. */
   fire(): void;
+  /** Type-only: marks the signal as a trigger. */
   readonly [triggerSignal]?: true;
 }
 
@@ -72,6 +78,7 @@ export interface InstanceSignal<
   Instance extends ReadonlySignal<Value> = Signal<Value>,
   Level extends string = never,
 > {
+  /** Optional name, as on the signals of each instance. */
   name?: string;
   /** The signal of the instance enclosing `element`. */
   forInstance(element: Element): Instance;
@@ -92,6 +99,7 @@ export interface InstanceSignal<
   subscribe(target: Element): void;
   /** Ends `target`'s subscription to the instance enclosing it. */
   unsubscribe(target: Element): void;
+  /** Type-only: the named `perInstance` level this signal belongs to. */
   readonly [instanceLevel]?: Level;
 }
 
@@ -148,7 +156,9 @@ export type InstanceLevels<Definitions> = {
     : never;
 }[keyof Definitions];
 
+/** The toolkit a `tiny.Signals` factory receives to define its signals. */
 export interface SignalTools {
+  /** A writable signal holding a value, starting at `initialValue`. */
   Signal: {
     /**
      * The value type is inferred widened (`new Signal(0)` is a
@@ -203,6 +213,7 @@ export interface SignalTools {
   signalsFrom<Values extends Record<string, SignalValue>>(
     initialValues: Values,
   ): { [Key in keyof Values]: Signal<Values[Key]> };
+  /** Defines signals that every instance root gets its own copy of. */
   perInstance: {
     /**
      * Defines signals that every instance root gets its own copy of. `define`
@@ -225,6 +236,7 @@ export interface SignalTools {
   };
 }
 
+/** What a Signals factory returns: its signals and per-instance signals. */
 export type SignalDefinitions = Record<
   string,
   | ReadonlySignal<unknown>
@@ -251,6 +263,10 @@ export type SignalConstant =
  */
 export type SignalConstants = { readonly [name: string]: SignalConstant };
 
+/**
+ * A collection's signals as it exports them: one accessor per signal, a
+ * function returning that signal, so each can be referenced like any handler.
+ */
 export type SignalAccessors<Definitions extends SignalDefinitions> = {
   [Name in keyof Definitions]: (
     this: unknown,

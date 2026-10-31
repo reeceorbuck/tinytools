@@ -37,7 +37,13 @@
 
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
 import { h } from "../../jsx-runtime.ts";
-import { tiny } from "../../mod.ts";
+import {
+  type InstancedComponent,
+  type InstanceSignals,
+  type Signal,
+  type SignalComponent,
+  tiny,
+} from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
 import type { LifecycleElement } from "../../lifecycleElement.ts";
 
@@ -287,12 +293,25 @@ type Delays = {
   children?: unknown;
 };
 
+/** The signals the tooltip's parts expose. */
+type TooltipExposed = InstanceSignals<{ open: Signal<boolean> }>;
+
+/** The trigger's props: the element the content belongs to. */
+type TriggerProps = { children?: unknown };
+
+/** A card's props. */
+type CardProps = Delays & { label?: string };
+
 /**
  * `Trigger` wraps the element the content belongs to; `Tip` is a short note
  * and `Card` richer content, one per instance. All three expose
  * `signal.open`, which shows the content when set true.
  */
-export const TooltipSignalComponent = new tiny.SignalComponent(
+export const TooltipSignalComponent: SignalComponent<{
+  Trigger: InstancedComponent<TooltipExposed, TriggerProps>;
+  Tip: InstancedComponent<TooltipExposed, Delays>;
+  Card: InstancedComponent<TooltipExposed, CardProps>;
+}> = new tiny.SignalComponent(
   async ({ instanced }) => {
     const { fn, signal, styled } = await tiny.imports(
       tooltipSignals,
@@ -300,7 +319,7 @@ export const TooltipSignalComponent = new tiny.SignalComponent(
       tooltipStyles,
     );
     return {
-      Trigger: instanced((props: { children?: unknown }) => (
+      Trigger: instanced((props: TriggerProps) => (
         <span
           class={styled.trigger}
           onConnect={[signal.target, fn.adoptTrigger]}
@@ -328,7 +347,7 @@ export const TooltipSignalComponent = new tiny.SignalComponent(
           {props.children}
         </div>
       ), [signal.open]),
-      Card: instanced((props: Delays & { label?: string }) => (
+      Card: instanced((props: CardProps) => (
         <div
           popover="manual"
           id={props.id}

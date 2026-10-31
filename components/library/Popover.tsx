@@ -41,8 +41,15 @@
  */
 
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
-import { h } from "../../jsx-runtime.ts";
-import { type HandlerProp, tiny } from "../../mod.ts";
+import { h, type JSX } from "../../jsx-runtime.ts";
+import {
+  type HandlerProp,
+  type InstancedComponent,
+  type InstanceSignals,
+  type Signal,
+  type SignalComponent,
+  tiny,
+} from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
 import type { SignalEvent } from "../../handlers/signals.ts";
 
@@ -223,13 +230,69 @@ const popoverStyles = new tiny.Styles(import.meta.url, {
   `,
 });
 
+/** The signals `Trigger`, `Content` and `Close` expose. */
+type PopoverExposed = InstanceSignals<{ open: Signal<boolean> }>;
+
+/** What `Trigger` takes. */
+type TriggerProps = {
+  /** Names the button, for one showing only an icon. */
+  label?: string;
+  /** Opens a `menu` Content, telling assistive technology so. */
+  menu?: boolean;
+  /** The page's own style, for a trigger it designs itself. */
+  class?: string;
+  children?: unknown;
+};
+
+/** What `Content` takes. */
+type ContentProps = {
+  /** Names the content to assistive technology. */
+  label?: string;
+  /** A menu of `Item`s, moved through with the arrow keys. */
+  menu?: boolean;
+  /** Which side of the trigger it shows on; default `bottom`. */
+  side?: "top" | "bottom" | "left" | "right";
+  /** As wide as the trigger, where anchor positioning is supported. */
+  matchTriggerWidth?: boolean;
+  /** Its id, for a `popovertarget` of the page's own. */
+  id?: string;
+  children?: unknown;
+};
+
+/** What `Close` takes. */
+type CloseProps = { label?: string; children?: unknown };
+
+/** What a menu `Item` takes. */
+type ItemProps = {
+  /** Makes the item a link. */
+  href?: string;
+  /** Runs when it is chosen, by click or Enter. */
+  onClick?: HandlerProp<(event: MouseEvent) => unknown>;
+  /**
+   * The id of an element a button item invokes, such as a `<dialog>`,
+   * with `command` saying what to do, such as `show-modal`.
+   */
+  commandFor?: string;
+  command?: string;
+  /** `danger` for a destructive choice. */
+  variant?: "danger";
+  disabled?: boolean;
+  children?: unknown;
+};
+
 /**
  * `Trigger` opens and closes the `Content`, wherever each sits; `Close`
  * closes it from inside. A menu's `Item`s are links or buttons of the
  * caller's, and `Separator` divides them. `Trigger`, `Content` and `Close`
  * expose `signal.open`, which opens the content when set true.
  */
-export const PopoverSignalComponent = new tiny.SignalComponent(
+export const PopoverSignalComponent: SignalComponent<{
+  Trigger: InstancedComponent<PopoverExposed, TriggerProps>;
+  Content: InstancedComponent<PopoverExposed, ContentProps>;
+  Close: InstancedComponent<PopoverExposed, CloseProps>;
+  Item: (props: ItemProps) => JSX.Element;
+  Separator: JSX.Element;
+}> = new tiny.SignalComponent(
   async ({ instanced }) => {
     const { fn, signal, styled } = await tiny.imports(
       popoverSignals,
@@ -237,15 +300,7 @@ export const PopoverSignalComponent = new tiny.SignalComponent(
       popoverStyles,
     );
     return {
-      Trigger: instanced((props: {
-        /** Names the button, for one showing only an icon. */
-        label?: string;
-        /** Opens a `menu` Content, telling assistive technology so. */
-        menu?: boolean;
-        /** The page's own style, for a trigger it designs itself. */
-        class?: string;
-        children?: unknown;
-      }) => (
+      Trigger: instanced((props: TriggerProps) => (
         <button
           type="button"
           class={styled.mergeClasses(styled.scripted, props.class)}
@@ -258,19 +313,7 @@ export const PopoverSignalComponent = new tiny.SignalComponent(
           {props.children ?? "Open"}
         </button>
       ), [signal.open]),
-      Content: instanced((props: {
-        /** Names the content to assistive technology. */
-        label?: string;
-        /** A menu of `Item`s, moved through with the arrow keys. */
-        menu?: boolean;
-        /** Which side of the trigger it shows on; default `bottom`. */
-        side?: "top" | "bottom" | "left" | "right";
-        /** As wide as the trigger, where anchor positioning is supported. */
-        matchTriggerWidth?: boolean;
-        /** Its id, for a `popovertarget` of the page's own. */
-        id?: string;
-        children?: unknown;
-      }) => (
+      Content: instanced((props: ContentProps) => (
         <div
           popover="auto"
           id={props.id}
@@ -289,7 +332,7 @@ export const PopoverSignalComponent = new tiny.SignalComponent(
         </div>
       ), [signal.open]),
       Close: instanced(
-        (props: { label?: string; children?: unknown }) => (
+        (props: CloseProps) => (
           <button
             type="button"
             aria-label={props.label}
@@ -300,22 +343,7 @@ export const PopoverSignalComponent = new tiny.SignalComponent(
         ),
         [signal.open],
       ),
-      Item: (props: {
-        /** Makes the item a link. */
-        href?: string;
-        /** Runs when it is chosen, by click or Enter. */
-        onClick?: HandlerProp<(event: MouseEvent) => unknown>;
-        /**
-         * The id of an element a button item invokes, such as a `<dialog>`,
-         * with `command` saying what to do, such as `show-modal`.
-         */
-        commandFor?: string;
-        command?: string;
-        /** `danger` for a destructive choice. */
-        variant?: "danger";
-        disabled?: boolean;
-        children?: unknown;
-      }) =>
+      Item: (props: ItemProps) =>
         props.href
           ? (
             <a

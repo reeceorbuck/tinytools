@@ -1,7 +1,7 @@
 {
   "name": "@tinytools/hono-tools",
   "description": "A lightweight enhancement layer for Hono web applications. Provides type-safe client functions, scoped styles, and enhanced JSX event handlers. Works with Deno, Bun, and Node.js.",
-  "version": "0.1.40",
+  "version": "0.1.41",
   "license": "MIT",
   "exports": {
     ".": "./mod.ts",
@@ -17,7 +17,7 @@
     "lint": "deno lint",
     "fmt": "deno fmt",
     "test": "deno test --check --allow-env --allow-read --allow-write=./.test-build-output,./.test-client-src,./.test-lazy-rebuild,./.test-style-bundle-hash,./public,./.cache --allow-run tests/",
-    "prepublish": "cd .. && deno task bump patch && deno task sync:npm-version && cd package && deno publish --allow-slow-types --allow-dirty",
+    "prepublish": "cd .. && deno task bump patch && deno task sync:npm-version && cd package && deno publish --allow-dirty",
     "npm:publish": "npm publish --access public"
   },
   "imports": {
@@ -50,6 +50,8 @@
       "esbuildInit.ts",
       "handlerNamespace.ts",
       "signals.ts",
+      "signalModules.ts",
+      "importUsage.ts",
       "lifecycleBindings.ts",
       "lifecycleElement.ts",
       "lifecycleFallback.ts",

@@ -37,8 +37,8 @@
  */
 
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
-import { h } from "../../jsx-runtime.ts";
-import { tiny } from "../../mod.ts";
+import { h, type JSX } from "../../jsx-runtime.ts";
+import { type SignalComponent, tiny } from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
 
 /**
@@ -322,26 +322,44 @@ type RaiseProps = {
   duration?: number;
 };
 
+/** The toaster's props. */
+type ToasterProps = {
+  /** Default `bottom-right`. */
+  position?: ToastPosition;
+  /** Milliseconds each toast shows for; default 5000, 0 until closed. */
+  duration?: number;
+  /** Names the region to assistive technology; default "Notifications". */
+  label?: string;
+};
+
+/** The trigger's props: the toast it raises. */
+type TriggerProps = RaiseProps & {
+  message: string;
+  description?: string;
+  label?: string;
+  children?: unknown;
+};
+
+/** A toast's props: its content is its children. */
+type ToastProps = RaiseProps & { children?: unknown };
+
 /**
  * `Toaster` shows the toasts, `Trigger` is a button raising one, and `Toast`
  * raises its children as one when it reaches the page. None exposes
  * signals.
  */
-export const ToastSignalComponent = new tiny.SignalComponent(async () => {
+export const ToastSignalComponent: SignalComponent<{
+  Toaster: (props: ToasterProps) => JSX.Element;
+  Trigger: (props: TriggerProps) => JSX.Element;
+  Toast: (props: ToastProps) => JSX.Element;
+}> = new tiny.SignalComponent(async () => {
   const { fn, signal, styled } = await tiny.imports(
     toastSignals,
     toastHandlers,
     toastStyles,
   );
   return {
-    Toaster: (props: {
-      /** Default `bottom-right`. */
-      position?: ToastPosition;
-      /** Milliseconds each toast shows for; default 5000, 0 until closed. */
-      duration?: number;
-      /** Names the region to assistive technology; default "Notifications". */
-      label?: string;
-    }) => (
+    Toaster: (props: ToasterProps) => (
       <tiny-toaster
         class={styled.toaster}
         popover="manual"
@@ -358,14 +376,7 @@ export const ToastSignalComponent = new tiny.SignalComponent(async () => {
         onPointerLeave={fn.resumeToasts}
       />
     ),
-    Trigger: (
-      props: RaiseProps & {
-        message: string;
-        description?: string;
-        label?: string;
-        children?: unknown;
-      },
-    ) => (
+    Trigger: (props: TriggerProps) => (
       <button
         type="button"
         class={styled.scripted}
@@ -379,7 +390,7 @@ export const ToastSignalComponent = new tiny.SignalComponent(async () => {
         {props.children ?? props.message}
       </button>
     ),
-    Toast: (props: RaiseProps & { children?: unknown }) => (
+    Toast: (props: ToastProps) => (
       <tiny-toast
         hidden
         data-variant={props.variant}

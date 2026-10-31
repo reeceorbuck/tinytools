@@ -1,12 +1,14 @@
-import { type Signal, type SignalValue, tiny } from "../mod.ts";
+import { type Handlers, type Signal, type SignalValue, tiny } from "../mod.ts";
 
 /** The event a `tiny.Signals` signal dispatches to its subscribers. */
 export interface SignalEvent extends Event {
+  /** The signal that changed; read its new value from `signal.value`. */
   signal: Signal<SignalValue>;
 }
 
 /** An upgraded custom element (a lifecycle element) receiving signal events. */
 export interface SignalElement extends HTMLElement {
+  /** Aborted when the element disconnects, ending its subscriptions. */
   abortController: AbortController;
 }
 
@@ -72,7 +74,7 @@ export const signalBindingTools = new tiny.Handlers(import.meta.url, {
  * Helpers for consuming `tiny.Signals` values in the browser. Bind them to the
  * `onSignal` event of an element subscribed with `onConnect={signal.name}`.
  */
-export const signalTools = new tiny.Handlers(import.meta.url, {
+export const signalTools: Handlers<{
   /**
    * Runs the element's `onSignal` handler once for each signal it has
    * subscribed to so far, with that signal's current value. Subscribing alone
@@ -80,19 +82,24 @@ export const signalTools = new tiny.Handlers(import.meta.url, {
    * (`onConnect={[signal.filter, fn.fireSelfSignal]}`) when the element must
    * catch up with a value that may have changed before it connected.
    */
+  fireSelfSignal(this: HTMLElement): void;
+  /** Writes the signal value as the element's text. */
+  setTextContent(this: Element, event: SignalEvent): void;
+  /** Writes the signal value into an input, when it differs. */
+  setValue(this: HTMLInputElement, event: SignalEvent): void;
+  /** Sets the custom property `--<signal name>` to the signal value. */
+  setCssProperty(this: HTMLElement, event: SignalEvent): void;
+}> = new tiny.Handlers(import.meta.url, {
   fireSelfSignal: function (this: HTMLElement): void {
     this.dispatchEvent(new Event("tt-fire-signals"));
   },
-  /** Writes the signal value as the element's text. */
   setTextContent: function (this: Element, event: SignalEvent): void {
     this.textContent = `${event.signal.value}`;
   },
-  /** Writes the signal value into an input, when it differs. */
   setValue: function (this: HTMLInputElement, event: SignalEvent): void {
     const next = event.signal.value?.toString() ?? "";
     if (this.value !== next) this.value = next;
   },
-  /** Sets the custom property `--<signal name>` to the signal value. */
   setCssProperty: function (this: HTMLElement, event: SignalEvent): void {
     const { name, value } = event.signal;
     if (!name) {

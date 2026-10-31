@@ -60,6 +60,7 @@ export {
   imports,
   type Instance,
   type Instanced,
+  type InstancedComponent,
   type RenderedTemplate,
   SignalComponent,
   type SignalComponentTools,

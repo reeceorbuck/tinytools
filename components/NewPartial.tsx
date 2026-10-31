@@ -37,6 +37,7 @@ type PartialInsertHandler = HandlerReference<
   (this: HTMLTemplateElement, event: Event) => void
 >;
 
+/** Props for `NewPartial`; other attributes go on its `<template>`. */
 export type PartialProps = PropsWithChildren<{
   /** Insertion handler run when the partial's template loads, e.g. `fn.partialReplace`. */
   onLoad: PartialInsertHandler;

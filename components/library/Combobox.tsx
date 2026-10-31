@@ -33,8 +33,14 @@
  */
 
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
-import { h } from "../../jsx-runtime.ts";
-import { tiny } from "../../mod.ts";
+import { h, type JSX } from "../../jsx-runtime.ts";
+import {
+  type InstancedComponent,
+  type InstanceSignals,
+  type Signal,
+  type SignalComponent,
+  tiny,
+} from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
 import { signalTools } from "../../handlers/signals.ts";
 
@@ -51,6 +57,50 @@ const comboboxSignals = new tiny.Signals(
       open: new Signal<boolean>(false),
     })),
 );
+
+/** The signals the combobox's parts expose. */
+type ComboboxExposed = InstanceSignals<{
+  value: Signal<string>;
+  label: Signal<string>;
+}>;
+
+/** Props for the combobox's `Input`. */
+type InputProps = {
+  /** The name the chosen value is submitted under. */
+  name?: string;
+  /** Names the box to assistive technology. */
+  label?: string;
+  placeholder?: string;
+  /** The value chosen as the page loads, with `text` its option's text. */
+  value?: string;
+  text?: string;
+  /**
+   * A URL answering `?q=<text>` with the HTML of `Option`s, fetched
+   * as the text changes instead of filtering the box's own options.
+   */
+  source?: string;
+  /** Shown while no option matches; default "No matches." */
+  empty?: unknown;
+  /** Why text matching no option is invalid. */
+  invalid?: string;
+  required?: boolean;
+  /** The form it belongs to, if it sits outside it. */
+  form?: string;
+  /** The text box's id, for a `<label for>` of the page's own. */
+  id?: string;
+  children?: unknown;
+};
+
+/** Props for a combobox `Option`. */
+type OptionProps = {
+  value: string | number;
+  /** More words it matches, besides its text. */
+  keywords?: string;
+  /** The text put in the box when chosen; by default its own text. */
+  label?: string;
+  disabled?: boolean;
+  children?: unknown;
+};
 
 /** Helpers the handlers share, called through `fn`. */
 const comboboxTools = new tiny.Handlers(import.meta.url, {
@@ -354,7 +404,11 @@ const comboboxStyles = new tiny.Styles(import.meta.url, {
  * `source`). `Value` shows the chosen option's text. Both expose
  * `signal.value`, the chosen option's value, and `signal.label`, its text.
  */
-export const ComboboxSignalComponent = new tiny.SignalComponent(
+export const ComboboxSignalComponent: SignalComponent<{
+  Input: InstancedComponent<ComboboxExposed, InputProps>;
+  Value: InstancedComponent<ComboboxExposed, Record<never, never>>;
+  Option: (props: OptionProps) => JSX.Element;
+}> = new tiny.SignalComponent(
   async ({ instanced }) => {
     const { fn, signal, styled } = await tiny.imports(
       comboboxSignals,
@@ -363,31 +417,7 @@ export const ComboboxSignalComponent = new tiny.SignalComponent(
       signalTools,
     );
     return {
-      Input: instanced((props: {
-        /** The name the chosen value is submitted under. */
-        name?: string;
-        /** Names the box to assistive technology. */
-        label?: string;
-        placeholder?: string;
-        /** The value chosen as the page loads, with `text` its option's text. */
-        value?: string;
-        text?: string;
-        /**
-         * A URL answering `?q=<text>` with the HTML of `Option`s, fetched
-         * as the text changes instead of filtering the box's own options.
-         */
-        source?: string;
-        /** Shown while no option matches; default "No matches." */
-        empty?: unknown;
-        /** Why text matching no option is invalid. */
-        invalid?: string;
-        required?: boolean;
-        /** The form it belongs to, if it sits outside it. */
-        form?: string;
-        /** The text box's id, for a `<label for>` of the page's own. */
-        id?: string;
-        children?: unknown;
-      }) => {
+      Input: instanced((props: InputProps) => {
         const list = `tiny-listbox-${crypto.randomUUID().slice(0, 8)}`;
         return (
           <div
@@ -450,15 +480,7 @@ export const ComboboxSignalComponent = new tiny.SignalComponent(
         ),
         [signal.value, signal.label],
       ),
-      Option: (props: {
-        value: string | number;
-        /** More words it matches, besides its text. */
-        keywords?: string;
-        /** The text put in the box when chosen; by default its own text. */
-        label?: string;
-        disabled?: boolean;
-        children?: unknown;
-      }) => (
+      Option: (props: OptionProps) => (
         <div
           role="option"
           data-value={String(props.value)}

@@ -19,7 +19,13 @@
 
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
 import { h } from "../../jsx-runtime.ts";
-import { tiny } from "../../mod.ts";
+import {
+  type InstancedComponent,
+  type InstanceSignals,
+  type Signal,
+  type SignalComponent,
+  tiny,
+} from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
 import type { SignalEvent } from "../../handlers/signals.ts";
 
@@ -92,12 +98,36 @@ const disclosureStyles = new tiny.Styles(import.meta.url, {
   `,
 });
 
+/** The signals the disclosure's parts expose. */
+type DisclosureExposed = InstanceSignals<{ open: Signal<boolean> }>;
+
+/** What `Details` takes. */
+type DetailsProps = {
+  /** What the `<summary>` shows. */
+  summary: unknown;
+  open?: boolean;
+  /** Sections sharing a name open one at a time. */
+  name?: string;
+  /**
+   * Remembers the open state in this viewer's browser under this key,
+   * restoring it as the page loads.
+   */
+  remember?: string;
+  children?: unknown;
+};
+
+/** What `Toggle` takes. */
+type ToggleProps = { children?: unknown; label?: string };
+
 /**
  * `Details` is the section, its `summary` the always-visible line that opens
  * it. `Toggle` is a button opening and closing it from elsewhere. Both
  * expose `signal.open`, which opens the section when set true.
  */
-export const DisclosureSignalComponent = new tiny.SignalComponent(
+export const DisclosureSignalComponent: SignalComponent<{
+  Details: InstancedComponent<DisclosureExposed, DetailsProps>;
+  Toggle: InstancedComponent<DisclosureExposed, ToggleProps>;
+}> = new tiny.SignalComponent(
   async ({ instanced }) => {
     const { fn, signal, styled } = await tiny.imports(
       disclosureSignals,
@@ -105,19 +135,7 @@ export const DisclosureSignalComponent = new tiny.SignalComponent(
       disclosureStyles,
     );
     return {
-      Details: instanced((props: {
-        /** What the `<summary>` shows. */
-        summary: unknown;
-        open?: boolean;
-        /** Sections sharing a name open one at a time. */
-        name?: string;
-        /**
-         * Remembers the open state in this viewer's browser under this key,
-         * restoring it as the page loads.
-         */
-        remember?: string;
-        children?: unknown;
-      }) => (
+      Details: instanced((props: DetailsProps) => (
         <details
           open={props.open}
           name={props.name}
@@ -131,7 +149,7 @@ export const DisclosureSignalComponent = new tiny.SignalComponent(
         </details>
       ), [signal.open]),
       Toggle: instanced(
-        (props: { children?: unknown; label?: string }) => (
+        (props: ToggleProps) => (
           <button
             type="button"
             class={styled.toggle}

@@ -33,7 +33,15 @@
 
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
 import { h } from "../../jsx-runtime.ts";
-import { type HandlerReference, tiny } from "../../mod.ts";
+import {
+  type HandlerReference,
+  type InstancedComponent,
+  type InstanceSignals,
+  type ReadonlySignal,
+  type Signal,
+  type SignalComponent,
+  tiny,
+} from "../../mod.ts";
 import { css, setCustomScope } from "../../scopedStyles.ts";
 
 /**
@@ -119,6 +127,42 @@ type InputHandler =
   | HandlerReference<string, (event: Event) => unknown>
   | readonly HandlerReference<string, (event: Event) => unknown>[];
 
+/** The signals `FilterInput` exposes. */
+type FilterInputExposed = InstanceSignals<{ query: Signal<string> }>;
+
+/** The signals `Results` and `MatchCount` expose. */
+type ResultsExposed = InstanceSignals<{
+  shown: Signal<number>;
+  total: Signal<number>;
+  summary: ReadonlySignal<string>;
+}>;
+
+/** What `FilterInput` takes. */
+type FilterInputProps = {
+  /** Its form field name, for a server that filters too. */
+  name?: string;
+  /** Its accessible name; by default "Filter". */
+  label?: string;
+  placeholder?: string;
+  /** The query to start with, such as the request's own. */
+  value?: string;
+  id?: string;
+  /** The page's own style for the box. */
+  class?: string;
+  /** Runs on every keystroke, after the filter (to submit, say). */
+  onInput?: InputHandler;
+};
+
+/** What `Results` takes. */
+type ResultsProps = {
+  /** Its element; a `tbody` filters a table's rows. Default `div`. */
+  as?: "div" | "ul" | "ol" | "tbody" | "section";
+  children?: unknown;
+};
+
+/** What `NoMatches` takes. */
+type NoMatchesProps = { children?: unknown };
+
 /**
  * `FilterInput` is the search box, `Results` holds what it filters,
  * `MatchCount` shows "3 of 40" while it filters and `NoMatches` shows its
@@ -126,7 +170,12 @@ type InputHandler =
  * `Results` and `MatchCount` expose `signal.shown`, `signal.total` and
  * `signal.summary`.
  */
-export const SearchFilterSignalComponent = new tiny.SignalComponent(
+export const SearchFilterSignalComponent: SignalComponent<{
+  FilterInput: InstancedComponent<FilterInputExposed, FilterInputProps>;
+  Results: InstancedComponent<ResultsExposed, ResultsProps>;
+  MatchCount: InstancedComponent<ResultsExposed>;
+  NoMatches: InstancedComponent<Record<never, never>, NoMatchesProps>;
+}> = new tiny.SignalComponent(
   async ({ instanced }) => {
     const { fn, signal, styled } = await tiny.imports(
       searchFilterSignals,
@@ -134,20 +183,7 @@ export const SearchFilterSignalComponent = new tiny.SignalComponent(
       searchFilterStyles,
     );
     return {
-      FilterInput: instanced((props: {
-        /** Its form field name, for a server that filters too. */
-        name?: string;
-        /** Its accessible name; by default "Filter". */
-        label?: string;
-        placeholder?: string;
-        /** The query to start with, such as the request's own. */
-        value?: string;
-        id?: string;
-        /** The page's own style for the box. */
-        class?: string;
-        /** Runs on every keystroke, after the filter (to submit, say). */
-        onInput?: InputHandler;
-      }) => (
+      FilterInput: instanced((props: FilterInputProps) => (
         <input
           type="search"
           class={styled.mergeClasses(styled.filterInput, props.class)}
@@ -161,11 +197,7 @@ export const SearchFilterSignalComponent = new tiny.SignalComponent(
           onInput={[signal.query, ...[props.onInput ?? []].flat()]}
         />
       ), [signal.query]),
-      Results: instanced((props: {
-        /** Its element; a `tbody` filters a table's rows. Default `div`. */
-        as?: "div" | "ul" | "ol" | "tbody" | "section";
-        children?: unknown;
-      }) => {
+      Results: instanced((props: ResultsProps) => {
         const Tag = props.as ?? "div";
         return (
           <Tag
@@ -181,7 +213,7 @@ export const SearchFilterSignalComponent = new tiny.SignalComponent(
         <output aria-live="polite">{signal.summary}</output>,
         [signal.shown, signal.total, signal.summary],
       ),
-      NoMatches: instanced((props: { children?: unknown }) => (
+      NoMatches: instanced((props: NoMatchesProps) => (
         <p
           hidden
           onConnect={[signal.noMatches, fn.showNoMatches]}

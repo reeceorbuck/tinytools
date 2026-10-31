@@ -10,9 +10,47 @@ export type IncomingData =
   }
   | { type: "json"; data: unknown };
 
+/** The `incomingdata` event, as received by `onIncomingData` handlers. */
 export type IncomingDataEvent = CustomEvent<IncomingData>;
 
-export const processIncomingDataTools = new Handlers(import.meta.url, {
+/**
+ * Applies server responses and pushed updates to the page. Each response is
+ * split into units of incoming data, dispatched on `window` as `incomingdata`
+ * events; elements receive them through `onIncomingData` once
+ * `applyIncomingDataListener` is bound to their `onLoad`, e.g.
+ * `<body onLoad={fn.applyIncomingDataListener}
+ * onIncomingData={fn.appendIncomingHtml}>`.
+ */
+export const processIncomingDataTools: Handlers<{
+  /**
+   * Reads a response, streaming as it arrives, and dispatches an
+   * `incomingdata` event for each complete `<update>` element, or once for a
+   * JSON body. Other HTML is shown in the page's `#global-modal` dialog.
+   */
+  processIncomingData(response: Response): Promise<void>;
+  /**
+   * Forwards window `incomingdata` events to this element's own
+   * `onIncomingData` handlers.
+   */
+  applyIncomingDataListener(
+    this: PartialAbortableHTMLElement | typeof globalThis,
+  ): void;
+  /**
+   * Appends copies of the contents of incoming `<update>` elements to this
+   * element. Partials in updates with paths are only applied when one of
+   * them matches the current page path, or the `update-path` of a cacheable
+   * region currently on the page (which may show content for a more
+   * specific path than the URL, e.g. a default conversation on /messages).
+   * Applied partials are marked `optional-target`, as an update can target an
+   * element that isn't on this page.
+   */
+  appendIncomingHtml(this: HTMLElement, event: IncomingDataEvent): void;
+  /**
+   * Applies the partials in incoming `<update>` elements to this router's
+   * cached routes whose `update-path` matches one of the update's paths.
+   */
+  updateCachedRoutes(this: HTMLElement, event: IncomingDataEvent): void;
+}> = new Handlers(import.meta.url, {
   processIncomingData: async function (
     response: Response,
   ) {
@@ -112,10 +150,6 @@ export const processIncomingDataTools = new Handlers(import.meta.url, {
       console.warn("Stream ended with an incomplete update:", buffer);
     }
   },
-  /**
-   * Forwards window `incomingdata` events to this element's own
-   * `onIncomingData` handlers.
-   */
   applyIncomingDataListener: function (
     this: PartialAbortableHTMLElement | typeof globalThis,
   ) {
@@ -131,15 +165,6 @@ export const processIncomingDataTools = new Handlers(import.meta.url, {
       { signal: element.abortController?.signal },
     );
   },
-  /**
-   * Appends copies of the contents of incoming `<update>` elements to this
-   * element. Partials in updates with paths are only applied when one of
-   * them matches the current page path, or the `update-path` of a cacheable
-   * region currently on the page (which may show content for a more
-   * specific path than the URL, e.g. a default conversation on /messages).
-   * Applied partials are marked `optional-target`, as an update can target an
-   * element that isn't on this page.
-   */
   appendIncomingHtml: function (this: HTMLElement, event: IncomingDataEvent) {
     if (event.detail.type !== "html") return;
     const { element, paths } = event.detail;
@@ -177,10 +202,6 @@ export const processIncomingDataTools = new Handlers(import.meta.url, {
     }
     this.append(...Array.from(copy.childNodes));
   },
-  /**
-   * Applies the partials in incoming `<update>` elements to this router's
-   * cached routes whose `update-path` matches one of the update's paths.
-   */
   updateCachedRoutes: function (this: HTMLElement, event: IncomingDataEvent) {
     if (event.detail.type !== "html" || !event.detail.paths?.length) return;
     const { element, paths } = event.detail;

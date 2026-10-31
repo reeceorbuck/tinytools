@@ -1,0 +1,22 @@
+name: Publish
+
+# Publishes to JSR from CI so each version carries provenance. A version
+# that is already published is skipped, so only a bumped `version` in
+# deno.json publishes anything.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - run: deno publish

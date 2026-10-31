@@ -53,6 +53,7 @@ export const LIFECYCLE_TAG_DECLARATION = "tt-define";
 
 /** An upgraded custom element: its controller aborts when it disconnects. */
 export interface LifecycleElement extends HTMLElement {
+  /** Aborts when the element disconnects; a fresh one on each connect. */
   abortController: AbortController;
 }
 

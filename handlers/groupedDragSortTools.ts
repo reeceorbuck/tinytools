@@ -82,7 +82,22 @@ const groupedDragSortHelpers = new Handlers(import.meta.url, {
  * Style `[data-dragging]:not([data-drag-outside])` as the lifted item, with
  * no `transform` transition, so the spring back still animates.
  */
-export const groupedDragSortTools = new Handlers(
+export const groupedDragSortTools: Handlers<{
+  startGroupedDragSort(this: HTMLElement, event: DragEvent): void;
+  dropGroupedDragSort(this: HTMLElement, event: DragEvent): void;
+  /**
+   * Runs after any drop, here or on another target. A drag that wasn't
+   * committed to this list animates back.
+   */
+  endGroupedDragSort(this: HTMLElement, event: DragEvent): void;
+  /**
+   * Alt+ArrowUp / Alt+ArrowDown moves the focused item one step, as a
+   * keyboard alternative to dragging: past a neighbouring item, or
+   * across a separator into the next or previous group. It never moves
+   * above the separators before the first item.
+   */
+  sortGroupedByKey(this: HTMLElement, event: KeyboardEvent): void;
+}> = new Handlers(
   import.meta.url,
   async () => {
     const { fn } = await imports(dragSortTools, groupedDragSortHelpers);
@@ -156,10 +171,6 @@ export const groupedDragSortTools = new Handlers(
           to: fn.dragSortItems(this).indexOf(dragged),
         });
       },
-      /**
-       * Runs after any drop, here or on another target. A drag that wasn't
-       * committed to this list animates back.
-       */
       endGroupedDragSort: function (this: HTMLElement, event: DragEvent) {
         const list = this as GroupedDragSortList;
         list.dragSortAbort?.abort();
@@ -171,12 +182,6 @@ export const groupedDragSortTools = new Handlers(
         }
         fn.endDragSort.call(list, event);
       },
-      /**
-       * Alt+ArrowUp / Alt+ArrowDown moves the focused item one step, as a
-       * keyboard alternative to dragging: past a neighbouring item, or
-       * across a separator into the next or previous group. It never moves
-       * above the separators before the first item.
-       */
       sortGroupedByKey: function (this: HTMLElement, event: KeyboardEvent) {
         if (!event.altKey) return;
         if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;

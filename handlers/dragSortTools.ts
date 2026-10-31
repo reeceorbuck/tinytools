@@ -164,7 +164,27 @@ function dispatchSorted(list: HTMLElement, detail: SortedDetail): void {
  * targets outside the list, use `groupedDragSortTools`, which builds on
  * these.
  */
-export const dragSortTools = new Handlers(import.meta.url, {
+export const dragSortTools: Handlers<{
+  dragSortItems: typeof dragSortItems;
+  dragSortDragged: typeof dragSortDragged;
+  layoutDragSort: typeof layoutDragSort;
+  resetDragSort: typeof resetDragSort;
+  settleDragSort: typeof settleDragSort;
+  dispatchSorted: typeof dispatchSorted;
+  startDragSort(this: HTMLElement, event: DragEvent): void;
+  moveDragSort(this: HTMLElement, event: DragEvent): void;
+  dropDragSort(this: HTMLElement, event: DragEvent): void;
+  /**
+   * Runs after drop. A drag that wasn't committed (Escape, or released
+   * outside the list) animates back.
+   */
+  endDragSort(this: HTMLElement, _event: DragEvent): void;
+  /**
+   * Alt+ArrowUp / Alt+ArrowDown moves the focused item past its neighbour,
+   * as a keyboard alternative to dragging.
+   */
+  sortByKey(this: HTMLElement, event: KeyboardEvent): void;
+}> = new Handlers(import.meta.url, {
   dragSortItems,
   dragSortDragged,
   layoutDragSort,
@@ -230,20 +250,12 @@ export const dragSortTools = new Handlers(import.meta.url, {
       to: dragSortItems(this).indexOf(dragged),
     });
   },
-  /**
-   * Runs after drop. A drag that wasn't committed (Escape, or released
-   * outside the list) animates back.
-   */
   endDragSort: function (this: HTMLElement, _event: DragEvent) {
     for (const item of dragSortItems(this)) delete item.dataset.dragging;
     resetDragSort(this);
     delete this.dataset.dragSortFrom;
     delete this.dataset.dragSortStartY;
   },
-  /**
-   * Alt+ArrowUp / Alt+ArrowDown moves the focused item past its neighbour,
-   * as a keyboard alternative to dragging.
-   */
   sortByKey: function (this: HTMLElement, event: KeyboardEvent) {
     if (!event.altKey) return;
     if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;

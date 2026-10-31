@@ -38,8 +38,15 @@
  */
 
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
-import { h } from "../../jsx-runtime.ts";
-import { type HandlerProp, tiny } from "../../mod.ts";
+import { h, type JSX } from "../../jsx-runtime.ts";
+import {
+  type HandlerProp,
+  type InstancedComponent,
+  type InstanceSignals,
+  type Signal,
+  type SignalComponent,
+  tiny,
+} from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
 import type { SignalEvent } from "../../handlers/signals.ts";
 import type { LifecycleElement } from "../../lifecycleElement.ts";
@@ -50,6 +57,44 @@ const paletteSignals = new tiny.Signals(
   ({ Signal, perInstance }) =>
     perInstance(() => ({ open: new Signal<boolean>(false) })),
 );
+
+/** The signals the palette's parts expose. */
+type PaletteExposed = InstanceSignals<{ open: Signal<boolean> }>;
+
+/** Props for the palette's `Trigger`. */
+type TriggerProps = {
+  /** The key opening it with Ctrl or ⌘, shown beside the text. */
+  shortcut?: string;
+  children?: unknown;
+};
+
+/** Props for the `Palette` dialog. */
+type PaletteProps = {
+  /** Names the palette, and its search box, to assistive technology. */
+  label?: string;
+  placeholder?: string;
+  /** Shown while nothing matches; default "No results." */
+  empty?: unknown;
+  /** The key opening it with Ctrl or ⌘; default `k`, `false` for none. */
+  shortcut?: string | false;
+  children?: unknown;
+};
+
+/** Props for a palette `Group`. */
+type GroupProps = { heading: string; children?: unknown };
+
+/** Props for a palette `Item`. */
+type ItemProps = {
+  /** Makes the item a link. */
+  href?: string;
+  /** Runs when it is chosen, by click or Enter. */
+  onClick?: HandlerProp<(event: MouseEvent) => unknown>;
+  /** More words it matches, besides its text. */
+  keywords?: string;
+  /** A hint shown at its end, such as a shortcut. */
+  hint?: string;
+  children?: unknown;
+};
 
 /** Helpers the handlers share, called through `fn`. */
 const paletteTools = new tiny.Handlers(import.meta.url, {
@@ -278,7 +323,12 @@ const paletteStyles = new tiny.Styles(import.meta.url, {
  * button opening it. Both expose `signal.open`, which opens the palette
  * when set true.
  */
-export const CommandPaletteSignalComponent = new tiny.SignalComponent(
+export const CommandPaletteSignalComponent: SignalComponent<{
+  Trigger: InstancedComponent<PaletteExposed, TriggerProps>;
+  Palette: InstancedComponent<PaletteExposed, PaletteProps>;
+  Group: (props: GroupProps) => JSX.Element;
+  Item: (props: ItemProps) => JSX.Element;
+}> = new tiny.SignalComponent(
   async ({ instanced }) => {
     const { fn, signal, styled } = await tiny.imports(
       paletteSignals,
@@ -286,11 +336,7 @@ export const CommandPaletteSignalComponent = new tiny.SignalComponent(
       paletteStyles,
     );
     return {
-      Trigger: instanced((props: {
-        /** The key opening it with Ctrl or ⌘, shown beside the text. */
-        shortcut?: string;
-        children?: unknown;
-      }) => (
+      Trigger: instanced((props: TriggerProps) => (
         <button
           type="button"
           class={styled.trigger}
@@ -301,16 +347,7 @@ export const CommandPaletteSignalComponent = new tiny.SignalComponent(
           <kbd>Ctrl {(props.shortcut ?? "k").toUpperCase()}</kbd>
         </button>
       ), [signal.open]),
-      Palette: instanced((props: {
-        /** Names the palette, and its search box, to assistive technology. */
-        label?: string;
-        placeholder?: string;
-        /** Shown while nothing matches; default "No results." */
-        empty?: unknown;
-        /** The key opening it with Ctrl or ⌘; default `k`, `false` for none. */
-        shortcut?: string | false;
-        children?: unknown;
-      }) => (
+      Palette: instanced((props: PaletteProps) => (
         <dialog
           class={styled.palette}
           aria-label={props.label ?? "Command palette"}
@@ -340,23 +377,13 @@ export const CommandPaletteSignalComponent = new tiny.SignalComponent(
           </div>
         </dialog>
       ), [signal.open]),
-      Group: (props: { heading: string; children?: unknown }) => (
+      Group: (props: GroupProps) => (
         <div role="group" aria-label={props.heading}>
           <div data-heading aria-hidden="true">{props.heading}</div>
           {props.children}
         </div>
       ),
-      Item: (props: {
-        /** Makes the item a link. */
-        href?: string;
-        /** Runs when it is chosen, by click or Enter. */
-        onClick?: HandlerProp<(event: MouseEvent) => unknown>;
-        /** More words it matches, besides its text. */
-        keywords?: string;
-        /** A hint shown at its end, such as a shortcut. */
-        hint?: string;
-        children?: unknown;
-      }) => {
+      Item: (props: ItemProps) => {
         const hint = props.hint ? <small>{props.hint}</small> : null;
         return props.href
           ? (

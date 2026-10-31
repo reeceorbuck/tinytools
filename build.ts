@@ -47,6 +47,7 @@ const STYLE_LAYER_ORDER: ScopedStyleLayer[] = [
   "debug",
 ];
 
+/** Builds a stylesheet from `styles`, each wrapped in its cascade layer. */
 export function buildLayeredCssContent(styles: ScopedStyleEntry[]): string {
   const byLayer = new Map<ScopedStyleLayer, string[]>();
 

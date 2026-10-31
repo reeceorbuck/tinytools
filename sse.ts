@@ -20,20 +20,26 @@ export const SSE_ID_COOKIE = "sseId";
 /** How long a path record is kept for a client whose stream has closed. */
 const INACTIVE_STREAM_TTL_MS = 10_000;
 
+/** What is recorded about an open stream and the client behind it. */
 export interface StreamData {
+  /** The client's id, from its `sseId` cookie. */
   id: string;
+  /** The user name given to {@link addStream}. */
   userName: string;
+  /** The user agent given to {@link addStream}. */
   userAgent: string;
   /** Recently displayed page paths, oldest first. */
   paths: Map<string, { lastUpdated: number }>;
 }
 
+/** The tracked page paths of a stream, oldest first. */
 export function getTrackedStreamPaths(
   streamData: Pick<StreamData, "paths">,
 ): string[] {
   return [...streamData.paths.keys()];
 }
 
+/** True if `matcher` accepts any tracked path. */
 export function streamHasMatchingPath(
   streamData: Pick<StreamData, "paths">,
   matcher: (path: string) => boolean,
@@ -41,6 +47,7 @@ export function streamHasMatchingPath(
   return getTrackedStreamPaths(streamData).some(matcher);
 }
 
+/** True if `path` is one of the tracked paths. */
 export function streamHasExactPath(
   streamData: Pick<StreamData, "paths">,
   path: string,
@@ -48,6 +55,7 @@ export function streamHasExactPath(
   return streamData.paths.has(path);
 }
 
+/** True if any tracked path starts with `prefix`. */
 export function streamHasPathPrefix(
   streamData: Pick<StreamData, "paths">,
   prefix: string,
@@ -134,9 +142,13 @@ export class UpdatedStreamEvent extends Event {
   }
 }
 
+/** The events {@link streamEvents} emits, by name. */
 export interface StreamEventMap {
+  /** A stream connected ({@link addStream}). */
   streamAdded: AddedStreamEvent;
+  /** A stream closed ({@link removeStream}). */
   streamRemoved: RemovedStreamEvent;
+  /** A connected client displayed a new path ({@link updateStreamPath}). */
   streamUpdated: UpdatedStreamEvent;
 }
 

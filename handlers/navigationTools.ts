@@ -12,6 +12,11 @@ import { processIncomingDataTools } from "./processIncomingData.ts";
 import { queryParamTools } from "./queryParams.ts";
 import { precommitFallbackTools } from "./precommitFallback.ts";
 
+/**
+ * The global `navigation` object with the per-page state the navigation
+ * handlers keep on it: in-flight GET requests, and which `navigate` events
+ * client routes have already handled.
+ */
 export type AppNavigation = Navigation & {
   inflightGetRequests?: Map<string, AbortController>;
   clientRouteBlockedEvents?: WeakSet<NavigateEvent>;
@@ -134,7 +139,30 @@ export const performFetchAndUpdateTools = new Handlers(
   },
 );
 
-export const navigationTools = new Handlers(import.meta.url, async () => {
+/**
+ * Partial navigation for the app: intercepts same-origin navigations,
+ * fetches the destination as a partial and applies it, and keeps URL-derived
+ * CSS variables in sync. Bind `handleNavigate` as `onNavigate` and
+ * `setVariablesFromUrl` as `onCurrentEntryChange`, with the listeners from
+ * `applyNavigationHandlers` registered on the same element.
+ */
+export const navigationTools: Handlers<{
+  /**
+   * Core `onNavigate` handler: intercepts same-origin navigations and
+   * fetches the destination as a partial. Register it on an element with
+   * `applyNavigationListener`, e.g. `<body onLoad={fn.applyNavigationListener}
+   * onNavigate={fn.handleNavigate}>`.
+   */
+  handleNavigate(this: HTMLElement, e: NavigateEvent): void;
+  /**
+   * Keeps this element's `--path-<index>` and `--param-<key>` properties in
+   * sync with the URL. Render the initial values with `urlStyleVariables`.
+   */
+  setVariablesFromUrl(
+    this: HTMLElement,
+    event: NavigationCurrentEntryChangeEvent,
+  ): void;
+}> = new Handlers(import.meta.url, async () => {
   const { fn } = await imports(
     navigationUrlTools,
     performFetchAndUpdateTools,
@@ -142,12 +170,6 @@ export const navigationTools = new Handlers(import.meta.url, async () => {
     precommitFallbackTools,
   );
   return {
-    /**
-     * Core `onNavigate` handler: intercepts same-origin navigations and
-     * fetches the destination as a partial. Register it on an element with
-     * `applyNavigationListener`, e.g. `<body onLoad={fn.applyNavigationListener}
-     * onNavigate={fn.handleNavigate}>`.
-     */
     handleNavigate: function (this: HTMLElement, e: NavigateEvent) {
       function getNavigationClientInfo(
         e: NavigateEvent,
@@ -260,10 +282,6 @@ export const navigationTools = new Handlers(import.meta.url, async () => {
         // e.preventDefault();
       }
     },
-    /**
-     * Keeps this element's `--path-<index>` and `--param-<key>` properties in
-     * sync with the URL. Render the initial values with `urlStyleVariables`.
-     */
     setVariablesFromUrl: function (
       this: HTMLElement,
       event: NavigationCurrentEntryChangeEvent,
@@ -290,15 +308,33 @@ export const navigationTools = new Handlers(import.meta.url, async () => {
   };
 });
 
-export const applyNavigationHandlers = new Handlers(
+/**
+ * Lets an element receive the Navigation API's events through its own
+ * `onNavigate` and `onCurrentEntryChange` handlers. Bind each listener to
+ * the element's `onLoad` or `onConnect`; it is removed when the element's
+ * abort controller aborts.
+ */
+export const applyNavigationHandlers: Handlers<{
+  /**
+   * Forwards interceptable `navigate` events to this element's own
+   * `onNavigate` handlers.
+   */
+  applyNavigationListener(
+    this: PartialAbortableHTMLElement | typeof globalThis,
+    _e: Event,
+  ): void;
+  /**
+   * Forwards `currententrychange` events to this element's own
+   * `onCurrentEntryChange` handlers.
+   */
+  applyCurrentEntryChangeListener(
+    this: PartialAbortableHTMLElement | typeof globalThis,
+  ): void;
+}> = new Handlers(
   import.meta.url,
   async () => {
     const { fn } = await imports(navigationUrlTools);
     return {
-      /**
-       * Forwards interceptable `navigate` events to this element's own
-       * `onNavigate` handlers.
-       */
       applyNavigationListener: function (
         this: PartialAbortableHTMLElement | typeof globalThis,
         _e: Event,

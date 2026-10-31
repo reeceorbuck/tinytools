@@ -33,6 +33,11 @@ const handlerReferencePattern = /^\w+\.[$\w]+$/;
 
 declare const handlerReferenceBrand: unique symbol;
 
+/**
+ * A reference to the handler `TName`, such as `fn.open`, that JSX event
+ * attributes accept; `TFunction` is its signature, which the attribute
+ * checks against the event.
+ */
 export type HandlerReference<TName extends string, TFunction> = {
   readonly [handlerReferenceBrand]: {
     readonly name: TName;
@@ -73,6 +78,10 @@ export type SignalProp<Value = unknown> =
     withInitial(initial?: Value): SignalProp<Value>;
   };
 
+/**
+ * The `fn` of a `tiny.imports()`: each handler as a reference for JSX event
+ * attributes, also callable directly with its own signature.
+ */
 export type HandlerReferences<TFunctions> = {
   readonly [Name in keyof TFunctions]:
     & HandlerReference<

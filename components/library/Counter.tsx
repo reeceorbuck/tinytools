@@ -15,7 +15,13 @@
 
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
 import { h } from "../../jsx-runtime.ts";
-import { tiny } from "../../mod.ts";
+import {
+  type InstancedComponent,
+  type InstanceSignals,
+  type Signal,
+  type SignalComponent,
+  tiny,
+} from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
 
 /**
@@ -27,6 +33,9 @@ const counterSignals = new tiny.Signals(
   import.meta.url,
   ({ Signal, perInstance }) => perInstance(() => ({ count: new Signal(0) })),
 );
+
+/** The signals the counter's parts expose. */
+type CounterExposed = InstanceSignals<{ count: Signal<number> }>;
 
 const counterHandlers = new tiny.Handlers(import.meta.url, async () => {
   const { signal } = await tiny.imports(counterSignals);
@@ -55,7 +64,10 @@ const counterStyles = new tiny.Styles(import.meta.url, {
  * `CounterDisplay` shows the count and `Increment` changes it by `by`. Both
  * expose `signal.count`: a click bound to it outside the component adds 1.
  */
-export const CounterSignalComponent = new tiny.SignalComponent(
+export const CounterSignalComponent: SignalComponent<{
+  CounterDisplay: InstancedComponent<CounterExposed>;
+  Increment: InstancedComponent<CounterExposed, { by: number }>;
+}> = new tiny.SignalComponent(
   async ({ instanced }) => {
     const { fn, signal, styled } = await tiny.imports(
       counterSignals,

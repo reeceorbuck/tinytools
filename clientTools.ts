@@ -1061,6 +1061,10 @@ class ConstantsClass<Values extends SignalConstants> {
   /** A JSON copy of the values passed in. */
   readonly values: Values;
 
+  /**
+   * Takes a plain object of JSON values; it keeps a copy, so later changes
+   * to the object have no effect.
+   */
   constructor(values: Values) {
     if (!values || typeof values !== "object" || Array.isArray(values)) {
       throw new TypeError("tiny.Constants takes a plain object of values.");
@@ -3087,15 +3091,44 @@ class TemplatesClass extends ClientToolsClass<Empty, Empty, Empty> {
   }
 }
 
+/**
+ * Markup rendered once on the server and shipped in a bundle, for handlers to
+ * clone as `template.name()`: `new tiny.Templates({ row: () => <Row /> })`.
+ */
 export const Templates: TemplatesConstructor =
   TemplatesClass as unknown as TemplatesConstructor;
 
+/**
+ * A collection of functions that run in the browser, imported as `fn.*` and
+ * bound to JSX event attributes: `new tiny.Handlers({ open() { ... } })`, or
+ * an async factory that imports other tools first.
+ */
 export const Handlers: HandlersConstructor =
   HandlersClass as unknown as HandlersConstructor;
 
+/**
+ * A `tiny.Handlers` collection of these functions. An exported collection
+ * states it, as JSR does not infer the types of a published module:
+ * `export const tools: Handlers<{ open: (this: HTMLElement) => void }> =
+ * new tiny.Handlers(import.meta.url, { open() { ... } })`. The handlers'
+ * docs go on the type's members, where `fn.open` finds them.
+ */
+export type Handlers<TFunctions extends Record<string, AnyFunction>> =
+  ClientToolsClass<TFunctions, Empty, Empty>;
+
+/**
+ * Reactive values shared across the page, imported as `signal.*`:
+ * `new tiny.Signals({ count: 0 })`, or a factory building `Signal`s and
+ * `Computed`s.
+ */
 export const Signals: SignalsConstructor =
   SignalsClass as unknown as SignalsConstructor;
 
+/**
+ * Scoped CSS blocks, imported as `styled.*`: each becomes a hashed class
+ * name emitted inside an `@scope` rule:
+ * ``new tiny.Styles({ card: css`padding: 16px;` })``.
+ */
 export const Styles: StylesConstructor =
   StylesClass as unknown as StylesConstructor;
 
@@ -3217,6 +3250,19 @@ export type Instanced<TSignals, Props, Result> = {
 };
 
 /**
+ * What `instanced()` makes, stated rather than inferred, for an exported
+ * `tiny.SignalComponent`'s type (JSR does not infer the types of a published
+ * module). `Signals` are the exposed signals as their collection defines
+ * them, `InstanceSignals<{ open: Signal<boolean> }>` for a per-instance
+ * `open`; `Props` the component's props.
+ */
+export type InstancedComponent<
+  Signals extends SignalDefinitions = Empty,
+  Props = Empty,
+  Result = JSX.Element,
+> = Instanced<SignalAccessors<Signals>, Props, Result>;
+
+/**
  * The signals named by an `instanced()` list, by name: each reference's own
  * entry in its collection, so the editor still goes to its definition.
  */
@@ -3326,10 +3372,15 @@ const signalComponentTools: SignalComponentTools = {
  * collection the factory imported) and drive through `instance.signal`.
  */
 export class SignalComponent<TComponents extends AnyInstancedComponents> {
+  /** The factory passed in, run by each `tiny.imports()` of the component. */
   readonly factory: (
     tools: SignalComponentTools,
   ) => TComponents | Promise<TComponents>;
 
+  /**
+   * Takes the factory that imports what the components render with and
+   * returns them by name.
+   */
   constructor(
     factory: (
       tools: SignalComponentTools,
@@ -3564,7 +3615,17 @@ export const Constants: new <Values extends SignalConstants>(
   values: Values,
 ) => ConstantsClass<Values> = ConstantsClass;
 
+/**
+ * The request's context and empty tools, as `c`. Throws outside a request.
+ */
 export async function imports(): Promise<ImportedTools<Empty, Empty>>;
+/**
+ * Resolves these collections for the current request or definition:
+ * `const { fn, signal, styled, template, constants, c } = await
+ * tiny.imports(handlers, styles)`. When several define the same name the
+ * last one wins. Only the bundles accessed through the result are recorded
+ * for the request and emitted by `AssetTags`.
+ */
 export async function imports<
   const TTools extends [Importable, ...Importable[]],
 >(

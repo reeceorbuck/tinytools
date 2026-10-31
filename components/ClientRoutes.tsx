@@ -196,6 +196,10 @@ async function renderClientRoutes(
   );
 }
 
+/**
+ * Renders local content when a navigation matches one of its
+ * `<client-route>` children, before (or instead of) the server response.
+ */
 export function ClientRoutes(
   props: PropsWithChildren,
 ): Promise<HtmlEscapedString> {

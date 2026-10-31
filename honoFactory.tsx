@@ -72,6 +72,7 @@ export function runtimeScriptPath(): string {
   return `/handlers/${runtimeScriptFilename()}.js`;
 }
 
+/** The props a `RouteLayoutComponent` is called with. */
 export type RouteLayoutProps = { children: Child };
 /** A layout callback; it may return the children unchanged. */
 export type RouteLayoutComponent = (
@@ -101,12 +102,15 @@ function createRouteLayout(
   );
 }
 
+/** Options for `tiny.middleware.core` and `tools: "core"`. */
 export type ClientToolsOptions = {
   /** Send a Content-Security-Policy header. Defaults to true. */
   csp?: boolean;
   /** Generated filename hash length, clamped to 1-8. */
   generatedFilenameHashLength?: number;
+  /** Handler filename hash length, clamped to 1-8. */
   generatedHandlerHashLength?: number;
+  /** Style filename hash length, clamped to 1-8. */
   generatedStyleHashLength?: number;
   /** Runtime-specific static serving adapter; auto-detected when omitted. */
   // deno-lint-ignore no-explicit-any
@@ -391,6 +395,10 @@ function createCoreMiddleware(
   ];
 }
 
+/**
+ * Options for `new tiny.Hono()`: Hono's own, plus `tools: "core"` to install
+ * `tiny.middleware.core` with the `ClientToolsOptions` given.
+ */
 export type TinyHonoOptions<E extends Env = BlankEnv> =
   & HonoOptions<E>
   & ClientToolsOptions
@@ -509,6 +517,10 @@ export function optimized(sourceFileUrl: string | URL): TinyApi {
   };
 }
 
+/**
+ * The package's API: `tiny.Hono`, the `Handlers`, `Signals`, `Styles` and
+ * `Templates` collections, `imports`, components and middleware.
+ */
 export const tiny: TinyApi = {
   Hono: TinyHono,
   Handlers,

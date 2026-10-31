@@ -11,9 +11,11 @@ import { headHandler, tiny } from "./honoFactory.tsx";
 
 /** The part of Hono's SSE stream API that {@link sendUpdateStream} writes to. */
 export interface UpdateStreamApi {
+  /** Sends one server-sent event carrying `data`. */
   writeSSE(payload: { data: string }): Promise<unknown>;
 }
 
+/** Options for {@link sendUpdateStream}. */
 export interface SendUpdateOptions {
   /**
    * URLPattern pathnames the update applies to, e.g.

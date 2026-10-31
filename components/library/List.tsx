@@ -37,9 +37,9 @@
  */
 
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
-import { h } from "../../jsx-runtime.ts";
+import { h, type JSX } from "../../jsx-runtime.ts";
 import { createContext, useContext } from "hono/jsx";
-import { tiny } from "../../mod.ts";
+import { type SignalComponent, tiny } from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
 import { intrinsicTagName, templateRootTags } from "../../componentScope.ts";
 import type { SortedEvent } from "../../handlers/dragSortTools.ts";
@@ -353,6 +353,12 @@ type ItemProps = {
 /** What `AddItem` and `AddButton` take; `dismissable` is for what they add. */
 type AddProps = { label?: string; dismissable?: boolean };
 
+/** What `AddItem` takes. */
+type AddItemProps = AddProps & { placeholder?: string };
+
+/** What `AddButton` takes. */
+type AddButtonProps = AddProps & { children?: unknown };
+
 /**
  * `List` holds the items written inside it: an `<ol>` of `Item`s, or the
  * `<tbody>` of a table the page writes when they are `Row`s. `AddItem` is a
@@ -363,7 +369,13 @@ type AddProps = { label?: string; dismissable?: boolean };
  * `reorderable` is the list's, and reaches its items through context;
  * `dismissable` is each item's own.
  */
-export const ListSignalComponent = new tiny.SignalComponent(async () => {
+export const ListSignalComponent: SignalComponent<{
+  List: (props: ListProps) => JSX.Element;
+  Item: (props: ItemProps) => JSX.Element;
+  Row: (props: ItemProps) => JSX.Element;
+  AddItem: (props: AddItemProps) => JSX.Element;
+  AddButton: (props: AddButtonProps) => JSX.Element;
+}> = new tiny.SignalComponent(async () => {
   const { fn, signal, styled } = await tiny.imports(
     listSignals,
     listHandlers,
@@ -442,7 +454,7 @@ export const ListSignalComponent = new tiny.SignalComponent(async () => {
         {props.dismissable ? <td>{dismissButton(props)}</td> : null}
       </tr>
     ),
-    AddItem: (props: AddProps & { placeholder?: string }) => (
+    AddItem: (props: AddItemProps) => (
       <form
         class={styled.addItem}
         data-dismissable={props.dismissable ? "" : undefined}
@@ -459,7 +471,7 @@ export const ListSignalComponent = new tiny.SignalComponent(async () => {
         <button type="submit">Add</button>
       </form>
     ),
-    AddButton: (props: AddProps & { children?: unknown }) => (
+    AddButton: (props: AddButtonProps) => (
       <button
         type="button"
         aria-label={props.label}

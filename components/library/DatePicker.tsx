@@ -23,7 +23,15 @@
 
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
 import { h } from "../../jsx-runtime.ts";
-import { type HandlerReference, tiny } from "../../mod.ts";
+import {
+  type HandlerReference,
+  type InstancedComponent,
+  type InstanceSignals,
+  type ReadonlySignal,
+  type Signal,
+  type SignalComponent,
+  tiny,
+} from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
 import type { SignalEvent } from "../../handlers/signals.ts";
 
@@ -106,6 +114,52 @@ const datePickerSignals = new tiny.Signals(import.meta.url, async () => {
     });
 });
 
+/** The signals `DateInput` exposes. */
+type DateInputExposed = InstanceSignals<{
+  date: Signal<string>;
+  weekday: ReadonlySignal<string>;
+}>;
+
+/** The signals `Weekday` exposes. */
+type WeekdayExposed = InstanceSignals<{ weekday: ReadonlySignal<string> }>;
+
+/** Props for the picker's `DateInput`. */
+type DateInputProps = {
+  name: string;
+  /** For a `<label for>`. */
+  id?: string;
+  value?: string;
+  /** A `week` input steps a week at a time. */
+  type?: "date" | "week";
+  /** Steps over Saturday and Sunday; the picker can still choose them. */
+  skipWeekends?: boolean;
+  /** Runs on every change, from an edit, a step or today alike. */
+  onChange?:
+    | HandlerReference<string, (event: Event) => unknown>
+    | readonly HandlerReference<string, (event: Event) => unknown>[];
+};
+
+/** Props for the picker's `Weekday`. */
+type WeekdayProps = {
+  /** The input's date, for the name shown before the script runs. */
+  value?: string;
+};
+
+/** Props for a picker `Step` button. */
+type StepProps = {
+  /** How far, back when negative. */
+  by: number;
+  /** Days or weeks; by default the input's own unit. */
+  unit?: "day" | "week";
+  /** Its accessible name; by default "Previous day", "Next 2 weeks"... */
+  label?: string;
+  /** What it shows; by default ‹ or ›. */
+  children?: unknown;
+};
+
+/** Props for the picker's `Today` button. */
+type TodayProps = { children?: unknown };
+
 const datePickerHandlers = new tiny.Handlers(import.meta.url, async () => {
   const { fn, signal } = await tiny.imports(dateTools, datePickerSignals);
   return {
@@ -167,7 +221,12 @@ const datePickerStyles = new tiny.Styles(import.meta.url, {
  * names its day, `Step` moves it by `by` days or weeks and `Today` sets it to
  * today. `DateInput` and `Weekday` expose `signal.date` and `signal.weekday`.
  */
-export const DatePickerSignalComponent = new tiny.SignalComponent(
+export const DatePickerSignalComponent: SignalComponent<{
+  DateInput: InstancedComponent<DateInputExposed, DateInputProps>;
+  Weekday: InstancedComponent<WeekdayExposed, WeekdayProps>;
+  Step: InstancedComponent<Record<never, never>, StepProps>;
+  Today: InstancedComponent<Record<never, never>, TodayProps>;
+}> = new tiny.SignalComponent(
   async ({ instanced }) => {
     const { fn, signal, styled } = await tiny.imports(
       datePickerSignals,
@@ -175,20 +234,7 @@ export const DatePickerSignalComponent = new tiny.SignalComponent(
       datePickerStyles,
     );
     return {
-      DateInput: instanced((props: {
-        name: string;
-        /** For a `<label for>`. */
-        id?: string;
-        value?: string;
-        /** A `week` input steps a week at a time. */
-        type?: "date" | "week";
-        /** Steps over Saturday and Sunday; the picker can still choose them. */
-        skipWeekends?: boolean;
-        /** Runs on every change, from an edit, a step or today alike. */
-        onChange?:
-          | HandlerReference<string, (event: Event) => unknown>
-          | readonly HandlerReference<string, (event: Event) => unknown>[];
-      }) => (
+      DateInput: instanced((props: DateInputProps) => (
         <input
           type={props.type ?? "date"}
           id={props.id}
@@ -202,10 +248,7 @@ export const DatePickerSignalComponent = new tiny.SignalComponent(
         />
       ), [signal.date, signal.weekday]),
       Weekday: instanced(
-        (props: {
-          /** The input's date, for the name shown before the script runs. */
-          value?: string;
-        }) => (
+        (props: WeekdayProps) => (
           <output>
             {signal.weekday.withInitial(
               dateFunctions.weekday(props.value ?? ""),
@@ -214,16 +257,7 @@ export const DatePickerSignalComponent = new tiny.SignalComponent(
         ),
         [signal.weekday],
       ),
-      Step: instanced((props: {
-        /** How far, back when negative. */
-        by: number;
-        /** Days or weeks; by default the input's own unit. */
-        unit?: "day" | "week";
-        /** Its accessible name; by default "Previous day", "Next 2 weeks"... */
-        label?: string;
-        /** What it shows; by default ‹ or ›. */
-        children?: unknown;
-      }) => {
+      Step: instanced((props: StepProps) => {
         const count = Math.abs(props.by);
         const direction = props.by < 0 ? "Previous" : "Next";
         const label = props.label ??
@@ -248,7 +282,7 @@ export const DatePickerSignalComponent = new tiny.SignalComponent(
           </button>
         );
       }),
-      Today: instanced((props: { children?: unknown }) => (
+      Today: instanced((props: TodayProps) => (
         <button type="button" class={styled.dateButton} onClick={fn.today}>
           {props.children ?? "Today"}
         </button>

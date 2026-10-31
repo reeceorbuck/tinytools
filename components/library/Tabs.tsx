@@ -31,7 +31,13 @@
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
 import { h } from "../../jsx-runtime.ts";
 import { createContext, useContext } from "hono/jsx";
-import { tiny } from "../../mod.ts";
+import {
+  type InstancedComponent,
+  type InstanceSignals,
+  type Signal,
+  type SignalComponent,
+  tiny,
+} from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
 
 /** The selected tab's value, one per instance. */
@@ -40,6 +46,42 @@ const tabsSignals = new tiny.Signals(
   ({ Signal, perInstance }) =>
     perInstance(() => ({ selected: new Signal("") })),
 );
+
+/** The signals the tabs' parts expose. */
+type TabsExposed = InstanceSignals<{ selected: Signal<string> }>;
+
+/** The tab list's props. */
+type ListProps = {
+  /** Names the tabs to assistive technology. */
+  label?: string;
+  /** The tab selected as the page loads; by default the first. */
+  value?: string;
+  /**
+   * Remembers the chosen tab in this viewer's browser under this key,
+   * restoring it as the page loads.
+   */
+  remember?: string;
+  /** Lays the tabs out in a column, moved through with ↑ and ↓. */
+  vertical?: boolean;
+  children?: unknown;
+};
+
+/** A tab's props. */
+type TabProps = {
+  value: string;
+  disabled?: boolean;
+  children?: unknown;
+};
+
+/** A panel's props. */
+type PanelProps = {
+  value: string;
+  /** Shows it before the script runs: the list's starting value's panel. */
+  selected?: boolean;
+  /** Names the panel to assistive technology. */
+  label?: string;
+  children?: unknown;
+};
 
 const tabsHandlers = new tiny.Handlers(import.meta.url, async () => {
   const { signal } = await tiny.imports(tabsSignals);
@@ -176,7 +218,11 @@ const TabsProvider = TabsContext.Provider as unknown as (
  * of its `value`. All three expose `signal.selected`, the chosen value,
  * which selects that tab when set.
  */
-export const TabsSignalComponent = new tiny.SignalComponent(
+export const TabsSignalComponent: SignalComponent<{
+  List: InstancedComponent<TabsExposed, ListProps>;
+  Tab: InstancedComponent<TabsExposed, TabProps>;
+  Panel: InstancedComponent<TabsExposed, PanelProps>;
+}> = new tiny.SignalComponent(
   async ({ instanced }) => {
     const { fn, signal, styled } = await tiny.imports(
       tabsSignals,
@@ -184,20 +230,7 @@ export const TabsSignalComponent = new tiny.SignalComponent(
       tabsStyles,
     );
     return {
-      List: instanced((props: {
-        /** Names the tabs to assistive technology. */
-        label?: string;
-        /** The tab selected as the page loads; by default the first. */
-        value?: string;
-        /**
-         * Remembers the chosen tab in this viewer's browser under this key,
-         * restoring it as the page loads.
-         */
-        remember?: string;
-        /** Lays the tabs out in a column, moved through with ↑ and ↓. */
-        vertical?: boolean;
-        children?: unknown;
-      }) => (
+      List: instanced((props: ListProps) => (
         <div
           role="tablist"
           class={styled.list}
@@ -214,11 +247,7 @@ export const TabsSignalComponent = new tiny.SignalComponent(
           </TabsProvider>
         </div>
       ), [signal.selected]),
-      Tab: instanced((props: {
-        value: string;
-        disabled?: boolean;
-        children?: unknown;
-      }) => {
+      Tab: instanced((props: TabProps) => {
         const { value } = useContext(TabsContext);
         // Without a list value, the first connect picks the first tab; until
         // then every tab stays reachable.
@@ -240,14 +269,7 @@ export const TabsSignalComponent = new tiny.SignalComponent(
           </button>
         );
       }, [signal.selected]),
-      Panel: instanced((props: {
-        value: string;
-        /** Shows it before the script runs: the list's starting value's panel. */
-        selected?: boolean;
-        /** Names the panel to assistive technology. */
-        label?: string;
-        children?: unknown;
-      }) => (
+      Panel: instanced((props: PanelProps) => (
         <section
           role="tabpanel"
           class={styled.panel}

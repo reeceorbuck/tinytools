@@ -23,12 +23,15 @@ import { transparent } from "../componentScope.ts";
 
 export type PartialInsertHandler = Parameters<typeof NewPartial>[0]["onLoad"];
 
+/** Props for `Suspense`: the async children and what to show meanwhile. */
 export type SuspenseProps = PropsWithChildren<{
   /** Rendered immediately in place of the children until they resolve. */
   fallback: Child;
 }>;
 
+/** Props for `CustomSuspense`: `SuspenseProps` plus the insertion handler. */
 export type CustomSuspenseProps = SuspenseProps & {
+  /** Inserts the resolved content, e.g. `fn.partialBlast`. */
   onLoad: PartialInsertHandler;
 };
 

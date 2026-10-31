@@ -1,4 +1,4 @@
-import { tiny } from "../mod.ts";
+import { type Handlers, tiny } from "../mod.ts";
 import { processIncomingDataTools } from "./processIncomingData.ts";
 
 /**
@@ -6,10 +6,12 @@ import { processIncomingDataTools } from "./processIncomingData.ts";
  * messages through `processIncomingData`, so pushed partials are applied
  * exactly like partial navigation responses.
  */
-export const sseTools = new tiny.Handlers(import.meta.url, async () => {
+export const sseTools: Handlers<{
+  /** Bind to `onLoad` of the element that owns the connection, typically `<body>`. */
+  activateSSE(this: HTMLElement, _e: Event): void;
+}> = new tiny.Handlers(import.meta.url, async () => {
   const { fn } = await tiny.imports(processIncomingDataTools);
   return {
-    /** Bind to `onLoad` of the element that owns the connection, typically `<body>`. */
     activateSSE: function (this: HTMLElement, _e: Event): void {
       const owner = this as HTMLElement & {
         sse?: EventSource & { wasConnected?: boolean };

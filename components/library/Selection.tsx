@@ -42,7 +42,14 @@
 
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
 import { h } from "../../jsx-runtime.ts";
-import { tiny } from "../../mod.ts";
+import {
+  type InstancedComponent,
+  type InstanceSignals,
+  type ReadonlySignal,
+  type Signal,
+  type SignalComponent,
+  tiny,
+} from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
 import { signalTools } from "../../handlers/signals.ts";
 
@@ -182,6 +189,45 @@ const selectionStyles = new tiny.Styles(import.meta.url, {
   `,
 });
 
+/** The signals every selection part exposes. */
+type SelectionExposed = InstanceSignals<{
+  selected: Signal<string[]>;
+  count: ReadonlySignal<number>;
+}>;
+
+/** What `Checkbox` takes. */
+type CheckboxProps = {
+  value: string | number;
+  /** Names the checkbox, as "Select <label>". */
+  label?: string;
+  /** Its form field name, so a form submits the chosen values. */
+  name?: string;
+  /** The id of a form it belongs to, from outside it. */
+  form?: string;
+  /** Chosen as the page loads. */
+  checked?: boolean;
+};
+
+/** What `SelectAll` takes. */
+type SelectAllProps = { label?: string };
+
+/** What `Bar` takes. */
+type BarProps = { label?: string; children?: unknown };
+
+/** What `Action` takes. */
+type ActionProps = {
+  /** `submit` by default, sending the chosen rows' form. */
+  type?: "submit" | "button";
+  name?: string;
+  value?: string;
+  form?: string;
+  formaction?: string;
+  children?: unknown;
+};
+
+/** What `Clear` takes. */
+type ClearProps = { children?: unknown };
+
 /**
  * `Checkbox` chooses its row's `value`, `SelectAll` chooses every row, `Count`
  * shows "3 of 12 selected", `Bar` shows its children only while any are
@@ -189,7 +235,14 @@ const selectionStyles = new tiny.Styles(import.meta.url, {
  * all. Every part exposes `signal.selected`, the chosen values, and
  * `signal.count`.
  */
-export const SelectionSignalComponent = new tiny.SignalComponent(
+export const SelectionSignalComponent: SignalComponent<{
+  Checkbox: InstancedComponent<SelectionExposed, CheckboxProps>;
+  SelectAll: InstancedComponent<SelectionExposed, SelectAllProps>;
+  Count: InstancedComponent<SelectionExposed>;
+  Bar: InstancedComponent<SelectionExposed, BarProps>;
+  Action: InstancedComponent<SelectionExposed, ActionProps>;
+  Clear: InstancedComponent<SelectionExposed, ClearProps>;
+}> = new tiny.SignalComponent(
   async ({ instanced }) => {
     const { fn, signal, styled } = await tiny.imports(
       selectionSignals,
@@ -201,17 +254,7 @@ export const SelectionSignalComponent = new tiny.SignalComponent(
     // have changed these signals, so each catches up with `fireSelfSignal`.
     const exposed = [signal.selected, signal.count] as const;
     return {
-      Checkbox: instanced((props: {
-        value: string | number;
-        /** Names the checkbox, as "Select <label>". */
-        label?: string;
-        /** Its form field name, so a form submits the chosen values. */
-        name?: string;
-        /** The id of a form it belongs to, from outside it. */
-        form?: string;
-        /** Chosen as the page loads. */
-        checked?: boolean;
-      }) => (
+      Checkbox: instanced((props: CheckboxProps) => (
         <input
           type="checkbox"
           class={styled.checkbox}
@@ -227,7 +270,7 @@ export const SelectionSignalComponent = new tiny.SignalComponent(
           onClick={fn.toggleSelected}
         />
       ), exposed),
-      SelectAll: instanced((props: { label?: string }) => (
+      SelectAll: instanced((props: SelectAllProps) => (
         <input
           type="checkbox"
           class={styled.checkbox}
@@ -245,7 +288,7 @@ export const SelectionSignalComponent = new tiny.SignalComponent(
         />,
         exposed,
       ),
-      Bar: instanced((props: { label?: string; children?: unknown }) => (
+      Bar: instanced((props: BarProps) => (
         <div
           role="toolbar"
           class={styled.bar}
@@ -256,15 +299,7 @@ export const SelectionSignalComponent = new tiny.SignalComponent(
           {props.children}
         </div>
       ), exposed),
-      Action: instanced((props: {
-        /** `submit` by default, sending the chosen rows' form. */
-        type?: "submit" | "button";
-        name?: string;
-        value?: string;
-        form?: string;
-        formaction?: string;
-        children?: unknown;
-      }) => (
+      Action: instanced((props: ActionProps) => (
         <button
           type={props.type ?? "submit"}
           name={props.name}
@@ -278,7 +313,7 @@ export const SelectionSignalComponent = new tiny.SignalComponent(
         </button>
       ), exposed),
       Clear: instanced(
-        (props: { children?: unknown }) => (
+        (props: ClearProps) => (
           <button type="button" onClick={fn.clearSelection}>
             {props.children ?? "Clear"}
           </button>

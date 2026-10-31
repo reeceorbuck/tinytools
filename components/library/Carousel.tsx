@@ -29,8 +29,14 @@
  */
 
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
-import { h } from "../../jsx-runtime.ts";
-import { tiny } from "../../mod.ts";
+import { h, type JSX } from "../../jsx-runtime.ts";
+import {
+  type InstancedComponent,
+  type InstanceSignals,
+  type Signal,
+  type SignalComponent,
+  tiny,
+} from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
 import { signalTools } from "../../handlers/signals.ts";
 import type { LifecycleElement } from "../../lifecycleElement.ts";
@@ -72,6 +78,36 @@ const carouselSignals = new tiny.Signals(
       };
     }),
 );
+
+/** The signals the carousel's parts expose. */
+type CarouselExposed = InstanceSignals<{
+  index: Signal<number>;
+  count: Signal<number>;
+}>;
+
+/** Props for the carousel's `Track`. */
+type TrackProps = {
+  /** Names the carousel to assistive technology. */
+  label?: string;
+  /** Wraps around from the last slide to the first, and back. */
+  loop?: boolean;
+  /** Moves on by itself every this many milliseconds. */
+  autoplay?: number;
+  children?: unknown;
+};
+
+/** Props for a carousel `Slide`. */
+type SlideProps = {
+  /** Names the slide; by default "2 of 5". */
+  label?: string;
+  children?: unknown;
+};
+
+/** Props for the carousel's `Previous` and `Next` buttons. */
+type StepButtonProps = { children?: unknown };
+
+/** Props for the carousel's `Dots`. */
+type DotsProps = { label?: string };
 
 /** Helpers the handlers share, called through `fn`. */
 const carouselTools = new tiny.Handlers(import.meta.url, {
@@ -308,7 +344,15 @@ const carouselStyles = new tiny.Styles(import.meta.url, {
  * `Play` sit anywhere around it. All expose `signal.index`, the slide at the
  * track's start, which scrolls there when set, and `signal.count`.
  */
-export const CarouselSignalComponent = new tiny.SignalComponent(
+export const CarouselSignalComponent: SignalComponent<{
+  Track: InstancedComponent<CarouselExposed, TrackProps>;
+  Slide: (props: SlideProps) => JSX.Element;
+  Previous: InstancedComponent<CarouselExposed, StepButtonProps>;
+  Next: InstancedComponent<CarouselExposed, StepButtonProps>;
+  Dots: InstancedComponent<CarouselExposed, DotsProps>;
+  Status: InstancedComponent<CarouselExposed, Record<never, never>>;
+  Play: InstancedComponent<CarouselExposed, Record<never, never>>;
+}> = new tiny.SignalComponent(
   async ({ instanced }) => {
     const { fn, signal, styled } = await tiny.imports(
       carouselSignals,
@@ -320,15 +364,7 @@ export const CarouselSignalComponent = new tiny.SignalComponent(
     // signals, so each catches up with `fireSelfSignal`.
     const exposed = [signal.index, signal.count];
     return {
-      Track: instanced((props: {
-        /** Names the carousel to assistive technology. */
-        label?: string;
-        /** Wraps around from the last slide to the first, and back. */
-        loop?: boolean;
-        /** Moves on by itself every this many milliseconds. */
-        autoplay?: number;
-        children?: unknown;
-      }) => (
+      Track: instanced((props: TrackProps) => (
         <div
           role="region"
           aria-roledescription="carousel"
@@ -344,11 +380,7 @@ export const CarouselSignalComponent = new tiny.SignalComponent(
           {props.children}
         </div>
       ), exposed),
-      Slide: (props: {
-        /** Names the slide; by default "2 of 5". */
-        label?: string;
-        children?: unknown;
-      }) => (
+      Slide: (props: SlideProps) => (
         <div
           role="group"
           aria-roledescription="slide"
@@ -359,7 +391,7 @@ export const CarouselSignalComponent = new tiny.SignalComponent(
           {props.children}
         </div>
       ),
-      Previous: instanced((props: { children?: unknown }) => (
+      Previous: instanced((props: StepButtonProps) => (
         <button
           type="button"
           class={styled.button}
@@ -371,7 +403,7 @@ export const CarouselSignalComponent = new tiny.SignalComponent(
           {props.children ?? "‹"}
         </button>
       ), exposed),
-      Next: instanced((props: { children?: unknown }) => (
+      Next: instanced((props: StepButtonProps) => (
         <button
           type="button"
           class={styled.button}
@@ -383,7 +415,7 @@ export const CarouselSignalComponent = new tiny.SignalComponent(
           {props.children ?? "›"}
         </button>
       ), exposed),
-      Dots: instanced((props: { label?: string }) => (
+      Dots: instanced((props: DotsProps) => (
         <div
           role="group"
           class={styled.dots}

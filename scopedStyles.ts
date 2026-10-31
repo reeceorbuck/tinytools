@@ -24,6 +24,7 @@ const GLOBAL_SCOPE_BOUNDARY_TOKEN = "global";
 
 export type ClassNameValue = string | null | undefined | false;
 
+/** Joins class names into one `class` value, without falsy ones or repeats. */
 export function mergeClassNames(...classNames: ClassNameValue[]): string {
   const classes = classNames
     .filter((className): className is string => typeof className === "string")
@@ -133,6 +134,11 @@ export function unscoped(
   return createScopedStyleDefinition(cssContent, { mode: "none" }, options);
 }
 
+/**
+ * Wraps CSS with a scope other than the default boundary: `toSelectors`,
+ * `toComponent`, `toBoundary`, `direct` (content emitted directly inside
+ * `@scope`) or `unscoped`.
+ */
 export const setCustomScope: {
   toSelectors: typeof scopedTo;
   toComponent(

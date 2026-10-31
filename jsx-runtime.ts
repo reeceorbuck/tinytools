@@ -221,15 +221,28 @@ function inspectTemplate(
 }
 
 /** A precompiled child expression: a signal reference renders as live text. */
-export const jsxEscape: typeof honoJsxEscape = (value) =>
+export const jsxEscape: typeof honoJsxEscape = (value): string =>
   honoJsxEscape(signalChild(value) as typeof value);
 
+/**
+ * A precompiled template. Binds the lifecycle handlers and signal properties
+ * among its values, like `jsx` does for its props.
+ */
 export const jsxTemplate: typeof honoJsxTemplate = withTemplateRoots(
   honoJsxTemplate,
   inspectTemplate,
 );
 
-export const jsx: typeof honoJsx = (tag, props, key) => {
+/**
+ * Creates an element or component node. A client handler reference expands
+ * to its event attributes, a signal reference child renders as live text,
+ * and lifecycle handlers are bound (see the module doc).
+ */
+export const jsx: typeof honoJsx = (
+  tag,
+  props,
+  key,
+): ReturnType<typeof honoJsx> => {
   // A component gets its children as given; where it places them in an
   // element (or fragment), a signal reference among them renders as live text.
   if (tag === Fragment && props && "children" in props) {
@@ -272,6 +285,7 @@ export const jsx: typeof honoJsx = (tag, props, key) => {
   return need ? markNeedsProxy(node, need) : node;
 };
 
+/** The same as `jsx`, for elements with several static children. */
 export const jsxs: typeof honoJsx = jsx;
 
 /**
@@ -297,6 +311,11 @@ export declare namespace h {
   export type { JSX };
 }
 
+/**
+ * A precompiled attribute. A client handler reference expands to its event
+ * attributes, and a signal from `tiny.imports()` on a signal property
+ * renders its initial value and stays live.
+ */
 export const jsxAttr = (
   name: string,
   value:
@@ -538,12 +557,21 @@ type ApplyOverrides<TBase, TOverrides> =
   & Omit<TBase, keyof TOverrides>
   & TOverrides;
 
+/**
+ * The JSX types for TSX compiled against this runtime: Hono's, with event
+ * handlers that only accept client functions and signal properties that
+ * accept a signal from `tiny.imports()`.
+ */
 // deno-lint-ignore no-namespace
 export namespace JSX {
+  /** What a JSX expression evaluates to. */
   export type Element = HonoJSX.Element;
+  /** Attributes every element and component accepts, such as `key`. */
   export type IntrinsicAttributes = HonoJSX.IntrinsicAttributes;
+  /** Names the prop that carries an element's children. */
   export type ElementChildrenAttribute = HonoJSX.ElementChildrenAttribute;
 
+  /** The props of each intrinsic element, with the overrides applied. */
   export type IntrinsicElements = {
     [K in keyof HonoJSX.IntrinsicElements]: ApplyOverrides<
       HonoJSX.IntrinsicElements[K],

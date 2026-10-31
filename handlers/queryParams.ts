@@ -1,6 +1,16 @@
 import { Handlers } from "../clientTools.ts";
 
-export const queryParamTools = new Handlers(import.meta.url, {
+/** Helpers for reacting to changes in the URL's query parameters. */
+export const queryParamTools: Handlers<{
+  /**
+   * Compares the current entry's query parameters with those of
+   * `fromUrlString` and returns each key whose value changed, with its old
+   * and new value (`null` when absent or empty).
+   */
+  queryParamChanges(
+    fromUrlString: string | null,
+  ): Map<string, { from: string | null; to: string | null }>;
+}> = new Handlers(import.meta.url, {
   queryParamChanges: function (fromUrlString: string | null) {
     const newUrlString = navigation.currentEntry?.url;
     if (!newUrlString) {
