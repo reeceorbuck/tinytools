@@ -19,6 +19,7 @@
  */
 
 import { expandGlob } from "@std/fs/expand-glob";
+import { nodeCommand } from "./nodeCommand.ts";
 
 const root = new URL("../", import.meta.url);
 const outDir = new URL("npm/", root);
@@ -154,8 +155,8 @@ async function run(cmd: string, args: string[]) {
   }
 }
 
-const npm = Deno.build.os === "windows" ? "npm.cmd" : "npm";
-const npx = Deno.build.os === "windows" ? "npx.cmd" : "npx";
+const npm = nodeCommand("npm");
+const npx = nodeCommand("npx");
 
 // The manifest's own dependencies plus the compiler, without touching it.
 await run(npm, [
@@ -174,4 +175,4 @@ await Deno.remove(srcDir, { recursive: true });
 await Deno.remove(new URL("tsconfig.json", outDir));
 await Deno.remove(new URL("node_modules", outDir), { recursive: true });
 
-console.log(`Built ${npmManifest.name}@${npmManifest.version} in ./npm`);
+console.log(`Built ${manifest.name}@${npmManifest.version} in ./npm`);

@@ -63,7 +63,8 @@ if (dirty.trim()) {
 }
 
 // No lockfile: the package does not track one (a monorepo's root lockfile
-// is updated by its own release).
+// is updated by its own release). @types/node stays on the major of the
+// Node version the package supports (`engines` in package.json).
 if (updateDeps) {
   await run(Deno.execPath(), [
     "update",
@@ -71,6 +72,7 @@ if (updateDeps) {
     "--minimum-dependency-age",
     "0",
     "--no-lock",
+    "!@types/node",
   ]);
 }
 

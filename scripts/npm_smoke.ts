@@ -11,11 +11,12 @@
  * Usage: deno task test:npm
  */
 
+import { nodeCommand } from "./nodeCommand.ts";
+
 const root = new URL("../", import.meta.url);
 const fixtures = new URL("tests/npm-smoke/", root);
-const windows = Deno.build.os === "windows";
-const npm = windows ? "npm.cmd" : "npm";
-const npx = windows ? "npx.cmd" : "npx";
+const npm = nodeCommand("npm");
+const npx = nodeCommand("npx");
 
 async function run(
   cmd: string,
