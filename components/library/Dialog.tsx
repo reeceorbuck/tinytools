@@ -48,19 +48,19 @@ import { h, type JSX } from "../../jsx-runtime.ts";
 import {
   type InstancedComponent,
   type InstanceSignals,
+  optimized,
   type Signal,
   type SignalComponent,
-  tiny,
 } from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
 import { transparent } from "../../componentScope.ts";
 import type { SignalEvent } from "../../handlers/signals.ts";
 
+const tiny = optimized(import.meta.url);
+
 /** Whether the dialog is open, one per instance. */
-const dialogSignals = new tiny.Signals(
-  import.meta.url,
-  ({ Signal, perInstance }) =>
-    perInstance(() => ({ open: new Signal<boolean>(false) })),
+const dialogSignals = new tiny.Signals(({ Signal, perInstance }) =>
+  perInstance(() => ({ open: new Signal<boolean>(false) }))
 );
 
 /** The signals the dialog's parts expose. */
@@ -98,7 +98,7 @@ type ConfirmProps = {
 /** A panel keeping its rendered content, to put back when it closes. */
 type RestorableDialog = HTMLDialogElement & { initialContent?: Node[] };
 
-const dialogHandlers = new tiny.Handlers(import.meta.url, async () => {
+const dialogHandlers = new tiny.Handlers(async () => {
   const { signal } = await tiny.imports(dialogSignals);
   return {
     /** Opens a panel rendered `open`, and takes its state. */
@@ -193,14 +193,16 @@ const dialogHandlers = new tiny.Handlers(import.meta.url, async () => {
   };
 });
 
-const dialogStyles = new tiny.Styles(import.meta.url, {
+const dialogStyles = new tiny.Styles({
   panel: css`
     max-width: min(32rem, calc(100vw - 2rem));
     padding: 1.25rem;
-    border: 1px solid var(--dialog-border, light-dark(oklch(87.2% 0.009 258.3), oklch(32.8% 0.007 258.3)));
+    border: 1px solid var(--dialog-border, light-dark(oklch(87.2% 0.009 258.3),
+      oklch(32.8% 0.007 258.3)));
     border-radius: 8px;
     background: var(--dialog-surface, light-dark(oklch(100% 0 0), oklch(20% 0 0)));
-    color: var(--dialog-text, light-dark(oklch(21% 0.032 264.7), oklch(97% 0.032 264.7)));
+    color: var(--dialog-text, light-dark(oklch(21% 0.032 264.7), oklch(97% 0.032
+      264.7)));
     box-shadow: 0 12px 32px oklch(21% 0.032 264.7 / 0.2);
 
     &::backdrop {

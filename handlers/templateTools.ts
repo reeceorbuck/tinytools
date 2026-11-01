@@ -1,6 +1,8 @@
 // Imported by the package's own components, so this avoids the module cycle
 // through `mod.ts` that the app-facing handler modules need not worry about.
-import { Handlers } from "../clientTools.ts";
+import { type Handlers, sourcedCollections } from "../clientTools.ts";
+
+const sourced = sourcedCollections(import.meta.url);
 
 /** Bundles register their handlers here as they evaluate (see `runHandler`). */
 type RegisteredBundles = Record<string, Record<string, unknown>>;
@@ -64,7 +66,7 @@ export const templateTools: Handlers<{
    * once the content has been parsed and never again.
    */
   buildFromTemplate(this: HTMLTemplateElement): Promise<void>;
-}> = new Handlers(import.meta.url, {
+}> = new sourced.Handlers({
   cloneTemplate,
   buildFromTemplate: async function (this: HTMLTemplateElement) {
     const built = await cloneTemplate(

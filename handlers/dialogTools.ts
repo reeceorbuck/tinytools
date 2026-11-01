@@ -1,4 +1,6 @@
-import { Handlers } from "../clientTools.ts";
+import { type Handlers, sourcedCollections } from "../clientTools.ts";
+
+const sourced = sourcedCollections(import.meta.url);
 
 /** Handlers for `<dialog>` elements. */
 export const dialogTools: Handlers<{
@@ -9,7 +11,7 @@ export const dialogTools: Handlers<{
    * supports `closedby`. Delete once Safari does.
    */
   closedByAnyFallback(this: HTMLDialogElement, e: MouseEvent): void;
-}> = new Handlers(import.meta.url, {
+}> = new sourced.Handlers({
   closedByAnyFallback: function (this: HTMLDialogElement, e: MouseEvent) {
     if ("closedBy" in HTMLDialogElement.prototype || e.target !== this) {
       return;

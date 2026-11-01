@@ -6,7 +6,7 @@ import type { PropsWithChildren } from "hono/jsx";
 import { h } from "../jsx-runtime.ts";
 import type { HtmlEscapedString } from "hono/utils/html";
 import { type PartialAbortableHTMLElement, tiny } from "../mod.ts";
-import { Handlers, imports } from "../clientTools.ts";
+import { imports, sourcedCollections } from "../clientTools.ts";
 import {
   applyNavigationHandlers,
   type AppNavigation,
@@ -18,7 +18,9 @@ import { transparent } from "../componentScope.ts";
 import { processIncomingDataTools } from "../handlers/processIncomingData.ts";
 import { precommitFallbackTools } from "../handlers/precommitFallback.ts";
 
-const ClientRouterHandlers = new Handlers(import.meta.url, async () => {
+const sourced = sourcedCollections(import.meta.url);
+
+const ClientRouterHandlers = new sourced.Handlers(async () => {
   const { fn } = await imports(
     navigationUrlTools,
     clientRouteTools,

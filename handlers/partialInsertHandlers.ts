@@ -1,4 +1,6 @@
-import { Handlers } from "../clientTools.ts";
+import { type Handlers, sourcedCollections } from "../clientTools.ts";
+
+const sourced = sourcedCollections(import.meta.url);
 
 /**
  * A partial's template. With an `optional-target` attribute (set on partials
@@ -30,7 +32,7 @@ export const partialInsertHandlers: Handlers<{
   partialMergeContent(this: PartialTemplate): void;
   /** Removes the target from the page. */
   partialDelete(this: PartialTemplate): void;
-}> = new Handlers(import.meta.url, {
+}> = new sourced.Handlers({
   partialReplace: function (this: PartialTemplate) {
     const partialId = this.getAttribute("for-partial-id");
     if (!partialId) {

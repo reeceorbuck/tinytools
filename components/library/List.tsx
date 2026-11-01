@@ -42,11 +42,13 @@
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
 import { h, type JSX } from "../../jsx-runtime.ts";
 import { createContext, useContext } from "hono/jsx";
-import { type SignalComponent, tiny } from "../../mod.ts";
+import { optimized, type SignalComponent } from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
 import { intrinsicTagName, templateRootTags } from "../../componentScope.ts";
 import type { SortedEvent } from "../../handlers/dragSortTools.ts";
 import { dragSortTools } from "../../handlers/dragSortTools.ts";
+
+const tiny = optimized(import.meta.url);
 
 /** An item added but not yet listed; a blank label is one to fill in. */
 type PendingItem = { label: string; dismissable: boolean };
@@ -56,13 +58,11 @@ type PendingItem = { label: string; dismissable: boolean };
  * add parts append to it and the list moves them into items, so they meet
  * only through the signal, wherever each sits on the page.
  */
-const listSignals = new tiny.Signals(
-  import.meta.url,
-  ({ Signal, perInstance }) =>
-    perInstance(() => ({ pending: new Signal<PendingItem[]>([]) })),
+const listSignals = new tiny.Signals(({ Signal, perInstance }) =>
+  perInstance(() => ({ pending: new Signal<PendingItem[]>([]) }))
 );
 
-const listStyles = new tiny.Styles(import.meta.url, {
+const listStyles = new tiny.Styles({
   list: css`
     display: flex;
     flex-direction: column;
@@ -85,10 +85,12 @@ const listStyles = new tiny.Styles(import.meta.url, {
     gap: 0.75rem;
     min-height: 2.75rem;
     padding: 0.5rem 0.5rem 0.5rem 0.75rem;
-    border: 1px solid var(--list-border, light-dark(oklch(87.2% 0.009 258.3), oklch(32.8% 0.007 258.3)));
+    border: 1px solid var(--list-border, light-dark(oklch(87.2% 0.009 258.3),
+      oklch(32.8% 0.007 258.3)));
     border-radius: 6px;
     background: var(--list-surface, light-dark(oklch(100% 0 0), oklch(20% 0 0)));
-    color: var(--list-text, light-dark(oklch(21% 0.032 264.7), oklch(97% 0.032 264.7)));
+    color: var(--list-text, light-dark(oklch(21% 0.032 264.7), oklch(97% 0.032
+      264.7)));
     transition: transform var(--list-shift-duration) ease,
       box-shadow var(--list-shift-duration) ease;
 
@@ -98,7 +100,8 @@ const listStyles = new tiny.Styles(import.meta.url, {
     }
     &[draggable="true"]::before {
       content: "⠿";
-      color: var(--list-muted, light-dark(oklch(44.6% 0.026 256.8), oklch(75.4% 0.026 256.8)));
+      color: var(--list-muted, light-dark(oklch(44.6% 0.026 256.8), oklch(75.4%
+        0.026 256.8)));
     }
     &:focus-visible {
       outline: 2px solid var(--list-accent, oklch(50.8% 0.105 165.6));
@@ -128,15 +131,18 @@ const listStyles = new tiny.Styles(import.meta.url, {
     border: none;
     border-radius: 4px;
     background: none;
-    color: var(--list-muted, light-dark(oklch(44.6% 0.026 256.8), oklch(75.4% 0.026 256.8)));
+    color: var(--list-muted, light-dark(oklch(44.6% 0.026 256.8), oklch(75.4% 0.026
+      256.8)));
     font-size: 1.25rem;
     line-height: 1;
     cursor: pointer;
 
     &:hover,
     &:focus-visible {
-      background: var(--list-border, light-dark(oklch(87.2% 0.009 258.3), oklch(32.8% 0.007 258.3)));
-      color: var(--list-text, light-dark(oklch(21% 0.032 264.7), oklch(97% 0.032 264.7)));
+      background: var(--list-border, light-dark(oklch(87.2% 0.009 258.3),
+        oklch(32.8% 0.007 258.3)));
+      color: var(--list-text, light-dark(oklch(21% 0.032 264.7), oklch(97% 0.032
+        264.7)));
     }
   `,
   /** Announcements for screen readers only. */
@@ -156,7 +162,8 @@ const listStyles = new tiny.Styles(import.meta.url, {
       flex: 1;
       min-width: 0;
       padding: 0.5rem 0.75rem;
-      border: 1px solid var(--list-border, light-dark(oklch(87.2% 0.009 258.3), oklch(32.8% 0.007 258.3)));
+      border: 1px solid var(--list-border, light-dark(oklch(87.2% 0.009 258.3),
+        oklch(32.8% 0.007 258.3)));
       border-radius: 6px;
       font: inherit;
     }
@@ -173,7 +180,7 @@ type RegisteredBundles = Record<string, Record<string, unknown>>;
 /** A list root, holding the live region its handlers announce through. */
 type ListElement = HTMLElement & { listAnnouncer?: HTMLOutputElement };
 
-const listHandlers = new tiny.Handlers(import.meta.url, async () => {
+const listHandlers = new tiny.Handlers(async () => {
   const { signal } = await tiny.imports(listSignals);
   return {
     /**

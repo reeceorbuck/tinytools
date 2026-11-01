@@ -42,13 +42,15 @@ import { h } from "../../jsx-runtime.ts";
 import {
   type InstancedComponent,
   type InstanceSignals,
+  optimized,
   type ReadonlySignal,
   type Signal,
   type SignalComponent,
-  tiny,
 } from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
 import { signalTools } from "../../handlers/signals.ts";
+
+const tiny = optimized(import.meta.url);
 
 /** A step, as the progress list and buttons know it. */
 type StepEntry = { id: string; title: string };
@@ -90,39 +92,34 @@ type SubmitProps = {
  * Per instance: the steps in page order, and the id of the one showing.
  * The rest follows from those two.
  */
-const stepsSignals = new tiny.Signals(
-  import.meta.url,
-  ({ Signal, Computed, perInstance }) =>
-    perInstance(() => {
-      const steps = new Signal<StepEntry[]>([]);
-      const current = new Signal("");
-      const at = () =>
-        steps.value.findIndex((step) => step.id === current.value);
-      // Until the steps connect, the last step's controls show: the form's
-      // own submit, without Back or Next.
-      const last = () =>
-        steps.value.length === 0 || at() === steps.value.length - 1;
-      return {
-        steps,
-        current,
-        index: new Computed(at, [steps, current]),
-        onFirst: new Computed(() => at() <= 0, [steps, current]),
-        onLast: new Computed(last, [steps, current]),
-        notLast: new Computed(() => !last(), [steps, current]),
-        /** "Step 2 of 4", once the steps connect. */
-        summary: new Computed(
-          () =>
-            steps.value.length
-              ? `Step ${at() + 1} of ${steps.value.length}`
-              : "",
-          [steps, current],
-        ),
-      };
-    }),
+const stepsSignals = new tiny.Signals(({ Signal, Computed, perInstance }) =>
+  perInstance(() => {
+    const steps = new Signal<StepEntry[]>([]);
+    const current = new Signal("");
+    const at = () => steps.value.findIndex((step) => step.id === current.value);
+    // Until the steps connect, the last step's controls show: the form's
+    // own submit, without Back or Next.
+    const last = () =>
+      steps.value.length === 0 || at() === steps.value.length - 1;
+    return {
+      steps,
+      current,
+      index: new Computed(at, [steps, current]),
+      onFirst: new Computed(() => at() <= 0, [steps, current]),
+      onLast: new Computed(last, [steps, current]),
+      notLast: new Computed(() => !last(), [steps, current]),
+      /** "Step 2 of 4", once the steps connect. */
+      summary: new Computed(
+        () =>
+          steps.value.length ? `Step ${at() + 1} of ${steps.value.length}` : "",
+        [steps, current],
+      ),
+    };
+  })
 );
 
 /** Helpers the handlers share, called through `fn`. */
-const stepsTools = new tiny.Handlers(import.meta.url, {
+const stepsTools = new tiny.Handlers({
   /** The step's first field that is not valid, if any. */
   firstInvalid(step: Element): HTMLInputElement | undefined {
     return [
@@ -139,7 +136,7 @@ const stepsTools = new tiny.Handlers(import.meta.url, {
   },
 });
 
-const stepsHandlers = new tiny.Handlers(import.meta.url, async () => {
+const stepsHandlers = new tiny.Handlers(async () => {
   const { fn, signal } = await tiny.imports(stepsSignals, stepsTools);
   return {
     /**
@@ -269,7 +266,7 @@ const stepsHandlers = new tiny.Handlers(import.meta.url, async () => {
   };
 });
 
-const stepsStyles = new tiny.Styles(import.meta.url, {
+const stepsStyles = new tiny.Styles({
   step: css`
     min-width: 0;
     margin: 0;
@@ -301,13 +298,15 @@ const stepsStyles = new tiny.Styles(import.meta.url, {
       flex: 1;
       align-items: center;
       gap: 0.5rem;
-      color: var(--steps-muted, light-dark(oklch(55.1% 0.023 264.4), oklch(64.9% 0.023 264.4)));
+      color: var(--steps-muted, light-dark(oklch(55.1% 0.023 264.4), oklch(64.9%
+        0.023 264.4)));
     }
     > li:not(:last-child)::after {
       content: "";
       flex: 1;
       height: 2px;
-      background: var(--steps-border, light-dark(oklch(87.2% 0.009 258.3), oklch(32.8% 0.007 258.3)));
+      background: var(--steps-border, light-dark(oklch(87.2% 0.009 258.3),
+        oklch(32.8% 0.007 258.3)));
     }
     > li[data-state="done"]::after {
       background: var(--steps-accent, oklch(50.8% 0.105 165.6));
@@ -334,21 +333,25 @@ const stepsStyles = new tiny.Styles(import.meta.url, {
       place-items: center;
       width: 1.75rem;
       height: 1.75rem;
-      border: 2px solid var(--steps-border, light-dark(oklch(87.2% 0.009 258.3), oklch(32.8% 0.007 258.3)));
+      border: 2px solid var(--steps-border, light-dark(oklch(87.2% 0.009 258.3),
+        oklch(32.8% 0.007 258.3)));
       border-radius: 50%;
       font-size: 0.8125rem;
       font-weight: 600;
     }
     [data-state="current"] {
-      color: var(--steps-text, light-dark(oklch(21% 0.032 264.7), oklch(97% 0.032 264.7)));
+      color: var(--steps-text, light-dark(oklch(21% 0.032 264.7), oklch(97% 0.032
+        264.7)));
       font-weight: 600;
     }
     [data-state="current"] span {
       border-color: var(--steps-accent, oklch(50.8% 0.105 165.6));
-      color: var(--steps-accent, light-dark(oklch(50.8% 0.105 165.6), oklch(75% 0.105 165.6)));
+      color: var(--steps-accent, light-dark(oklch(50.8% 0.105 165.6), oklch(75%
+        0.105 165.6)));
     }
     [data-state="done"] {
-      color: var(--steps-text, light-dark(oklch(21% 0.032 264.7), oklch(97% 0.032 264.7)));
+      color: var(--steps-text, light-dark(oklch(21% 0.032 264.7), oklch(97% 0.032
+        264.7)));
     }
     [data-state="done"] span {
       border-color: var(--steps-accent, oklch(50.8% 0.105 165.6));

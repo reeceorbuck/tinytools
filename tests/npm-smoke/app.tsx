@@ -1,6 +1,6 @@
 // A small app on the npm build, the way a Node or Bun user writes one.
 import { Hono } from "hono";
-import { css, tiny } from "@tinyenterprise/hono-tools";
+import { css, optimized } from "@tinyenterprise/hono-tools";
 import { DialogSignalComponent } from "@tinyenterprise/hono-tools/library";
 import {
   applyNavigationHandlers,
@@ -8,20 +8,22 @@ import {
   processIncomingDataTools,
 } from "@tinyenterprise/hono-tools/handlers";
 
-const buttonHandlers = new tiny.Handlers(import.meta.url, {
+const tiny = optimized(import.meta.url);
+
+const buttonHandlers = new tiny.Handlers({
   greet(this: HTMLButtonElement) {
     this.textContent = "Hello!";
   },
 });
 
-const buttonStyles = new tiny.Styles(import.meta.url, {
+const buttonStyles = new tiny.Styles({
   button: css`
     padding: 8px 16px;
     background: royalblue;
   `,
 });
 
-const counter = new tiny.Signals(import.meta.url, { count: 0 });
+const counter = new tiny.Signals({ count: 0 });
 
 export const app = new Hono().use(...tiny.middleware.core());
 

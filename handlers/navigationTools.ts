@@ -1,5 +1,5 @@
 import {
-  Handlers,
+  type Handlers,
   imports,
   type PartialAbortableHTMLElement,
   tiny,
@@ -11,6 +11,9 @@ import {
 import { processIncomingDataTools } from "./processIncomingData.ts";
 import { queryParamTools } from "./queryParams.ts";
 import { precommitFallbackTools } from "./precommitFallback.ts";
+import { sourcedCollections } from "../clientTools.ts";
+
+const sourced = sourcedCollections(import.meta.url);
 
 /**
  * The global `navigation` object with the per-page state the navigation
@@ -32,7 +35,7 @@ export interface NavigationClientInfo {
 
 /** What `performFetchAndUpdate` did, for the navigation log. */
 export interface FetchReport {
-  outcome: "streaming" | "aborted" | "redirected";
+  outcome: "streaming" | "aborted" | "redirected" | "full load";
   abortedPreviousGet?: boolean;
   status?: number;
   contentType?: string | null;
@@ -40,104 +43,126 @@ export interface FetchReport {
   redirectedTo?: string;
 }
 
-export const performFetchAndUpdateTools = new Handlers(
-  import.meta.url,
-  async () => {
-    const { fn } = await imports(processIncomingDataTools);
-    return {
-      performFetchAndUpdate: async function (
-        destinationUrl: URL,
-        fromUrl: URL,
-        toUrl: URL,
-        formData?: FormData | null,
-        requestMethod: "get" | "post" = formData ? "post" : "get",
-      ): Promise<FetchReport> {
-        const method = requestMethod.toLowerCase() === "post" ? "post" : "get";
-        const report: Partial<FetchReport> = {};
+export const performFetchAndUpdateTools = new sourced.Handlers(async () => {
+  const { fn } = await imports(processIncomingDataTools);
+  return {
+    performFetchAndUpdate: async function (
+      destinationUrl: URL,
+      fromUrl: URL,
+      toUrl: URL,
+      formData?: FormData | null,
+      requestMethod: "get" | "post" = formData ? "post" : "get",
+    ): Promise<FetchReport> {
+      const method = requestMethod.toLowerCase() === "post" ? "post" : "get";
+      const report: Partial<FetchReport> = {};
 
-        /** Tracks in-flight GET requests per pathname so rapid-fire calls abort stale ones. */
-        const inflightGetRequests = (globalThis.navigation as AppNavigation)
-          .inflightGetRequests ??= new Map<string, AbortController>();
+      /** Tracks in-flight GET requests per pathname so rapid-fire calls abort stale ones. */
+      const inflightGetRequests = (globalThis.navigation as AppNavigation)
+        .inflightGetRequests ??= new Map<string, AbortController>();
 
-        let signal: AbortSignal | undefined;
-        if (method === "get") {
-          const key = destinationUrl.pathname;
-          const existing = inflightGetRequests.get(key);
-          if (existing) {
-            report.abortedPreviousGet = true;
-            existing.abort();
-          }
-          const controller = new AbortController();
-          inflightGetRequests.set(key, controller);
-          signal = controller.signal;
+      let signal: AbortSignal | undefined;
+      if (method === "get") {
+        const key = destinationUrl.pathname;
+        const existing = inflightGetRequests.get(key);
+        if (existing) {
+          report.abortedPreviousGet = true;
+          existing.abort();
         }
+        const controller = new AbortController();
+        inflightGetRequests.set(key, controller);
+        signal = controller.signal;
+      }
 
-        let response: Response;
-        try {
-          response = await fetch(destinationUrl, {
-            method,
-            headers: {
-              "partial-nav": "true",
-              "source-url": fromUrl.pathname + fromUrl.search,
-              "destination-url": toUrl.pathname + toUrl.search,
+      // A static build (`buildStaticSite`) has no server to answer with a
+      // partial, so each page's partial is a file under this prefix.
+      const staticPartials = method === "get"
+        ? document.querySelector<HTMLMetaElement>('meta[name="tt-partials"]')
+          ?.content
+        : undefined;
+      let requestUrl = destinationUrl;
+      if (staticPartials) {
+        const path = destinationUrl.pathname;
+        requestUrl = new URL(
+          `${staticPartials}${path.endsWith("/") ? `${path}index` : path}.html`,
+          destinationUrl,
+        );
+      }
+
+      let response: Response;
+      try {
+        response = await fetch(requestUrl, {
+          method,
+          headers: {
+            "partial-nav": "true",
+            "source-url": fromUrl.pathname + fromUrl.search,
+            "destination-url": toUrl.pathname + toUrl.search,
+          },
+          body: method === "post" ? formData ?? undefined : undefined,
+          signal,
+        });
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") {
+          return { ...report, outcome: "aborted" };
+        }
+        throw err;
+      }
+
+      if (!response.ok && staticPartials) {
+        // No partial for this page (a redirect, or a page that was not
+        // built), so the host answers a full load.
+        inflightGetRequests.delete(destinationUrl.pathname);
+        navigation.navigate(toUrl.href, {
+          history: "replace",
+          info: { blockIntercept: true },
+        });
+        return { ...report, status: response.status, outcome: "full load" };
+      }
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      report.status = response.status;
+      report.contentType = response.headers.get("Content-Type");
+      const spaRedirect = response.headers.get("X-spa-redirect");
+
+      if (spaRedirect) {
+        report.spaRedirect = spaRedirect;
+        navigation.navigate(
+          spaRedirect,
+          {
+            history: "replace",
+            info: {
+              onlyUpdateUrl: true,
             },
-            body: method === "post" ? formData ?? undefined : undefined,
-            signal,
-          });
-        } catch (err) {
-          if (err instanceof DOMException && err.name === "AbortError") {
-            return { ...report, outcome: "aborted" };
-          }
-          throw err;
-        }
+          },
+        );
+      }
 
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        report.status = response.status;
-        report.contentType = response.headers.get("Content-Type");
-        const spaRedirect = response.headers.get("X-spa-redirect");
-
-        if (spaRedirect) {
-          report.spaRedirect = spaRedirect;
-          navigation.navigate(
-            spaRedirect,
-            {
-              history: "replace",
-              info: {
-                onlyUpdateUrl: true,
-              },
+      // if response is a redirect, we need to follow it
+      if (response.redirected) {
+        const redirectedUrl = new URL(response.url);
+        report.redirectedTo = redirectedUrl.href;
+        navigation.navigate(
+          redirectedUrl.href,
+          {
+            history: "replace",
+            info: {
+              blockIntercept: true,
             },
-          );
-        }
+          },
+        );
+        return { ...report, outcome: "redirected" };
+      }
 
-        // if response is a redirect, we need to follow it
-        if (response.redirected) {
-          const redirectedUrl = new URL(response.url);
-          report.redirectedTo = redirectedUrl.href;
-          navigation.navigate(
-            redirectedUrl.href,
-            {
-              history: "replace",
-              info: {
-                blockIntercept: true,
-              },
-            },
-          );
-          return { ...report, outcome: "redirected" };
-        }
+      fn.processIncomingData(response);
 
-        fn.processIncomingData(response);
-
-        if (method === "get") {
-          inflightGetRequests.delete(destinationUrl.pathname);
-        }
-        return { ...report, outcome: "streaming" };
-      },
-    };
-  },
-);
+      if (method === "get") {
+        inflightGetRequests.delete(destinationUrl.pathname);
+      }
+      return { ...report, outcome: "streaming" };
+    },
+  };
+});
 
 /**
  * Partial navigation for the app: intercepts same-origin navigations,
@@ -162,7 +187,7 @@ export const navigationTools: Handlers<{
     this: HTMLElement,
     event: NavigationCurrentEntryChangeEvent,
   ): void;
-}> = new Handlers(import.meta.url, async () => {
+}> = new sourced.Handlers(async () => {
   const { fn } = await imports(
     navigationUrlTools,
     performFetchAndUpdateTools,
@@ -330,44 +355,41 @@ export const applyNavigationHandlers: Handlers<{
   applyCurrentEntryChangeListener(
     this: PartialAbortableHTMLElement | typeof globalThis,
   ): void;
-}> = new Handlers(
-  import.meta.url,
-  async () => {
-    const { fn } = await imports(navigationUrlTools);
-    return {
-      applyNavigationListener: function (
-        this: PartialAbortableHTMLElement | typeof globalThis,
-        _e: Event,
-      ) {
-        // <body onLoad> runs with `this === window`, so resolve to the body.
-        const element = this === globalThis
-          ? document.body as PartialAbortableHTMLElement
-          : this as PartialAbortableHTMLElement;
-        globalThis.navigation.addEventListener("navigate", (event) => {
-          if (
-            !element.isConnected || event.defaultPrevented ||
-            !event.canIntercept
-          ) return;
-          const { shouldIntercept } = fn.getNavigationUrls(event);
-          if (!shouldIntercept) return;
+}> = new sourced.Handlers(async () => {
+  const { fn } = await imports(navigationUrlTools);
+  return {
+    applyNavigationListener: function (
+      this: PartialAbortableHTMLElement | typeof globalThis,
+      _e: Event,
+    ) {
+      // <body onLoad> runs with `this === window`, so resolve to the body.
+      const element = this === globalThis
+        ? document.body as PartialAbortableHTMLElement
+        : this as PartialAbortableHTMLElement;
+      globalThis.navigation.addEventListener("navigate", (event) => {
+        if (
+          !element.isConnected || event.defaultPrevented ||
+          !event.canIntercept
+        ) return;
+        const { shouldIntercept } = fn.getNavigationUrls(event);
+        if (!shouldIntercept) return;
+        tiny.runHandler(element, event);
+      }, { signal: element.abortController?.signal });
+    },
+    applyCurrentEntryChangeListener: function (
+      this: PartialAbortableHTMLElement | typeof globalThis,
+    ) {
+      // <body onLoad> runs with `this === window`, so resolve to the body.
+      const element = this === globalThis
+        ? document.body as PartialAbortableHTMLElement
+        : this as PartialAbortableHTMLElement;
+      globalThis.navigation.addEventListener(
+        "currententrychange",
+        (event) => {
           tiny.runHandler(element, event);
-        }, { signal: element.abortController?.signal });
-      },
-      applyCurrentEntryChangeListener: function (
-        this: PartialAbortableHTMLElement | typeof globalThis,
-      ) {
-        // <body onLoad> runs with `this === window`, so resolve to the body.
-        const element = this === globalThis
-          ? document.body as PartialAbortableHTMLElement
-          : this as PartialAbortableHTMLElement;
-        globalThis.navigation.addEventListener(
-          "currententrychange",
-          (event) => {
-            tiny.runHandler(element, event);
-          },
-          { signal: element.abortController?.signal },
-        );
-      },
-    };
-  },
-);
+        },
+        { signal: element.abortController?.signal },
+      );
+    },
+  };
+});

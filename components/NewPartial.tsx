@@ -4,7 +4,7 @@
 import { getContext } from "hono/context-storage";
 import type { PropsWithChildren } from "hono/jsx";
 import type { HtmlEscapedString } from "hono/utils/html";
-import { Handlers } from "../clientTools.ts";
+import { sourcedCollections } from "../clientTools.ts";
 import { tiny } from "../honoFactory.tsx";
 import { routeCacheTools } from "../handlers/routeCacheTools.ts";
 import type { JSX } from "../jsx-runtime.ts";
@@ -17,7 +17,9 @@ import { transparent } from "../componentScope.ts";
 import { claimLifecycleProxy } from "../lifecycleBindings.ts";
 import { getDisplayedPath } from "../sse.ts";
 
-const partialLogic = new Handlers(import.meta.url, {
+const sourced = sourcedCollections(import.meta.url);
+
+const partialLogic = new sourced.Handlers({
   /** Fires `load` on the preceding `<template>` so its insertion handler runs. */
   passLoadEvent: function (this: HTMLElement): void {
     const precedingTemplate = this.previousElementSibling;

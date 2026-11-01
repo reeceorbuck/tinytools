@@ -30,13 +30,15 @@ import {
   type HandlerReference,
   type InstancedComponent,
   type InstanceSignals,
+  optimized,
   type ReadonlySignal,
   type Signal,
   type SignalComponent,
-  tiny,
 } from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
 import type { SignalEvent } from "../../handlers/signals.ts";
+
+const tiny = optimized(import.meta.url);
 
 /**
  * @internal Date arithmetic on input values, shared by the signals, the
@@ -96,14 +98,14 @@ export const dateFunctions = {
   },
 };
 
-const dateTools = new tiny.Handlers(import.meta.url, dateFunctions);
+const dateTools = new tiny.Handlers(dateFunctions);
 
 /**
  * One date per instance. The input writes `date` as it is edited and shows it
  * when a button sets it; `type` and `skipWeekends` are the input's own, taken
  * when it connects, so the buttons step as it does wherever they sit.
  */
-const datePickerSignals = new tiny.Signals(import.meta.url, async () => {
+const datePickerSignals = new tiny.Signals(async () => {
   const { fn } = await tiny.imports(dateTools);
   return ({ Signal, Computed, perInstance }) =>
     perInstance(() => {
@@ -163,7 +165,7 @@ type StepProps = {
 /** Props for the picker's `Today` button. */
 type TodayProps = { children?: unknown };
 
-const datePickerHandlers = new tiny.Handlers(import.meta.url, async () => {
+const datePickerHandlers = new tiny.Handlers(async () => {
   const { fn, signal } = await tiny.imports(dateTools, datePickerSignals);
   return {
     /** Takes the input's value, type and weekend rule into its instance. */
@@ -210,7 +212,7 @@ const datePickerHandlers = new tiny.Handlers(import.meta.url, async () => {
   };
 });
 
-const datePickerStyles = new tiny.Styles(import.meta.url, {
+const datePickerStyles = new tiny.Styles({
   // The buttons need the page's script, so they stay hidden without it.
   dateButton: css`
     @media (scripting: none) {

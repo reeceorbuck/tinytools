@@ -436,7 +436,39 @@ function noteUnsourced(kind: string, sourceFileUrl: string | URL | undefined) {
         : ` (received ${JSON.stringify(String(sourceFileUrl))})`
     }. ` +
       "Lazy mode cannot clean up the assets it replaces when its source changes. " +
-      "Pass import.meta.url as the first argument to enable that.",
+      "Create it from `optimized(import.meta.url)` to enable that.",
+  );
+}
+
+/**
+ * Set by `sourcedConstructor()` for the whole of a construction it sourced,
+ * since `Signals` checks again in its `Handlers` constructor.
+ */
+let sourcedByOptimized = false;
+const notedDirectSources = new Set<string>();
+
+/**
+ * Passing `import.meta.url` to a collection is deprecated in favor of
+ * `optimized(import.meta.url)`, which passes it for every collection in the
+ * file. Reported once per file, outside trusted builds.
+ */
+function noteDirectSource(
+  kind: string,
+  sourceFileUrl: string | URL | undefined,
+) {
+  if (
+    sourcedByOptimized || cache.trustCache ||
+    !(typeof sourceFileUrl === "string" || sourceFileUrl instanceof URL)
+  ) {
+    return;
+  }
+  const file = normalizeSourceFileUrl(sourceFileUrl) ?? String(sourceFileUrl);
+  if (notedDirectSources.has(file)) return;
+  notedDirectSources.add(file);
+  console.warn(
+    `[tiny-tools] \x1b[33mDeprecated:\x1b[0m new tiny.${kind}(import.meta.url, ...) in ${file}. ` +
+      "Create the file's collections from `const tiny = optimized(import.meta.url)` " +
+      `and leave the URL out: \`new tiny.${kind}(...)\`.`,
   );
 }
 
@@ -451,6 +483,7 @@ function sourceAndDefinition<Definition>(
   const [sourceFileUrl, definition] = args.length > 1
     ? args as [string | URL | undefined, Definition]
     : [undefined, args[0] as Definition];
+  noteDirectSource(kind, sourceFileUrl);
   noteUnsourced(kind, sourceFileUrl);
   return [sourceFileUrl, definition];
 }
@@ -1145,10 +1178,12 @@ interface ClientToolsConstructor {
 }
 
 /**
- * Each collection takes `import.meta.url` as an optional first argument. It
- * only lets `--lazy` builds tie generated files to their source file, so
- * they can remove the ones an edit replaces; without it files are named
- * after the first name defined (`resetType_handler_<hash>`).
+ * Create a file's collections from `const tiny = optimized(import.meta.url)`
+ * to give them their source file. It only lets `--lazy` builds tie generated
+ * files to that file, so they can remove the ones an edit replaces; without
+ * it files are named after the first name defined
+ * (`resetType_handler_<hash>`). Passing `import.meta.url` as the first
+ * argument does the same, but is deprecated.
  */
 interface HandlersConstructor {
   /** An async (or sync) definition that may import other tools. */
@@ -1159,12 +1194,12 @@ interface HandlersConstructor {
   new <TFunctions extends Record<string, AnyFunction> = Empty>(
     functions: TFunctions,
   ): ClientToolsClass<TFunctions, Empty, Empty>;
-  /** As above, with `import.meta.url`. */
+  /** @deprecated Create the collection from `optimized(import.meta.url)` and leave the URL out. */
   new <TFunctions extends Record<string, AnyFunction>>(
     sourceFileUrl: string | URL,
     factory: HandlerFactory<TFunctions>,
   ): ClientToolsClass<TFunctions, Record<never, never>, Record<never, never>>;
-  /** Handlers that need nothing from other tools. */
+  /** @deprecated Create the collection from `optimized(import.meta.url)` and leave the URL out. */
   new <TFunctions extends Record<string, AnyFunction> = Empty>(
     sourceFileUrl: string | URL,
     functions: TFunctions,
@@ -1184,7 +1219,7 @@ interface HandlersConstructor {
     tools: TTools,
     factory: ImportingHandlerFactory<TFunctions, ImportsOf<ToolList<TTools>>>,
   ): ClientToolsClass<TFunctions, Record<never, never>, Record<never, never>>;
-  /** As above, with `import.meta.url`. */
+  /** @deprecated Create the collection from `optimized(import.meta.url)` and leave the URL out. */
   new <
     const TTools extends Importable | readonly [Importable, ...Importable[]],
     TFunctions extends Record<string, AnyFunction>,
@@ -1344,14 +1379,14 @@ interface SignalsConstructor {
   new <Definitions extends SignalDefinitions>(
     factory: (tools: SignalTools) => Definitions,
   ): SignalsCollection<Definitions, false>;
-  /** As above, with `import.meta.url` (see `HandlersConstructor`). */
+  /** @deprecated Create the collection from `optimized(import.meta.url)` and leave the URL out. */
   new <Definitions extends SignalDefinitions>(
     sourceFileUrl: string | URL,
     definition: (
       tools: SignalTools,
     ) => Promise<(tools: SignalTools) => Definitions>,
   ): SignalsCollection<Definitions, true>;
-  /** A factory that needs nothing from module scope. */
+  /** @deprecated Create the collection from `optimized(import.meta.url)` and leave the URL out. */
   new <Definitions extends SignalDefinitions>(
     sourceFileUrl: string | URL,
     factory: (tools: SignalTools) => Definitions,
@@ -1363,7 +1398,7 @@ interface SignalsConstructor {
   new <Values extends Record<string, SignalValue>>(
     values: Values,
   ): SignalsCollection<ValueSignals<Values>, false>;
-  /** As above, with `import.meta.url`. */
+  /** @deprecated Create the collection from `optimized(import.meta.url)` and leave the URL out. */
   new <Values extends Record<string, SignalValue>>(
     sourceFileUrl: string | URL,
     values: Values,
@@ -1388,7 +1423,7 @@ interface SignalsConstructor {
     tools: TTools,
     define: ShapeDefinition<TTools, Shape>,
   ): SignalsCollection<ShapeSignals<Shape>, true>;
-  /** As above, with `import.meta.url`. */
+  /** @deprecated Create the collection from `optimized(import.meta.url)` and leave the URL out. */
   new <
     const TTools extends Importable | readonly [Importable, ...Importable[]],
     Shape extends SignalShape,
@@ -1407,7 +1442,7 @@ interface StylesConstructor {
     styles: ForbidReservedStyledKeys<TStyles>,
   ): ClientToolsClass<Empty, TStyles, Empty>;
 
-  // Overloads with sourceFileUrl
+  /** @deprecated Create the collection from `optimized(import.meta.url)` and leave the URL out. */
   new <
     TStyles extends Record<string, ScopedStyleInput> = Empty,
   >(
@@ -2076,6 +2111,7 @@ class HandlersClass extends ClientToolsClass<Empty, Empty, Empty> {
       | Record<string, AnyFunction>
       | HandlerFactory<Record<string, AnyFunction>>
       | ImportingHandlerFactory<Record<string, AnyFunction>>;
+    noteDirectSource("Handlers", sourceFileUrl);
     noteUnsourced("Handlers", sourceFileUrl);
     if (rest.length > 1) {
       if (typeof functions !== "function") {
@@ -2866,6 +2902,7 @@ class StylesClass extends ClientToolsClass<Empty, Empty, Empty> {
         ScopedStyleInput
       >;
 
+    noteDirectSource("Styles", sourceFileUrl);
     noteUnsourced("Styles", sourceFileUrl);
     super(sourceFileUrl, { styles });
   }
@@ -2934,7 +2971,7 @@ interface TemplatesConstructor {
   new <Definitions extends TemplateDefinitions>(
     templates: Definitions,
   ): TemplatesCollection<Definitions>;
-  /** As above, with `import.meta.url` (see `HandlersConstructor`). */
+  /** @deprecated Create the collection from `optimized(import.meta.url)` and leave the URL out. */
   new <Definitions extends TemplateDefinitions>(
     sourceFileUrl: string | URL,
     templates: Definitions,
@@ -3149,14 +3186,36 @@ export function sourcedConstructor<
   sourceFileUrl: string | URL,
 ): T {
   return new Proxy(collection, {
-    construct: (target, args) =>
-      Reflect.construct(
-        target,
-        typeof args[0] === "string" || args[0] instanceof URL
-          ? args
-          : [sourceFileUrl, ...args],
-      ),
+    construct: (target, args) => {
+      if (typeof args[0] === "string" || args[0] instanceof URL) {
+        return Reflect.construct(target, args);
+      }
+      sourcedByOptimized = true;
+      try {
+        return Reflect.construct(target, [sourceFileUrl, ...args]);
+      } finally {
+        sourcedByOptimized = false;
+      }
+    },
   });
+}
+
+/**
+ * The collections given `sourceFileUrl`, as `optimized()` gives them, for
+ * the package's own modules, which cannot import `tiny`.
+ */
+export function sourcedCollections(sourceFileUrl: string | URL): {
+  readonly Handlers: typeof Handlers;
+  readonly Signals: typeof Signals;
+  readonly Styles: typeof Styles;
+  readonly Templates: typeof Templates;
+} {
+  return {
+    Handlers: sourcedConstructor(Handlers, sourceFileUrl),
+    Signals: sourcedConstructor(Signals, sourceFileUrl),
+    Styles: sourcedConstructor(Styles, sourceFileUrl),
+    Templates: sourcedConstructor(Templates, sourceFileUrl),
+  };
 }
 
 // ============================================================================

@@ -1,5 +1,7 @@
-import { Handlers, imports } from "../clientTools.ts";
+import { imports, sourcedCollections } from "../clientTools.ts";
 import type { AppNavigation, NavigationClientInfo } from "./navigationTools.ts";
+
+const sourced = sourcedCollections(import.meta.url);
 
 export interface NavigationUrlResult {
   readonly fromUrl: URL;
@@ -11,7 +13,7 @@ export interface NavigationUrlResult {
   readonly isSameDocumentHashNavigation: boolean;
 }
 
-export const parseNavigationUrlsTools = new Handlers(import.meta.url, {
+export const parseNavigationUrlsTools = new sourced.Handlers({
   parseNavigationUrls: function (
     event: Pick<
       NavigateEvent,
@@ -100,7 +102,7 @@ export const parseNavigationUrlsTools = new Handlers(import.meta.url, {
   },
 });
 
-export const navigationUrlTools = new Handlers(import.meta.url, async () => {
+export const navigationUrlTools = new sourced.Handlers(async () => {
   const { fn } = await imports(parseNavigationUrlsTools);
   return {
     getNavigationMethod: function (event: NavigateEvent): "get" | "post" {

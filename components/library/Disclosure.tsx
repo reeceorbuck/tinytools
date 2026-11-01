@@ -25,21 +25,21 @@ import { h } from "../../jsx-runtime.ts";
 import {
   type InstancedComponent,
   type InstanceSignals,
+  optimized,
   type Signal,
   type SignalComponent,
-  tiny,
 } from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
 import type { SignalEvent } from "../../handlers/signals.ts";
 
+const tiny = optimized(import.meta.url);
+
 /** Whether the section is open, one per instance. */
-const disclosureSignals = new tiny.Signals(
-  import.meta.url,
-  ({ Signal, perInstance }) =>
-    perInstance(() => ({ open: new Signal<boolean>(false) })),
+const disclosureSignals = new tiny.Signals(({ Signal, perInstance }) =>
+  perInstance(() => ({ open: new Signal<boolean>(false) }))
 );
 
-const disclosureHandlers = new tiny.Handlers(import.meta.url, async () => {
+const disclosureHandlers = new tiny.Handlers(async () => {
   const { signal } = await tiny.imports(disclosureSignals);
   // A `remember` key keeps its state in localStorage, as `tiny-details:<key>`.
   return {
@@ -92,7 +92,7 @@ const disclosureHandlers = new tiny.Handlers(import.meta.url, async () => {
   };
 });
 
-const disclosureStyles = new tiny.Styles(import.meta.url, {
+const disclosureStyles = new tiny.Styles({
   // The toggle needs the page's script, so it stays hidden without it.
   toggle: css`
     @media (scripting: none) {

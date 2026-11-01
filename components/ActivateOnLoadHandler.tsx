@@ -19,7 +19,7 @@ import type { PropsWithChildren } from "hono/jsx";
 import { Fragment, h } from "../jsx-runtime.ts";
 import type { HtmlEscapedString } from "hono/utils/html";
 import { tiny } from "../mod.ts";
-import { Handlers, recordLifecycleTag } from "../clientTools.ts";
+import { recordLifecycleTag, sourcedCollections } from "../clientTools.ts";
 import {
   intrinsicTagName,
   templateRootTags,
@@ -36,11 +36,13 @@ import {
 } from "../lifecycleElement.ts";
 import { templateTools } from "../handlers/templateTools.ts";
 
+const sourced = sourcedCollections(import.meta.url);
+
 /** An upgraded custom element: its controller aborts when it disconnects. */
 export type PartialAbortableHTMLElement = LifecycleElement;
 
 /** The forwarding of `<upgrade-preceding>`. */
-const proxyHandlers = new Handlers(import.meta.url, {
+const proxyHandlers = new sourced.Handlers({
   /** Runs the preceding element's `onConnect` handlers; bound to a proxy's `onConnect`. */
   forwardConnect: function (this: HTMLElement): void {
     const target = this.previousElementSibling;
@@ -58,7 +60,7 @@ const proxyHandlers = new Handlers(import.meta.url, {
 });
 
 /** The trigger of `ActivateParsedHandler`. */
-const parsedHandlers = new Handlers(import.meta.url, {
+const parsedHandlers = new sourced.Handlers({
   /**
    * Runs the previous sibling's `onParsed` handlers once, then removes this
    * trigger. `parsed` is not a browser event, so it is dispatched through

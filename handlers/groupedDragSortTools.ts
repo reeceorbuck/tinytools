@@ -1,5 +1,7 @@
-import { Handlers, imports } from "../clientTools.ts";
+import { type Handlers, imports, sourcedCollections } from "../clientTools.ts";
 import { dragSortTools } from "./dragSortTools.ts";
+
+const sourced = sourcedCollections(import.meta.url);
 
 /** A list in the middle of a drag: what the drag set up, to undo on dragend. */
 type GroupedDragSortList = HTMLElement & {
@@ -46,7 +48,7 @@ function createDragSortPreview(item: HTMLElement): HTMLElement {
   return preview;
 }
 
-const groupedDragSortHelpers = new Handlers(import.meta.url, {
+const groupedDragSortHelpers = new sourced.Handlers({
   dragSortChildren,
   createDragSortPreview,
 });
@@ -97,123 +99,120 @@ export const groupedDragSortTools: Handlers<{
    * above the separators before the first item.
    */
   sortGroupedByKey(this: HTMLElement, event: KeyboardEvent): void;
-}> = new Handlers(
-  import.meta.url,
-  async () => {
-    const { fn } = await imports(dragSortTools, groupedDragSortHelpers);
-    return {
-      startGroupedDragSort: function (this: HTMLElement, event: DragEvent) {
-        const list = this as GroupedDragSortList;
-        const item = (event.target as Element).closest<HTMLElement>(
-          '[draggable="true"]',
-        );
-        if (!item || item.parentElement !== list) return;
-        fn.startDragSort.call(list, event);
-        const box = item.getBoundingClientRect();
-        const grabX = event.clientX - box.left;
-        const grabY = event.clientY - box.top;
-        const startY = event.clientY;
-        const preview = fn.createDragSortPreview(item);
-        list.dragSortPreview = preview;
-        let origin: { left: number; top: number } | undefined;
+}> = new sourced.Handlers(async () => {
+  const { fn } = await imports(dragSortTools, groupedDragSortHelpers);
+  return {
+    startGroupedDragSort: function (this: HTMLElement, event: DragEvent) {
+      const list = this as GroupedDragSortList;
+      const item = (event.target as Element).closest<HTMLElement>(
+        '[draggable="true"]',
+      );
+      if (!item || item.parentElement !== list) return;
+      fn.startDragSort.call(list, event);
+      const box = item.getBoundingClientRect();
+      const grabX = event.clientX - box.left;
+      const grabY = event.clientY - box.top;
+      const startY = event.clientY;
+      const preview = fn.createDragSortPreview(item);
+      list.dragSortPreview = preview;
+      let origin: { left: number; top: number } | undefined;
 
-        // Follows the drag wherever it goes until dragend, which aborts this.
-        const abort = new AbortController();
-        list.dragSortAbort = abort;
-        document.addEventListener("dragover", (over) => {
-          // This drag's own item, once it has been marked as dragging.
-          const dragged = item.hasAttribute("data-dragging") ? item : null;
-          if (!dragged) return;
-          const bounds = list.getBoundingClientRect();
-          const inside = over.clientX >= bounds.left &&
-            over.clientX <= bounds.right && over.clientY >= bounds.top &&
-            over.clientY <= bounds.bottom;
-          if (inside) {
-            over.preventDefault();
-            if (over.dataTransfer) over.dataTransfer.dropEffect = "move";
-            delete dragged.dataset.dragOutside;
-            preview.style.display = "none";
-            fn.layoutDragSort(
-              list,
-              dragged,
-              over.clientY - startY,
-              fn.dragSortChildren(list),
-            );
-            return;
-          }
-          dragged.dataset.dragOutside = "";
-          fn.resetDragSort(list);
-          preview.style.display = "";
-          // A transformed or contained ancestor moves the fixed position's
-          // origin, so measure where 0,0 lands once.
-          origin ??= preview.getBoundingClientRect();
-          const x = Math.min(grabX, preview.offsetWidth - 8);
-          const y = Math.min(grabY, preview.offsetHeight - 8);
-          preview.style.left = `${over.clientX - x - origin.left}px`;
-          preview.style.top = `${over.clientY - y - origin.top}px`;
-        }, { signal: abort.signal });
-      },
-      dropGroupedDragSort: function (this: HTMLElement, event: DragEvent) {
-        const dragged = fn.dragSortDragged(this);
+      // Follows the drag wherever it goes until dragend, which aborts this.
+      const abort = new AbortController();
+      list.dragSortAbort = abort;
+      document.addEventListener("dragover", (over) => {
+        // This drag's own item, once it has been marked as dragging.
+        const dragged = item.hasAttribute("data-dragging") ? item : null;
         if (!dragged) return;
-        event.preventDefault();
-        const insertBefore = fn.layoutDragSort(
-          this,
-          dragged,
-          event.clientY - Number(this.dataset.dragSortStartY),
-          fn.dragSortChildren(this),
-        );
-        if (insertBefore === undefined) return; // Not moved: dragend springs it back.
-        fn.settleDragSort(this, dragged, insertBefore);
-        fn.dispatchSorted(this, {
-          item: dragged,
-          from: Number(this.dataset.dragSortFrom),
-          to: fn.dragSortItems(this).indexOf(dragged),
-        });
-      },
-      endGroupedDragSort: function (this: HTMLElement, event: DragEvent) {
-        const list = this as GroupedDragSortList;
-        list.dragSortAbort?.abort();
-        list.dragSortPreview?.remove();
-        delete list.dragSortAbort;
-        delete list.dragSortPreview;
-        for (const item of fn.dragSortItems(list)) {
-          delete item.dataset.dragOutside;
-        }
-        fn.endDragSort.call(list, event);
-      },
-      sortGroupedByKey: function (this: HTMLElement, event: KeyboardEvent) {
-        if (!event.altKey) return;
-        if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
-        const item = (event.target as Element).closest<HTMLElement>(
-          '[draggable="true"]',
-        );
-        if (!item || item.parentElement !== this) return;
-        const children = fn.dragSortChildren(this);
-        const index = children.indexOf(item);
-        const from = fn.dragSortItems(this).indexOf(item);
-        // Moving an element blurs whatever had focus inside it.
-        const focused = document.activeElement as HTMLElement | null;
-        if (event.key === "ArrowUp") {
-          // Nothing above but the separators that lead the list.
-          const leading = !children.slice(0, index).some((child) =>
-            child.getAttribute("draggable") === "true"
+        const bounds = list.getBoundingClientRect();
+        const inside = over.clientX >= bounds.left &&
+          over.clientX <= bounds.right && over.clientY >= bounds.top &&
+          over.clientY <= bounds.bottom;
+        if (inside) {
+          over.preventDefault();
+          if (over.dataTransfer) over.dataTransfer.dropEffect = "move";
+          delete dragged.dataset.dragOutside;
+          preview.style.display = "none";
+          fn.layoutDragSort(
+            list,
+            dragged,
+            over.clientY - startY,
+            fn.dragSortChildren(list),
           );
-          if (leading) return;
-          children[index - 1].before(item);
-        } else {
-          const next = children[index + 1];
-          if (!next) return;
-          next.after(item);
+          return;
         }
-        event.preventDefault();
-        (focused && item.contains(focused) ? focused : item).focus();
-        fn.dispatchSorted(this, {
-          item,
-          from,
-          to: fn.dragSortItems(this).indexOf(item),
-        });
-      },
-    };
-  },
-);
+        dragged.dataset.dragOutside = "";
+        fn.resetDragSort(list);
+        preview.style.display = "";
+        // A transformed or contained ancestor moves the fixed position's
+        // origin, so measure where 0,0 lands once.
+        origin ??= preview.getBoundingClientRect();
+        const x = Math.min(grabX, preview.offsetWidth - 8);
+        const y = Math.min(grabY, preview.offsetHeight - 8);
+        preview.style.left = `${over.clientX - x - origin.left}px`;
+        preview.style.top = `${over.clientY - y - origin.top}px`;
+      }, { signal: abort.signal });
+    },
+    dropGroupedDragSort: function (this: HTMLElement, event: DragEvent) {
+      const dragged = fn.dragSortDragged(this);
+      if (!dragged) return;
+      event.preventDefault();
+      const insertBefore = fn.layoutDragSort(
+        this,
+        dragged,
+        event.clientY - Number(this.dataset.dragSortStartY),
+        fn.dragSortChildren(this),
+      );
+      if (insertBefore === undefined) return; // Not moved: dragend springs it back.
+      fn.settleDragSort(this, dragged, insertBefore);
+      fn.dispatchSorted(this, {
+        item: dragged,
+        from: Number(this.dataset.dragSortFrom),
+        to: fn.dragSortItems(this).indexOf(dragged),
+      });
+    },
+    endGroupedDragSort: function (this: HTMLElement, event: DragEvent) {
+      const list = this as GroupedDragSortList;
+      list.dragSortAbort?.abort();
+      list.dragSortPreview?.remove();
+      delete list.dragSortAbort;
+      delete list.dragSortPreview;
+      for (const item of fn.dragSortItems(list)) {
+        delete item.dataset.dragOutside;
+      }
+      fn.endDragSort.call(list, event);
+    },
+    sortGroupedByKey: function (this: HTMLElement, event: KeyboardEvent) {
+      if (!event.altKey) return;
+      if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+      const item = (event.target as Element).closest<HTMLElement>(
+        '[draggable="true"]',
+      );
+      if (!item || item.parentElement !== this) return;
+      const children = fn.dragSortChildren(this);
+      const index = children.indexOf(item);
+      const from = fn.dragSortItems(this).indexOf(item);
+      // Moving an element blurs whatever had focus inside it.
+      const focused = document.activeElement as HTMLElement | null;
+      if (event.key === "ArrowUp") {
+        // Nothing above but the separators that lead the list.
+        const leading = !children.slice(0, index).some((child) =>
+          child.getAttribute("draggable") === "true"
+        );
+        if (leading) return;
+        children[index - 1].before(item);
+      } else {
+        const next = children[index + 1];
+        if (!next) return;
+        next.after(item);
+      }
+      event.preventDefault();
+      (focused && item.contains(focused) ? focused : item).focus();
+      fn.dispatchSorted(this, {
+        item,
+        from,
+        to: fn.dragSortItems(this).indexOf(item),
+      });
+    },
+  };
+});

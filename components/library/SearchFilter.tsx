@@ -40,43 +40,45 @@ import {
   type HandlerReference,
   type InstancedComponent,
   type InstanceSignals,
+  optimized,
   type ReadonlySignal,
   type Signal,
   type SignalComponent,
-  tiny,
 } from "../../mod.ts";
 import { css, setCustomScope } from "../../scopedStyles.ts";
+
+const tiny = optimized(import.meta.url);
 
 /**
  * One query per instance. The input writes `query`, and `Results` writes
  * how many of its elements there are and how many match it.
  */
-const searchFilterSignals = new tiny.Signals(
-  import.meta.url,
-  ({ Signal, Computed, perInstance }) =>
-    perInstance(() => {
-      const query = new Signal("");
-      const shown = new Signal(0);
-      const total = new Signal(0);
-      return {
-        query,
-        shown,
-        total,
-        /** "3 of 40" while a query filters the results; empty otherwise. */
-        summary: new Computed(
-          () => query.value.trim() ? `${shown.value} of ${total.value}` : "",
-          [query, shown, total],
-        ),
-        /** Whether a query matches nothing. */
-        noMatches: new Computed(
-          () => query.value.trim() !== "" && shown.value === 0,
-          [query, shown],
-        ),
-      };
-    }),
+const searchFilterSignals = new tiny.Signals((
+  { Signal, Computed, perInstance },
+) =>
+  perInstance(() => {
+    const query = new Signal("");
+    const shown = new Signal(0);
+    const total = new Signal(0);
+    return {
+      query,
+      shown,
+      total,
+      /** "3 of 40" while a query filters the results; empty otherwise. */
+      summary: new Computed(
+        () => query.value.trim() ? `${shown.value} of ${total.value}` : "",
+        [query, shown, total],
+      ),
+      /** Whether a query matches nothing. */
+      noMatches: new Computed(
+        () => query.value.trim() !== "" && shown.value === 0,
+        [query, shown],
+      ),
+    };
+  })
 );
 
-const searchFilterHandlers = new tiny.Handlers(import.meta.url, async () => {
+const searchFilterHandlers = new tiny.Handlers(async () => {
   const { signal } = await tiny.imports(searchFilterSignals);
   return {
     /** Takes the input's value, which a back navigation may have restored. */
@@ -112,7 +114,7 @@ const searchFilterHandlers = new tiny.Handlers(import.meta.url, async () => {
   };
 });
 
-const searchFilterStyles = new tiny.Styles(import.meta.url, {
+const searchFilterStyles = new tiny.Styles({
   // Unscoped, so it reaches rows that are other components' roots too.
   results: setCustomScope.unscoped(css`
     [data-filter][hidden],

@@ -46,19 +46,19 @@ import {
   type HandlerProp,
   type InstancedComponent,
   type InstanceSignals,
+  optimized,
   type Signal,
   type SignalComponent,
-  tiny,
 } from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
 import type { SignalEvent } from "../../handlers/signals.ts";
 import type { LifecycleElement } from "../../lifecycleElement.ts";
 
+const tiny = optimized(import.meta.url);
+
 /** Whether the palette is open, one per instance. */
-const paletteSignals = new tiny.Signals(
-  import.meta.url,
-  ({ Signal, perInstance }) =>
-    perInstance(() => ({ open: new Signal<boolean>(false) })),
+const paletteSignals = new tiny.Signals(({ Signal, perInstance }) =>
+  perInstance(() => ({ open: new Signal<boolean>(false) }))
 );
 
 /** The signals the palette's parts expose. */
@@ -100,7 +100,7 @@ type ItemProps = {
 };
 
 /** Helpers the handlers share, called through `fn`. */
-const paletteTools = new tiny.Handlers(import.meta.url, {
+const paletteTools = new tiny.Handlers({
   /** The items the query leaves showing. */
   shownItems(palette: HTMLElement): HTMLElement[] {
     return [...palette.querySelectorAll<HTMLElement>("[data-command]")]
@@ -119,7 +119,7 @@ const paletteTools = new tiny.Handlers(import.meta.url, {
   },
 });
 
-const paletteHandlers = new tiny.Handlers(import.meta.url, async () => {
+const paletteHandlers = new tiny.Handlers(async () => {
   const { fn, signal } = await tiny.imports(paletteSignals, paletteTools);
   return {
     /**
@@ -221,16 +221,18 @@ const paletteHandlers = new tiny.Handlers(import.meta.url, async () => {
   };
 });
 
-const paletteStyles = new tiny.Styles(import.meta.url, {
+const paletteStyles = new tiny.Styles({
   palette: css`
     width: min(36rem, calc(100vw - 2rem));
     max-height: min(28rem, calc(100vh - 6rem));
     margin: 12vh auto auto;
     padding: 0;
-    border: 1px solid var(--palette-border, light-dark(oklch(87.2% 0.009 258.3), oklch(32.8% 0.007 258.3)));
+    border: 1px solid var(--palette-border, light-dark(oklch(87.2% 0.009 258.3),
+      oklch(32.8% 0.007 258.3)));
     border-radius: 10px;
     background: var(--palette-surface, light-dark(oklch(100% 0 0), oklch(20% 0 0)));
-    color: var(--palette-text, light-dark(oklch(21% 0.032 264.7), oklch(97% 0.032 264.7)));
+    color: var(--palette-text, light-dark(oklch(21% 0.032 264.7), oklch(97% 0.032
+      264.7)));
     box-shadow: 0 16px 40px oklch(21% 0.032 264.7 / 0.25);
     overflow: hidden;
 
@@ -244,7 +246,8 @@ const paletteStyles = new tiny.Styles(import.meta.url, {
     > input {
       padding: 0.875rem 1rem;
       border: none;
-      border-bottom: 1px solid var(--palette-border, light-dark(oklch(87.2% 0.009 258.3), oklch(32.8% 0.007 258.3)));
+      border-bottom: 1px solid var(--palette-border, light-dark(oklch(87.2% 0.009
+        258.3), oklch(32.8% 0.007 258.3)));
       background: none;
       color: inherit;
       font: inherit;
@@ -263,14 +266,16 @@ const paletteStyles = new tiny.Styles(import.meta.url, {
     }
     [data-heading] {
       padding: 0.375rem 0.625rem 0.25rem;
-      color: var(--palette-muted, light-dark(oklch(55.1% 0.023 264.4), oklch(64.9% 0.023 264.4)));
+      color: var(--palette-muted, light-dark(oklch(55.1% 0.023 264.4), oklch(64.9%
+        0.023 264.4)));
       font-size: 0.75rem;
       font-weight: 600;
     }
     [data-empty] {
       margin: 0;
       padding: 1.5rem;
-      color: var(--palette-muted, light-dark(oklch(55.1% 0.023 264.4), oklch(64.9% 0.023 264.4)));
+      color: var(--palette-muted, light-dark(oklch(55.1% 0.023 264.4), oklch(64.9%
+        0.023 264.4)));
       text-align: center;
     }
     [hidden] {
@@ -297,12 +302,14 @@ const paletteStyles = new tiny.Styles(import.meta.url, {
       display: none;
     }
     &[aria-selected="true"] {
-      background: var(--palette-active, light-dark(oklch(97.9% 0.021 166.1), oklch(22.1% 0.016 166.1)));
+      background: var(--palette-active, light-dark(oklch(97.9% 0.021 166.1),
+        oklch(22.1% 0.016 166.1)));
     }
     > kbd,
     > small {
       margin-left: auto;
-      color: var(--palette-muted, light-dark(oklch(55.1% 0.023 264.4), oklch(64.9% 0.023 264.4)));
+      color: var(--palette-muted, light-dark(oklch(55.1% 0.023 264.4), oklch(64.9%
+        0.023 264.4)));
       font-size: 0.75rem;
     }
   `,
@@ -312,7 +319,8 @@ const paletteStyles = new tiny.Styles(import.meta.url, {
     gap: 1.5rem;
 
     kbd {
-      color: var(--palette-muted, light-dark(oklch(55.1% 0.023 264.4), oklch(64.9% 0.023 264.4)));
+      color: var(--palette-muted, light-dark(oklch(55.1% 0.023 264.4), oklch(64.9%
+        0.023 264.4)));
       font-size: 0.75rem;
     }
     @media (scripting: none) {

@@ -36,50 +36,50 @@ import { h, type JSX } from "../../jsx-runtime.ts";
 import {
   type InstancedComponent,
   type InstanceSignals,
+  optimized,
   type Signal,
   type SignalComponent,
-  tiny,
 } from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
 import { signalTools } from "../../handlers/signals.ts";
 import type { LifecycleElement } from "../../lifecycleElement.ts";
 
+const tiny = optimized(import.meta.url);
+
 /**
  * Per instance: the slide at the start of the track, how many there are,
  * whether it wraps around, and whether it is moving on by itself.
  */
-const carouselSignals = new tiny.Signals(
-  import.meta.url,
-  ({ Signal, Computed, perInstance }) =>
-    perInstance(() => {
-      const index = new Signal(0);
-      const count = new Signal(0);
-      const loop = new Signal<boolean>(false);
-      const playing = new Signal<boolean>(false);
-      return {
-        index,
-        count,
-        loop,
-        playing,
-        atStart: new Computed(
-          () => !loop.value && index.value <= 0,
-          [index, loop],
-        ),
-        atEnd: new Computed(
-          () => !loop.value && index.value >= count.value - 1,
-          [index, count, loop],
-        ),
-        /** "2 / 5", once the slides are counted. */
-        summary: new Computed(
-          () => count.value ? `${index.value + 1} / ${count.value}` : "",
-          [index, count],
-        ),
-        playLabel: new Computed(
-          () => playing.value ? "Pause" : "Play",
-          [playing],
-        ),
-      };
-    }),
+const carouselSignals = new tiny.Signals(({ Signal, Computed, perInstance }) =>
+  perInstance(() => {
+    const index = new Signal(0);
+    const count = new Signal(0);
+    const loop = new Signal<boolean>(false);
+    const playing = new Signal<boolean>(false);
+    return {
+      index,
+      count,
+      loop,
+      playing,
+      atStart: new Computed(
+        () => !loop.value && index.value <= 0,
+        [index, loop],
+      ),
+      atEnd: new Computed(
+        () => !loop.value && index.value >= count.value - 1,
+        [index, count, loop],
+      ),
+      /** "2 / 5", once the slides are counted. */
+      summary: new Computed(
+        () => count.value ? `${index.value + 1} / ${count.value}` : "",
+        [index, count],
+      ),
+      playLabel: new Computed(
+        () => playing.value ? "Pause" : "Play",
+        [playing],
+      ),
+    };
+  })
 );
 
 /** The signals the carousel's parts expose. */
@@ -113,7 +113,7 @@ type StepButtonProps = { children?: unknown };
 type DotsProps = { label?: string };
 
 /** Helpers the handlers share, called through `fn`. */
-const carouselTools = new tiny.Handlers(import.meta.url, {
+const carouselTools = new tiny.Handlers({
   slides(track: HTMLElement): HTMLElement[] {
     return [...track.querySelectorAll<HTMLElement>(":scope > [data-slide]")];
   },
@@ -152,7 +152,7 @@ type Track = HTMLElement & LifecycleElement & {
   carouselShown?: number;
 };
 
-const carouselHandlers = new tiny.Handlers(import.meta.url, async () => {
+const carouselHandlers = new tiny.Handlers(async () => {
   const { fn, signal } = await tiny.imports(carouselSignals, carouselTools);
   return {
     /** Counts and labels the slides, and starts any autoplay. */
@@ -256,7 +256,7 @@ const carouselHandlers = new tiny.Handlers(import.meta.url, async () => {
   };
 });
 
-const carouselStyles = new tiny.Styles(import.meta.url, {
+const carouselStyles = new tiny.Styles({
   track: css`
     display: grid;
     grid-auto-flow: column;
@@ -285,7 +285,8 @@ const carouselStyles = new tiny.Styles(import.meta.url, {
     place-items: center;
     width: 2.25rem;
     height: 2.25rem;
-    border: 1px solid var(--carousel-border, light-dark(oklch(87.2% 0.009 258.3), oklch(32.8% 0.007 258.3)));
+    border: 1px solid var(--carousel-border, light-dark(oklch(87.2% 0.009 258.3),
+      oklch(32.8% 0.007 258.3)));
     border-radius: 50%;
     background: light-dark(oklch(100% 0 0), oklch(20% 0 0));
     color: inherit;
@@ -312,7 +313,8 @@ const carouselStyles = new tiny.Styles(import.meta.url, {
       padding: 0;
       border: none;
       border-radius: 999px;
-      background: var(--carousel-muted, light-dark(oklch(87.2% 0.009 258.3), oklch(32.8% 0.007 258.3)));
+      background: var(--carousel-muted, light-dark(oklch(87.2% 0.009 258.3),
+        oklch(32.8% 0.007 258.3)));
       cursor: pointer;
       transition: width 150ms ease;
     }
@@ -328,7 +330,8 @@ const carouselStyles = new tiny.Styles(import.meta.url, {
   `,
   play: css`
     padding: 0.25rem 0.75rem;
-    border: 1px solid var(--carousel-border, light-dark(oklch(87.2% 0.009 258.3), oklch(32.8% 0.007 258.3)));
+    border: 1px solid var(--carousel-border, light-dark(oklch(87.2% 0.009 258.3),
+      oklch(32.8% 0.007 258.3)));
     border-radius: 999px;
     background: light-dark(oklch(100% 0 0), oklch(20% 0 0));
     color: inherit;

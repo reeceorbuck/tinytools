@@ -1,4 +1,6 @@
-import { Handlers } from "../clientTools.ts";
+import { sourcedCollections } from "../clientTools.ts";
+
+const sourced = sourcedCollections(import.meta.url);
 
 /**
  * TEMPORARY: fallback for browsers without `precommitHandler` (Safari).
@@ -12,7 +14,7 @@ import { Handlers } from "../clientTools.ts";
  * Remove this file and its `redirectWithoutPrecommit` calls once every
  * supported browser has `NavigationPrecommitController`.
  */
-export const precommitFallbackTools = new Handlers(import.meta.url, {
+export const precommitFallbackTools = new sourced.Handlers({
   redirectWithoutPrecommit: function (event: NavigateEvent, url: string) {
     if ("NavigationPrecommitController" in globalThis) return;
     const navigationApi = globalThis.navigation as Navigation & {

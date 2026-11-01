@@ -1,6 +1,8 @@
-import { Handlers, imports } from "../clientTools.ts";
+import { imports, sourcedCollections } from "../clientTools.ts";
 
-const compileClientRouteTools = new Handlers(import.meta.url, {
+const sourced = sourcedCollections(import.meta.url);
+
+const compileClientRouteTools = new sourced.Handlers({
   interpolateClientRouteValue: function (
     value: string,
     params: Readonly<Record<string, string | undefined>>,
@@ -13,7 +15,7 @@ const compileClientRouteTools = new Handlers(import.meta.url, {
   },
 });
 
-export const clientRouteTools = new Handlers(import.meta.url, async () => {
+export const clientRouteTools = new sourced.Handlers(async () => {
   const { fn } = await imports(compileClientRouteTools);
   return {
     compileClientRoute: function (

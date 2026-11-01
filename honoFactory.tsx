@@ -27,7 +27,7 @@ import {
   setGeneratedStyleHashLength,
   SignalComponent,
   Signals,
-  sourcedConstructor,
+  sourcedCollections,
   Styles,
   Templates,
 } from "./clientTools.ts";
@@ -48,6 +48,8 @@ import {
 import { NewPartial } from "./components/NewPartial.tsx";
 import { signalRuntimeFiles } from "./signalModules.ts";
 import { eventHandlerBody } from "./eventAttributes.ts";
+
+const sourced = sourcedCollections(import.meta.url);
 
 const ROUTE_LAYOUT_APPLIED_KEY = "tinyToolsRouteLayoutApplied";
 /**
@@ -87,8 +89,8 @@ function createRouteLayout(
   LayoutComponent: RouteLayoutComponent,
   renderOnPartial: boolean,
 ): MiddlewareHandler {
-  // deno-lint-ignore no-explicit-any
   return jsxRenderer(
+    // deno-lint-ignore no-explicit-any
     async ({ children, Layout, title, head, lang }: any, context) => {
       const partialNavigation = !!context.req.header("source-url");
       if (!partialNavigation) context.set(ROUTE_LAYOUT_APPLIED_KEY, true);
@@ -191,7 +193,7 @@ function isLikelyAssetRequestPath(path: string): boolean {
 }
 
 /** Handlers for the `<update>` head section of partial responses. */
-export const headHandler = new Handlers(import.meta.url, {
+export const headHandler = new sourced.Handlers({
   /** Moves the template's title, scripts and stylesheets into `<head>`, waiting for new stylesheets. */
   importIntoHead: async function (this: HTMLTemplateElement) {
     const head = this.content;
@@ -303,6 +305,12 @@ function createCoreMiddleware(
           },
         });
       }
+      // Static builds request dynamic routes by their pattern (`/a/:id`)
+      // for `ssgParams`; no file has that path.
+      if (
+        (context.env as Record<string, unknown> | undefined)
+          ?.HONO_SSG_CONTEXT && /\/:|\*/.test(context.req.path)
+      ) return await next();
       return staticMiddleware(context, next);
     },
     contextStorage(),
@@ -505,17 +513,14 @@ export type TinyApi = {
 };
 
 /**
- * `tiny` for one source file, so its collections need no `import.meta.url`
- * of their own: `const tiny = optimized(import.meta.url)`.
+ * `tiny` for one source file: `const tiny = optimized(import.meta.url)` at
+ * the top of a file gives its `Handlers`, `Signals`, `Styles` and
+ * `Templates` that file, so `--lazy` builds can tie their generated files to
+ * it. Use it in place of passing `import.meta.url` to each collection, which
+ * is deprecated.
  */
 export function optimized(sourceFileUrl: string | URL): TinyApi {
-  return {
-    ...tiny,
-    Handlers: sourcedConstructor(Handlers, sourceFileUrl),
-    Signals: sourcedConstructor(Signals, sourceFileUrl),
-    Styles: sourcedConstructor(Styles, sourceFileUrl),
-    Templates: sourcedConstructor(Templates, sourceFileUrl),
-  };
+  return { ...tiny, ...sourcedCollections(sourceFileUrl) };
 }
 
 /**

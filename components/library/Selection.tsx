@@ -48,44 +48,44 @@ import { h } from "../../jsx-runtime.ts";
 import {
   type InstancedComponent,
   type InstanceSignals,
+  optimized,
   type ReadonlySignal,
   type Signal,
   type SignalComponent,
-  tiny,
 } from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
 import { signalTools } from "../../handlers/signals.ts";
+
+const tiny = optimized(import.meta.url);
 
 /**
  * Per instance: every checkbox's value, the chosen ones, and the last one
  * clicked, where a shift-click's range starts.
  */
-const selectionSignals = new tiny.Signals(
-  import.meta.url,
-  ({ Signal, Computed, perInstance }) =>
-    perInstance(() => {
-      const values = new Signal<string[]>([]);
-      const selected = new Signal<string[]>([]);
-      return {
-        values,
-        selected,
-        anchor: new Signal(""),
-        count: new Computed(() => selected.value.length, [selected]),
-        /** Whether nothing is chosen. */
-        none: new Computed(() => selected.value.length === 0, [selected]),
-        /** "3 of 12 selected" while any are; empty otherwise. */
-        summary: new Computed(
-          () =>
-            selected.value.length
-              ? `${selected.value.length} of ${values.value.length} selected`
-              : "",
-          [selected, values],
-        ),
-      };
-    }),
+const selectionSignals = new tiny.Signals(({ Signal, Computed, perInstance }) =>
+  perInstance(() => {
+    const values = new Signal<string[]>([]);
+    const selected = new Signal<string[]>([]);
+    return {
+      values,
+      selected,
+      anchor: new Signal(""),
+      count: new Computed(() => selected.value.length, [selected]),
+      /** Whether nothing is chosen. */
+      none: new Computed(() => selected.value.length === 0, [selected]),
+      /** "3 of 12 selected" while any are; empty otherwise. */
+      summary: new Computed(
+        () =>
+          selected.value.length
+            ? `${selected.value.length} of ${values.value.length} selected`
+            : "",
+        [selected, values],
+      ),
+    };
+  })
 );
 
-const selectionHandlers = new tiny.Handlers(import.meta.url, async () => {
+const selectionHandlers = new tiny.Handlers(async () => {
   const { signal } = await tiny.imports(selectionSignals);
   return {
     /** Lists the checkbox's value, chosen if it was rendered checked. */
@@ -164,7 +164,7 @@ const selectionHandlers = new tiny.Handlers(import.meta.url, async () => {
   };
 });
 
-const selectionStyles = new tiny.Styles(import.meta.url, {
+const selectionStyles = new tiny.Styles({
   checkbox: css`
     width: 1rem;
     height: 1rem;
@@ -178,9 +178,11 @@ const selectionStyles = new tiny.Styles(import.meta.url, {
     align-items: center;
     gap: 0.5rem;
     padding: 0.5rem 0.75rem;
-    border: 1px solid var(--selection-border, light-dark(oklch(90.5% 0.089 164.2), oklch(29.5% 0.067 164.2)));
+    border: 1px solid var(--selection-border, light-dark(oklch(90.5% 0.089 164.2),
+      oklch(29.5% 0.067 164.2)));
     border-radius: 8px;
-    background: var(--selection-surface, light-dark(oklch(97.9% 0.021 166.1), oklch(22.1% 0.016 166.1)));
+    background: var(--selection-surface, light-dark(oklch(97.9% 0.021 166.1),
+      oklch(22.1% 0.016 166.1)));
 
     &[hidden] {
       display: none;

@@ -1,5 +1,8 @@
 import { type Handlers, tiny } from "../mod.ts";
 import { processIncomingDataTools } from "./processIncomingData.ts";
+import { sourcedCollections } from "../clientTools.ts";
+
+const sourced = sourcedCollections(import.meta.url);
 
 /**
  * Opens the application's `/sse` event stream and feeds its `<update>`
@@ -9,7 +12,7 @@ import { processIncomingDataTools } from "./processIncomingData.ts";
 export const sseTools: Handlers<{
   /** Bind to `onLoad` of the element that owns the connection, typically `<body>`. */
   activateSSE(this: HTMLElement, _e: Event): void;
-}> = new tiny.Handlers(import.meta.url, async () => {
+}> = new sourced.Handlers(async () => {
   const { fn } = await tiny.imports(processIncomingDataTools);
   return {
     activateSSE: function (this: HTMLElement, _e: Event): void {

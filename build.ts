@@ -38,6 +38,15 @@ import {
 } from "node:fs/promises";
 import { readdir } from "node:fs/promises";
 
+export {
+  buildStaticSite,
+  STATIC_PARTIALS_META,
+  staticPageFile,
+  staticSiteFetch,
+  type StaticSiteOptions,
+  type StaticSiteResult,
+} from "./staticSite.ts";
+
 const STYLE_LAYER_ORDER: ScopedStyleLayer[] = [
   "global",
   "unscoped",

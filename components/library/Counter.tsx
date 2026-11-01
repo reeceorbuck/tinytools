@@ -21,26 +21,27 @@ import { h } from "../../jsx-runtime.ts";
 import {
   type InstancedComponent,
   type InstanceSignals,
+  optimized,
   type Signal,
   type SignalComponent,
-  tiny,
 } from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
+
+const tiny = optimized(import.meta.url);
 
 /**
  * One count per instance. Each of its components is one part of a counter:
  * the parts made together by `component.instance()` share one count,
  * wherever they sit on the page.
  */
-const counterSignals = new tiny.Signals(
-  import.meta.url,
-  ({ Signal, perInstance }) => perInstance(() => ({ count: new Signal(0) })),
+const counterSignals = new tiny.Signals(({ Signal, perInstance }) =>
+  perInstance(() => ({ count: new Signal(0) }))
 );
 
 /** The signals the counter's parts expose. */
 type CounterExposed = InstanceSignals<{ count: Signal<number> }>;
 
-const counterHandlers = new tiny.Handlers(import.meta.url, async () => {
+const counterHandlers = new tiny.Handlers(async () => {
   const { signal } = await tiny.imports(counterSignals);
   return {
     /** Changes the count by the button's `data-by`. */
@@ -50,7 +51,7 @@ const counterHandlers = new tiny.Handlers(import.meta.url, async () => {
   };
 });
 
-const counterStyles = new tiny.Styles(import.meta.url, {
+const counterStyles = new tiny.Styles({
   counterDisplay: css`
     display: inline-block;
     min-width: 3ch;

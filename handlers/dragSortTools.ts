@@ -1,4 +1,6 @@
-import { Handlers } from "../clientTools.ts";
+import { type Handlers, sourcedCollections } from "../clientTools.ts";
+
+const sourced = sourcedCollections(import.meta.url);
 
 declare const tiny: { runHandler(target: HTMLElement, event: Event): unknown };
 
@@ -184,7 +186,7 @@ export const dragSortTools: Handlers<{
    * as a keyboard alternative to dragging.
    */
   sortByKey(this: HTMLElement, event: KeyboardEvent): void;
-}> = new Handlers(import.meta.url, {
+}> = new sourced.Handlers({
   dragSortItems,
   dragSortDragged,
   layoutDragSort,

@@ -37,17 +37,17 @@ import { createContext, useContext } from "hono/jsx";
 import {
   type InstancedComponent,
   type InstanceSignals,
+  optimized,
   type Signal,
   type SignalComponent,
-  tiny,
 } from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
 
+const tiny = optimized(import.meta.url);
+
 /** The selected tab's value, one per instance. */
-const tabsSignals = new tiny.Signals(
-  import.meta.url,
-  ({ Signal, perInstance }) =>
-    perInstance(() => ({ selected: new Signal("") })),
+const tabsSignals = new tiny.Signals(({ Signal, perInstance }) =>
+  perInstance(() => ({ selected: new Signal("") }))
 );
 
 /** The signals the tabs' parts expose. */
@@ -86,7 +86,7 @@ type PanelProps = {
   children?: unknown;
 };
 
-const tabsHandlers = new tiny.Handlers(import.meta.url, async () => {
+const tabsHandlers = new tiny.Handlers(async () => {
   const { signal } = await tiny.imports(tabsSignals);
   // A `remember` key keeps the choice in localStorage, as `tiny-tabs:<key>`.
   return {
@@ -156,16 +156,18 @@ const tabsHandlers = new tiny.Handlers(import.meta.url, async () => {
   };
 });
 
-const tabsStyles = new tiny.Styles(import.meta.url, {
+const tabsStyles = new tiny.Styles({
   list: css`
     display: flex;
     gap: 0.25rem;
-    border-bottom: 1px solid var(--tabs-border, light-dark(oklch(87.2% 0.009 258.3), oklch(32.8% 0.007 258.3)));
+    border-bottom: 1px solid var(--tabs-border, light-dark(oklch(87.2% 0.009 258.3),
+      oklch(32.8% 0.007 258.3)));
 
     &[aria-orientation="vertical"] {
       flex-direction: column;
       border-bottom: none;
-      border-right: 1px solid var(--tabs-border, light-dark(oklch(87.2% 0.009 258.3), oklch(32.8% 0.007 258.3)));
+      border-right: 1px solid var(--tabs-border, light-dark(oklch(87.2% 0.009
+        258.3), oklch(32.8% 0.007 258.3)));
     }
   `,
   tab: css`
@@ -174,17 +176,20 @@ const tabsStyles = new tiny.Styles(import.meta.url, {
     border-bottom: 2px solid transparent;
     margin-bottom: -1px;
     background: none;
-    color: var(--tabs-muted, light-dark(oklch(44.6% 0.026 256.8), oklch(75.4% 0.026 256.8)));
+    color: var(--tabs-muted, light-dark(oklch(44.6% 0.026 256.8), oklch(75.4% 0.026
+      256.8)));
     font: inherit;
     font-weight: 500;
     cursor: pointer;
 
     &:hover {
-      color: var(--tabs-text, light-dark(oklch(21% 0.032 264.7), oklch(97% 0.032 264.7)));
+      color: var(--tabs-text, light-dark(oklch(21% 0.032 264.7), oklch(97% 0.032
+        264.7)));
     }
     &[aria-selected="true"] {
       border-bottom-color: var(--tabs-accent, oklch(50.8% 0.105 165.6));
-      color: var(--tabs-text, light-dark(oklch(21% 0.032 264.7), oklch(97% 0.032 264.7)));
+      color: var(--tabs-text, light-dark(oklch(21% 0.032 264.7), oklch(97% 0.032
+        264.7)));
     }
     &:focus-visible {
       outline: 2px solid var(--tabs-accent, oklch(50.8% 0.105 165.6));

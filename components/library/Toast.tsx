@@ -41,8 +41,10 @@
 
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
 import { h, type JSX } from "../../jsx-runtime.ts";
-import { type SignalComponent, tiny } from "../../mod.ts";
+import { optimized, type SignalComponent } from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
+
+const tiny = optimized(import.meta.url);
 
 /**
  * A toast raised but not yet shown: text, or a `Toast`'s markup in `html`.
@@ -61,10 +63,9 @@ type PendingToast = {
  * One queue for the page: the raising parts append to it and the toaster
  * moves them out, so they meet only through the signal.
  */
-const toastSignals = new tiny.Signals(
-  import.meta.url,
-  ({ Signal }) => ({ queue: new Signal<PendingToast[]>([]) }),
-);
+const toastSignals = new tiny.Signals(({ Signal }) => ({
+  queue: new Signal<PendingToast[]>([]),
+}));
 
 /** A shown toast, with the time it has left while paused. */
 type ToastElement = HTMLElement & {
@@ -77,7 +78,7 @@ type ToastElement = HTMLElement & {
  * Helpers the handlers share, called through `fn`: a handler factory's own
  * locals do not reach the browser.
  */
-const toastTools = new tiny.Handlers(import.meta.url, {
+const toastTools = new tiny.Handlers({
   /**
    * Starts the toast's countdown, unless it stays until closed. Focus inside
    * holds it a second at a time, so a keyboard has time to reach its links;
@@ -106,7 +107,7 @@ const toastTools = new tiny.Handlers(import.meta.url, {
   },
 });
 
-const toastHandlers = new tiny.Handlers(import.meta.url, async () => {
+const toastHandlers = new tiny.Handlers(async () => {
   const { fn, signal } = await tiny.imports(toastSignals, toastTools);
   return {
     /**
@@ -203,7 +204,7 @@ const toastHandlers = new tiny.Handlers(import.meta.url, async () => {
   };
 });
 
-const toastStyles = new tiny.Styles(import.meta.url, {
+const toastStyles = new tiny.Styles({
   toaster: css`
     position: fixed;
     inset: auto 1rem 1rem auto;
@@ -240,11 +241,13 @@ const toastStyles = new tiny.Styles(import.meta.url, {
     align-items: start;
     gap: 0.75rem;
     padding: 0.75rem 0.75rem 0.75rem 1rem;
-    border: 1px solid var(--toast-border, light-dark(oklch(87.2% 0.009 258.3), oklch(32.8% 0.007 258.3)));
+    border: 1px solid var(--toast-border, light-dark(oklch(87.2% 0.009 258.3),
+      oklch(32.8% 0.007 258.3)));
     border-left: 4px solid var(--toast-accent);
     border-radius: 8px;
     background: var(--toast-surface, light-dark(oklch(100% 0 0), oklch(20% 0 0)));
-    color: var(--toast-text, light-dark(oklch(21% 0.032 264.7), oklch(97% 0.032 264.7)));
+    color: var(--toast-text, light-dark(oklch(21% 0.032 264.7), oklch(97% 0.032
+      264.7)));
     box-shadow: 0 8px 24px oklch(21% 0.032 264.7 / 0.16);
     transition: opacity 200ms ease, translate 200ms ease;
 
@@ -271,7 +274,8 @@ const toastStyles = new tiny.Styles(import.meta.url, {
     }
     p {
       margin: 0.125rem 0 0;
-      color: var(--toast-muted, light-dark(oklch(44.6% 0.026 256.8), oklch(75.4% 0.026 256.8)));
+      color: var(--toast-muted, light-dark(oklch(44.6% 0.026 256.8), oklch(75.4%
+        0.026 256.8)));
       font-size: 0.875rem;
     }
     @media (prefers-reduced-motion: reduce) {
@@ -289,15 +293,18 @@ const toastStyles = new tiny.Styles(import.meta.url, {
     border: none;
     border-radius: 4px;
     background: none;
-    color: var(--toast-muted, light-dark(oklch(44.6% 0.026 256.8), oklch(75.4% 0.026 256.8)));
+    color: var(--toast-muted, light-dark(oklch(44.6% 0.026 256.8), oklch(75.4% 0.026
+      256.8)));
     font-size: 1.125rem;
     line-height: 1;
     cursor: pointer;
 
     &:hover,
     &:focus-visible {
-      background: var(--toast-border, light-dark(oklch(87.2% 0.009 258.3), oklch(32.8% 0.007 258.3)));
-      color: var(--toast-text, light-dark(oklch(21% 0.032 264.7), oklch(97% 0.032 264.7)));
+      background: var(--toast-border, light-dark(oklch(87.2% 0.009 258.3),
+        oklch(32.8% 0.007 258.3)));
+      color: var(--toast-text, light-dark(oklch(21% 0.032 264.7), oklch(97% 0.032
+        264.7)));
     }
   `,
   // The buttons need the page's script, so they stay hidden without it.

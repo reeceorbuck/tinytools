@@ -514,3 +514,35 @@ Deno.test({
     }
   },
 });
+
+Deno.test("passing import.meta.url to a collection warns once per file, optimized does not", () => {
+  reset();
+  const warnings: string[] = [];
+  const warn = console.warn;
+  console.warn = (...args: unknown[]) => void warnings.push(args.join(" "));
+  try {
+    const deprecated = (text: string) =>
+      warnings.filter((warning) =>
+        warning.includes("Deprecated") && warning.includes(text)
+      );
+    const file = new URL("./deprecatedSource.tsx", import.meta.url);
+    const tiny = optimized(file);
+    new tiny.Handlers({ viaOptimized() {} });
+    new tiny.Signals({ viaOptimized: 0 });
+    assertEquals(deprecated("deprecatedSource").length, 0);
+
+    new Handlers(file, { direct() {} });
+    new Signals(file, { direct: 0 });
+    assertEquals(deprecated("deprecatedSource").length, 1);
+    assertStringIncludes(deprecated("deprecatedSource")[0], "optimized(");
+
+    // The flag `optimized` sets ends with its collection.
+    const other = new URL("./otherDeprecatedSource.tsx", import.meta.url);
+    new tiny.Handlers({ before() {} });
+    new Handlers(other, { after() {} });
+    assertEquals(deprecated("otherDeprecatedSource").length, 1);
+  } finally {
+    console.warn = warn;
+    reset();
+  }
+});

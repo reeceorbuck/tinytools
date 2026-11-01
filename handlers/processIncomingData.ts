@@ -1,4 +1,11 @@
-import { Handlers, type PartialAbortableHTMLElement, tiny } from "../mod.ts";
+import {
+  type Handlers,
+  type PartialAbortableHTMLElement,
+  tiny,
+} from "../mod.ts";
+import { sourcedCollections } from "../clientTools.ts";
+
+const sourced = sourcedCollections(import.meta.url);
 
 /** Detail of the `incomingdata` event dispatched on `window` for each complete unit of incoming data. */
 export type IncomingData =
@@ -50,7 +57,7 @@ export const processIncomingDataTools: Handlers<{
    * cached routes whose `update-path` matches one of the update's paths.
    */
   updateCachedRoutes(this: HTMLElement, event: IncomingDataEvent): void;
-}> = new Handlers(import.meta.url, {
+}> = new sourced.Handlers({
   processIncomingData: async function (
     response: Response,
   ) {

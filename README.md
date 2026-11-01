@@ -104,13 +104,13 @@ runtime reports for each function, so build and serve with the same runtime.
 import { Hono } from "hono";
 import { css, tiny } from "tinytools";
 
-const buttonHandlers = new tiny.Handlers(import.meta.url, {
+const buttonHandlers = new tiny.Handlers({
   greet(this: HTMLButtonElement) {
     this.textContent = "Hello!";
   },
 });
 
-const buttonStyles = new tiny.Styles(import.meta.url, {
+const buttonStyles = new tiny.Styles({
   button: css`
     padding: 8px 16px;
     background: royalblue;
@@ -146,7 +146,7 @@ Declare collections at module level, never inside a route.
 `tiny.Signals` holds values the page reacts to. Bind them straight in JSX:
 
 ```tsx
-const counter = new tiny.Signals(import.meta.url, { count: 0 });
+const counter = new tiny.Signals({ count: 0 });
 
 app.get("/counter", async (c) => {
   const { signal } = await tiny.imports(counter);
@@ -242,6 +242,9 @@ and any new assets it needs.
 - **Per-instance signals**: give each copy of a component its own state.
 - **Builds**: prebuild every bundle for production, build on demand with
   `--lazy` in development, or serve from memory with `--none`.
+- **Static sites**: `buildStaticSite(app)` from `tinytools/build` renders every
+  page to HTML beside the bundles it loads, for hosting without a server.
+  Partial navigation keeps working from prebuilt partials.
 
 ## Documentation
 

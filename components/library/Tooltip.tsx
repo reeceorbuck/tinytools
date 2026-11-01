@@ -43,24 +43,24 @@ import { h } from "../../jsx-runtime.ts";
 import {
   type InstancedComponent,
   type InstanceSignals,
+  optimized,
   type Signal,
   type SignalComponent,
-  tiny,
 } from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
 import type { LifecycleElement } from "../../lifecycleElement.ts";
+
+const tiny = optimized(import.meta.url);
 
 /**
  * Per instance: whether the tip or card is showing, and its id, which it
  * writes as it connects and its triggers find it by.
  */
-const tooltipSignals = new tiny.Signals(
-  import.meta.url,
-  ({ Signal, perInstance }) =>
-    perInstance(() => ({
-      open: new Signal<boolean>(false),
-      target: new Signal(""),
-    })),
+const tooltipSignals = new tiny.Signals(({ Signal, perInstance }) =>
+  perInstance(() => ({
+    open: new Signal<boolean>(false),
+    target: new Signal(""),
+  }))
 );
 
 /** A tip or card, holding its pending show or hide and its trigger. */
@@ -70,7 +70,7 @@ type Content = HTMLElement & {
 };
 
 /** Helpers the handlers share, called through `fn`. */
-const tooltipTools = new tiny.Handlers(import.meta.url, {
+const tooltipTools = new tiny.Handlers({
   /**
    * Marks the trigger as the content's, and for a tip, has the trigger's
    * first focusable element described by it.
@@ -138,7 +138,7 @@ const tooltipTools = new tiny.Handlers(import.meta.url, {
   },
 });
 
-const tooltipHandlers = new tiny.Handlers(import.meta.url, async () => {
+const tooltipHandlers = new tiny.Handlers(async () => {
   const { fn, signal } = await tiny.imports(tooltipSignals, tooltipTools);
   return {
     /** Gives the content an id, and its triggers that id. */
@@ -207,7 +207,7 @@ const tooltipHandlers = new tiny.Handlers(import.meta.url, async () => {
   };
 });
 
-const tooltipStyles = new tiny.Styles(import.meta.url, {
+const tooltipStyles = new tiny.Styles({
   trigger: css`
     display: inline-block;
   `,
@@ -250,10 +250,13 @@ const tooltipStyles = new tiny.Styles(import.meta.url, {
     width: max-content;
     max-width: min(20rem, calc(100vw - 1rem));
     padding: 0.875rem 1rem;
-    border: 1px solid var(--hovercard-border, light-dark(oklch(87.2% 0.009 258.3), oklch(32.8% 0.007 258.3)));
+    border: 1px solid var(--hovercard-border, light-dark(oklch(87.2% 0.009 258.3),
+      oklch(32.8% 0.007 258.3)));
     border-radius: 10px;
-    background: var(--hovercard-surface, light-dark(oklch(100% 0 0), oklch(20% 0 0)));
-    color: var(--hovercard-text, light-dark(oklch(21% 0.032 264.7), oklch(97% 0.032 264.7)));
+    background: var(--hovercard-surface, light-dark(oklch(100% 0 0), oklch(20% 0
+      0)));
+    color: var(--hovercard-text, light-dark(oklch(21% 0.032 264.7), oklch(97% 0.032
+      264.7)));
     box-shadow: 0 8px 24px oklch(21% 0.032 264.7 / 0.16);
     transition: opacity 150ms ease, translate 150ms ease,
       display 150ms allow-discrete, overlay 150ms allow-discrete;

@@ -1,4 +1,7 @@
-import { type Handlers, type Signal, type SignalValue, tiny } from "../mod.ts";
+import type { Handlers, Signal, SignalValue } from "../mod.ts";
+import { sourcedCollections } from "../clientTools.ts";
+
+const sourced = sourcedCollections(import.meta.url);
 
 /** The event a `tiny.Signals` signal dispatches to its subscribers. */
 export interface SignalEvent extends Event {
@@ -17,7 +20,7 @@ export interface SignalElement extends HTMLElement {
  * or attribute, or placed as a child. Apart from `signalTools`, so a page
  * only loads the helpers it binds.
  */
-export const signalBindingTools = new tiny.Handlers(import.meta.url, {
+export const signalBindingTools = new sourced.Handlers({
   /**
    * Writes the signal into each property or attribute the element was given
    * it as (`<input value={signal.query} />`, `<div data-status={signal.status}>`),
@@ -89,7 +92,7 @@ export const signalTools: Handlers<{
   setValue(this: HTMLInputElement, event: SignalEvent): void;
   /** Sets the custom property `--<signal name>` to the signal value. */
   setCssProperty(this: HTMLElement, event: SignalEvent): void;
-}> = new tiny.Handlers(import.meta.url, {
+}> = new sourced.Handlers({
   fireSelfSignal: function (this: HTMLElement): void {
     this.dispatchEvent(new Event("tt-fire-signals"));
   },

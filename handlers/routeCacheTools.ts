@@ -1,11 +1,13 @@
-import { Handlers } from "../clientTools.ts";
+import { sourcedCollections } from "../clientTools.ts";
+
+const sourced = sourcedCollections(import.meta.url);
 
 type CacheObserverElement = HTMLTemplateElement & {
   stopCacheObserver?: () => void;
   abortController?: AbortController;
 };
 
-export const routeCacheTools = new Handlers(import.meta.url, {
+export const routeCacheTools = new sourced.Handlers({
   observeRouteCache: function (this: CacheObserverElement) {
     if (this.stopCacheObserver || !this.isConnected) return;
     const partialId = this.getAttribute("cache-partial-id");

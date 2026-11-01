@@ -107,7 +107,9 @@ Deno.test("pages load the dispatcher from a content-hashed, immutably cached URL
   app.get("/plain", (context) => context.render(<div>Events</div>));
   app.get("/", async (context) => {
     const { fn } = await tiny.imports(clicks);
-    return context.render(<button onClick={fn.go}>Events</button>);
+    return context.render(
+      <button type="button" onClick={fn.go}>Events</button>,
+    );
   });
   // A page that binds no handler loads no script at all.
   const plain = await (await app.request("/plain")).text();
