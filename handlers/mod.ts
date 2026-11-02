@@ -24,6 +24,7 @@ export {
   signalTools,
 } from "./signals.ts";
 export { sseTools } from "./sseTools.ts";
+export { tabIdTools } from "./tabId.ts";
 export { queryParamTools } from "./queryParams.ts";
 export { templateTools } from "./templateTools.ts";
 export {

@@ -14,18 +14,29 @@ import { createMiddleware } from "hono/factory";
 import type { Context, MiddlewareHandler } from "hono";
 import type { SSEStreamingApi } from "hono/streaming";
 
-/** Name of the cookie identifying a browser's SSE connection. */
+/** Name of the cookie identifying a browser. */
 export const SSE_ID_COOKIE = "sseId";
+
+/**
+ * Header carrying the tab's id on partial requests. The stream sends it as
+ * its `tab` query parameter, as `EventSource` can't set headers.
+ */
+export const SSE_TAB_HEADER = "tt-tab-id";
+
+/** A tab id as `tabIdTools` makes it; anything else is ignored. */
+const TAB_ID = /^[0-9a-f]{32}$/;
 
 /** How long a path record is kept for a client whose stream has closed. */
 const INACTIVE_STREAM_TTL_MS = 10_000;
 
 /** What is recorded about an open stream and the client behind it. */
 export interface StreamData {
-  /** The client's id, from its `sseId` cookie. */
+  /** The client's id, from {@link getClientId}. */
   id: string;
   /** The user name given to {@link addStream}. */
   userName: string;
+  /** The user id given to {@link addStream}, if any. */
+  userId?: string;
   /** The user agent given to {@link addStream}. */
   userAgent: string;
   /** Recently displayed page paths, oldest first. */
@@ -180,13 +191,18 @@ export class StreamEventTarget {
 /** Emits `streamAdded`, `streamRemoved` and `streamUpdated` events. */
 export const streamEvents: StreamEventTarget = new StreamEventTarget();
 
-/** Registers a newly connected stream under the client's id. */
+/**
+ * Registers a newly connected stream under the client's id. `path` is the
+ * page the tab is showing, which a full page load could not record.
+ */
 export function addStream(
-  { id, userName, userAgent, stream }: {
+  { id, userName, userId, userAgent, stream, path }: {
     id: string;
     userName: string;
+    userId?: string;
     userAgent: string;
     stream: SSEStreamingApi;
+    path?: string;
   },
 ): void {
   const existingEntry = streamsById.get(id);
@@ -195,14 +211,11 @@ export function addStream(
     return;
   }
 
-  activeStreams.set(stream, {
-    id,
-    paths: existingEntry
-      ? new Map([[existingEntry, { lastUpdated: Date.now() }]])
-      : new Map(),
-    userName,
-    userAgent,
-  });
+  const paths = new Map<string, { lastUpdated: number }>();
+  for (const shown of [existingEntry, path]) {
+    if (shown) paths.set(shown, { lastUpdated: Date.now() });
+  }
+  activeStreams.set(stream, { id, paths, userName, userId, userAgent });
   streamsById.set(id, stream);
   console.log(`[tiny-tools] SSE stream added (${activeStreams.size} active).`);
   streamEvents.dispatchEvent(new AddedStreamEvent(stream, id));
@@ -281,9 +294,32 @@ export function getStreamDataById(
 }
 
 /**
+ * The id of the tab making a request: the browser's `sseId` cookie and the
+ * tab's own id (the `tt-tab-id` header, or the stream's `tab` query). Each
+ * tab has its own stream and path history. Undefined for requests that
+ * don't come from a tab, such as full page loads.
+ */
+export function getClientId(c: Context): string | undefined {
+  const browserId = getCookie(c, SSE_ID_COOKIE);
+  const tabId = c.req.header(SSE_TAB_HEADER) ?? c.req.query("tab");
+  if (!browserId || !tabId || !TAB_ID.test(tabId)) return undefined;
+  return `${browserId}:${tabId}`;
+}
+
+/**
+ * The stream of the tab making this request, e.g. to leave it out of a
+ * broadcast when the response already updates it.
+ */
+export function getRequesterStream(c: Context): SSEStreamingApi | undefined {
+  const clientId = getClientId(c);
+  return clientId ? getStreamDataById(clientId)?.stream : undefined;
+}
+
+/**
  * Assigns each browser an `sseId` cookie and records the page path every
- * response is displayed under. Sets `sseId` and `paths` on the context.
- * Requests under `/sse` are left alone.
+ * response from a tab is displayed under. Sets `clientId` and `paths` on the
+ * context. A full page load comes before the tab has an id, so its stream
+ * reports the page when it connects. Requests under `/sse` are left alone.
  */
 export const trackConnectedClients: MiddlewareHandler = createMiddleware(
   async (c, next) => {
@@ -293,27 +329,28 @@ export const trackConnectedClients: MiddlewareHandler = createMiddleware(
     }
 
     const displayedPath = getDisplayedPath(c);
-    const existingSseId = getCookie(c, SSE_ID_COOKIE);
-    const sseId = existingSseId || crypto.randomUUID();
-    c.set("sseId", sseId);
+    if (displayedPath !== undefined && !getCookie(c, SSE_ID_COOKIE)) {
+      setCookie(c, SSE_ID_COOKIE, crypto.randomUUID(), {
+        path: "/",
+        httpOnly: true,
+        sameSite: "Lax",
+      });
+    }
 
-    if (displayedPath !== undefined) {
-      if (!existingSseId) {
-        setCookie(c, SSE_ID_COOKIE, sseId, {
-          path: "/",
-          httpOnly: true,
-          sameSite: "Lax",
-        });
-      }
-      c.set("paths", [...updateStreamPath(sseId, displayedPath)]);
-    } else if (existingSseId) {
-      const data = getStreamDataById(existingSseId);
+    const clientId = getClientId(c);
+    c.set("clientId", clientId);
+    if (clientId && displayedPath !== undefined) {
+      c.set("paths", [...updateStreamPath(clientId, displayedPath)]);
+    } else if (clientId) {
+      const data = getStreamDataById(clientId);
       c.set("paths", data?.streamData ? [...data.streamData.paths] : undefined);
     }
 
     await next();
 
     const redirectedPath = c.res.headers.get("X-spa-redirect");
-    if (redirectedPath) updateStreamPath(sseId, redirectedPath, c.req.path);
+    if (clientId && redirectedPath) {
+      updateStreamPath(clientId, redirectedPath, c.req.path);
+    }
   },
 );

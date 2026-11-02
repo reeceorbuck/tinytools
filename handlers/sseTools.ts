@@ -1,5 +1,6 @@
 import { type Handlers, tiny } from "../mod.ts";
 import { processIncomingDataTools } from "./processIncomingData.ts";
+import { tabIdTools } from "./tabId.ts";
 import { sourcedCollections } from "../clientTools.ts";
 
 const sourced = sourcedCollections(import.meta.url);
@@ -13,14 +14,18 @@ export const sseTools: Handlers<{
   /** Bind to `onLoad` of the element that owns the connection, typically `<body>`. */
   activateSSE(this: HTMLElement, _e: Event): void;
 }> = new sourced.Handlers(async () => {
-  const { fn } = await tiny.imports(processIncomingDataTools);
+  const { fn } = await tiny.imports(processIncomingDataTools, tabIdTools);
   return {
     activateSSE: function (this: HTMLElement, _e: Event): void {
       const owner = this as HTMLElement & {
         sse?: EventSource & { wasConnected?: boolean };
       };
-      const path = encodeURIComponent(globalThis.location.pathname);
-      const source = new EventSource(`/sse?path=${path}`) as EventSource & {
+      // The page this tab shows, as its full page load wasn't tracked.
+      const query = new URLSearchParams({
+        path: globalThis.location.pathname,
+        tab: fn.tabId(),
+      });
+      const source = new EventSource(`/sse?${query}`) as EventSource & {
         wasConnected?: boolean;
       };
       owner.sse = source;

@@ -9,6 +9,7 @@ import {
   navigationUrlTools,
 } from "./navigationUrlTools.ts";
 import { processIncomingDataTools } from "./processIncomingData.ts";
+import { tabIdTools } from "./tabId.ts";
 import { queryParamTools } from "./queryParams.ts";
 import { precommitFallbackTools } from "./precommitFallback.ts";
 import { sourcedCollections } from "../clientTools.ts";
@@ -44,7 +45,7 @@ export interface FetchReport {
 }
 
 export const performFetchAndUpdateTools = new sourced.Handlers(async () => {
-  const { fn } = await imports(processIncomingDataTools);
+  const { fn } = await imports(processIncomingDataTools, tabIdTools);
   return {
     performFetchAndUpdate: async function (
       destinationUrl: URL,
@@ -96,6 +97,8 @@ export const performFetchAndUpdateTools = new sourced.Handlers(async () => {
             "partial-nav": "true",
             "source-url": fromUrl.pathname + fromUrl.search,
             "destination-url": toUrl.pathname + toUrl.search,
+            // Tracks the page under this tab (see `trackConnectedClients`).
+            "tt-tab-id": fn.tabId(),
           },
           body: method === "post" ? formData ?? undefined : undefined,
           signal,
