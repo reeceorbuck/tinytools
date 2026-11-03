@@ -2,6 +2,7 @@
 /** @jsx h */
 /** @jsxFrag Fragment */
 import { renderToReadableStream } from "hono/jsx/streaming";
+import { raw } from "hono/html";
 import { AssetTags, NewPartial } from "./components/mod.ts";
 import { LifecycleTags } from "./components/AssetTags.tsx";
 import {
@@ -59,24 +60,28 @@ export async function sendUpdateStream(
 
   const toolUsageTracker = createNoContextToolUsageTracker();
   const { fn } = await tiny.imports(headHandler);
-  const update = (
-    <update update-paths={paths?.length ? JSON.stringify(paths) : undefined}>
-      <LifecycleTags
-        tags={toolUsageTracker.accessedLifecycleTags}
-        withRuntime
-      />
-      <NewPartial onLoad={fn.importIntoHead}>
-        <AssetTags
-          accessedHandlerFiles={toolUsageTracker.accessedHandlerFiles}
-          accessedStyleFiles={toolUsageTracker.accessedStyleFiles}
-        />
-      </NewPartial>
-      {content}
-    </update>
-  );
 
   const decoder = new TextDecoder();
   await withNoContextToolUsageTracker(toolUsageTracker, async () => {
+    // The content renders first: the head copies the tracker's sets as it
+    // renders, so it then lists every tag, bundle and stylesheet the content
+    // used, including ones the page has not loaded yet.
+    const body = await new Response(renderToReadableStream(content)).text();
+    const update = (
+      <update update-paths={paths?.length ? JSON.stringify(paths) : undefined}>
+        <LifecycleTags
+          tags={toolUsageTracker.accessedLifecycleTags}
+          withRuntime
+        />
+        <NewPartial onLoad={fn.importIntoHead}>
+          <AssetTags
+            accessedHandlerFiles={toolUsageTracker.accessedHandlerFiles}
+            accessedStyleFiles={toolUsageTracker.accessedStyleFiles}
+          />
+        </NewPartial>
+        {raw(body)}
+      </update>
+    );
     await renderToReadableStream(update).pipeTo(
       new WritableStream({
         async write(chunk) {
