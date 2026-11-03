@@ -26,15 +26,17 @@
  * page, and every `Trigger` and `Toast` reaches it, whichever instance or
  * request rendered them. A `Toast`'s children are the caller's markup,
  * handlers included; any element inside one marked `data-toast-close` closes
- * it when clicked. Toasts pause while the pointer is on them and stay while
- * focus is inside one. A toast raised while a modal dialog is open shows above
- * it, but like the rest of the page cannot be clicked until the dialog
- * closes.
+ * it when clicked. A link marked `data-toast-link` stretches over the whole
+ * toast, so clicking anywhere but the × follows it; other controls in such a
+ * toast need `position: relative` to stay clickable above it. Toasts pause
+ * while the pointer is on them and stay while focus is inside one. A toast
+ * raised while a modal dialog is open shows above it, but like the rest of
+ * the page cannot be clicked until the dialog closes.
  *
  * Colours come from custom properties a caller may set on the toaster or any
  * ancestor: `--toast-surface`, `--toast-border`, `--toast-text`,
- * `--toast-muted`, and the variants' `--toast-success`, `--toast-error` and
- * `--toast-info`.
+ * `--toast-muted`, `--toast-hover` (a linked toast under the pointer), and
+ * the variants' `--toast-success`, `--toast-error` and `--toast-info`.
  *
  * @module
  */
@@ -237,10 +239,11 @@ const toastStyles = new tiny.Styles({
   toast: css`
     --toast-accent: var(--toast-border, light-dark(oklch(87.2% 0.009 258.3), oklch(32.8% 0.007 258.3)));
 
+    position: relative;
     display: flex;
     align-items: start;
     gap: 0.75rem;
-    padding: 0.75rem 0.75rem 0.75rem 1rem;
+    padding: 1rem 0.875rem 1rem 1.125rem;
     border: 1px solid var(--toast-border, light-dark(oklch(87.2% 0.009 258.3),
       oklch(32.8% 0.007 258.3)));
     border-left: 4px solid var(--toast-accent);
@@ -272,6 +275,34 @@ const toastStyles = new tiny.Styles({
       flex: 1;
       min-width: 0;
     }
+    a {
+      color: inherit;
+      font-weight: 600;
+      text-decoration: underline;
+      text-decoration-color: var(--toast-accent);
+      text-underline-offset: 0.2em;
+    }
+    /* A link covering the toast: anywhere but the × follows it. */
+    a[data-toast-link] {
+      text-decoration: none;
+
+      &::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+      }
+      &:focus-visible {
+        outline: none;
+      }
+    }
+    &:has([data-toast-link]:hover) {
+      background: var(--toast-hover, light-dark(oklch(97.6% 0.004 258.3), oklch(23.5% 0.004 258.3)));
+    }
+    &:has([data-toast-link]:focus-visible) {
+      outline: 2px solid var(--toast-accent);
+      outline-offset: 2px;
+    }
     p {
       margin: 0.125rem 0 0;
       color: var(--toast-muted, light-dark(oklch(44.6% 0.026 256.8), oklch(75.4%
@@ -284,6 +315,8 @@ const toastStyles = new tiny.Styles({
     }
   `,
   closeButton: css`
+    /* Above a toast's covering link. */
+    position: relative;
     display: grid;
     place-items: center;
     width: 1.5rem;
