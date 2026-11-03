@@ -22,6 +22,7 @@ import {
   imports,
   memoryAssets,
   memoryBuild,
+  outsideHandlerDefinitions,
   setGeneratedFilenameHashLength,
   setGeneratedHandlerHashLength,
   setGeneratedStyleHashLength,
@@ -256,6 +257,7 @@ function createCoreMiddleware(
   performance.mark("startup:appCreated");
   let staticMiddleware: MiddlewareHandler | undefined;
   return [
+    (_context, next) => outsideHandlerDefinitions(next),
     ...(options.csp === false ? [] : [createCspMiddleware()]),
     async (context, next) => {
       const runtimeFile = lifecycleRuntimeFiles.get(context.req.path) ??

@@ -1082,6 +1082,24 @@ const handlerDefinitionScope = new AsyncLocalStorage<HandlerDefinitionScope>();
  */
 const requestFreeContext = AsyncLocalStorage.snapshot();
 
+/**
+ * Runs `fn` outside any handler definition. Deno (2.9.8) hands requests the
+ * async context of the last dynamic `import()`, so a request could otherwise
+ * start inside a definition still in progress and import into it.
+ */
+export function outsideHandlerDefinitions<T>(fn: () => T): T {
+  return handlerDefinitionScope.exit(fn);
+}
+
+/**
+ * Runs `fn` in the async context of module load. Work that may dynamically
+ * import, such as compiling a bundle, runs here so that context, not a
+ * definition's or a request's, is the one Deno passes on.
+ */
+export function inModuleLoadContext<T>(fn: () => T): T {
+  return requestFreeContext(fn);
+}
+
 // deno-lint-ignore no-explicit-any
 type UnionToIntersection<U> = (U extends any ? (arg: U) => void : never) extends
   ((arg: infer I) => void) ? I : never;

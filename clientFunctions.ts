@@ -18,6 +18,7 @@ import {
   emptySourceFileCacheEntry,
   generateFullHash,
   generateHandlerHash,
+  inModuleLoadContext,
   memoryAssets,
   memoryBuild,
   normalizeSourceFileUrl,
@@ -363,16 +364,21 @@ export class HandlerBundle {
     dependencies: ReadonlyMap<string, { path: string; exportName: string }>,
     defaultExport?: string,
   ) {
-    return import("./handlerNamespace.ts").then(({ compileHandlerBundle }) =>
-      compileHandlerBundle({
-        functions: new Map(
-          [...this.functions].map(([name, impl]) => [name, impl.fn.toString()]),
-        ),
-        prelude: this.prelude,
-        dependencies,
-        defaultExport,
-        register: this.filename,
-      })
+    // Imports on first use; see `inModuleLoadContext`.
+    return inModuleLoadContext(() =>
+      import("./handlerNamespace.ts").then(({ compileHandlerBundle }) =>
+        compileHandlerBundle({
+          functions: new Map(
+            [...this.functions].map((
+              [name, impl],
+            ) => [name, impl.fn.toString()]),
+          ),
+          prelude: this.prelude,
+          dependencies,
+          defaultExport,
+          register: this.filename,
+        })
+      )
     );
   }
 
