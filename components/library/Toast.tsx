@@ -92,7 +92,11 @@ const toastTools = new tiny.Handlers({
       toast.toastStarted = Date.now();
       toast.toastTimer = setTimeout(() => {
         if (toast.matches(":focus-within")) arm(1000);
-        else toast.querySelector<HTMLElement>("[data-toast-close]")?.click();
+        else {
+          // Its own ×: a closing link in the content would navigate.
+          toast.querySelector<HTMLElement>(":scope > [data-toast-close]")
+            ?.click();
+        }
       }, time);
     };
     arm(toast.toastRemaining);
