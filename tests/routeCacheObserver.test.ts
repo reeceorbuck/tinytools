@@ -60,6 +60,7 @@ Deno.test("cache observer captures replacements without navigation", async () =>
     await Promise.resolve();
     const route = routes.content.firstElementChild!;
     assertExists(route);
+    assertEquals(route.getAttribute("route-title"), document.title);
     const insertion = route.querySelector("template")!;
     assertEquals(insertion.content.childNodes.length, originalNodes.length);
     originalNodes.forEach((node, index) =>

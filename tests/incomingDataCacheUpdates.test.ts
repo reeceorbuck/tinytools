@@ -14,7 +14,12 @@ await Promise.all([
 type Handler = (this: unknown, event: Event) => unknown;
 const builtHandlers = new Map<string, Handler>();
 for (
-  const name of ["appendIncomingHtml", "updateCachedRoutes", "partialReplace"]
+  const name of [
+    "appendIncomingHtml",
+    "updateCachedRoutes",
+    "partialReplace",
+    "partialBlast",
+  ]
 ) {
   builtHandlers.set(name, await loadHandler<Handler>(name));
 }
@@ -154,5 +159,92 @@ Deno.test("updates apply to matching caches and only to a matching live page", (
       if (descriptor) Object.defineProperty(globalThis, name, descriptor);
       else Reflect.deleteProperty(globalThis, name);
     }
+  }
+});
+
+Deno.test("a superseded response is cached without touching the page", () => {
+  const { document } = parseHTML(
+    '<html><head><title>B</title></head><body><section id="panel"><p>B</p></section><client-router cache-owner-id="panel"><template></template></client-router></body></html>',
+  );
+  const originals = new Map<string, PropertyDescriptor | undefined>();
+  const globals: Record<string, unknown> = {
+    document,
+    location: { pathname: "/b" },
+  };
+  for (const [name, value] of Object.entries(globals)) {
+    originals.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
+    Object.defineProperty(globalThis, name, { configurable: true, value });
+  }
+  try {
+    const collector =
+      '<cache-collector cache-partial-id="panel"><template><client-route path="/a" once data-nav-block><template for-partial-id="panel"></template></client-route><client-router cache-owner-id="panel"><template></template></client-router></template></cache-collector>';
+    const update = document.createElement("update");
+    update.innerHTML =
+      `<template id="head"><title>A</title></template><template id="body"><template for-partial-id="panel"><p>A</p><div id="suspended-9">wait</div>${collector}</template><link rel="modulepreload"><template for-partial-id="list"><li>row</li></template></template>`;
+    const received: Node[] = [];
+    const body = { append: (...nodes: Node[]) => received.push(...nodes) };
+    builtHandlers.get("appendIncomingHtml")!.call(
+      body,
+      new CustomEvent("incomingdata", {
+        detail: { type: "html", element: update, superseded: true },
+      }),
+    );
+
+    assertEquals(document.getElementById("panel")!.textContent, "B");
+
+    const router = document.querySelector("client-router")!;
+    const routes = router.querySelector("template")!.content;
+    assertEquals(routes.children.length, 1);
+    const route = routes.firstElementChild!;
+    assertEquals(route.getAttribute("path"), "/a");
+    const cached = route.querySelector("template")!.content;
+    assertEquals(cached.querySelector("p")!.textContent, "A");
+    assertEquals(route.getAttribute("route-title"), "A");
+  } finally {
+    for (const [name, descriptor] of originals) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+      else Reflect.deleteProperty(globalThis, name);
+    }
+  }
+});
+
+Deno.test("Suspense content that overtakes its fallback waits for it", async () => {
+  const { document } = parseHTML(
+    '<html><body><section id="panel"></section></body></html>',
+  );
+  const original = Object.getOwnPropertyDescriptor(globalThis, "document");
+  Object.defineProperty(globalThis, "document", {
+    configurable: true,
+    value: document,
+  });
+  try {
+    const template = document.createElement("template");
+    template.setAttribute("for-partial-id", "suspended-3");
+    template.setAttribute("optional-target", "");
+    template.innerHTML = "<p>content</p>";
+    const blast = builtHandlers.get("partialBlast")!;
+    let fired = 0;
+    template.dispatchEvent = (event: Event) => {
+      fired++;
+      blast.call(template, event);
+      return true;
+    };
+    document.body.append(template);
+
+    // The fallback isn't on the page yet, so the content stays parked.
+    blast.call(template, new Event("load"));
+    assertEquals(template.isConnected, true);
+    assertEquals(document.querySelector("p"), null);
+
+    const panel = document.getElementById("panel")!;
+    panel.innerHTML = '<div id="suspended-3">loading</div>';
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    assertEquals(fired > 0, true);
+    assertEquals(panel.textContent, "content");
+    assertEquals(template.isConnected, false);
+  } finally {
+    if (original) Object.defineProperty(globalThis, "document", original);
+    else Reflect.deleteProperty(globalThis, "document");
   }
 });

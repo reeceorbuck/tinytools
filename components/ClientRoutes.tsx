@@ -40,6 +40,10 @@ const ClientRouterHandlers = new sourced.Handlers(async () => {
       navigationApi.cacheHandledEvents ??= new WeakSet<NavigateEvent>();
       // Cache routers hold routes restoring previously displayed content.
       const isCacheRouter = this.hasAttribute("cache-owner-id");
+      // A retry wants the server's content, not what was cached.
+      if (
+        isCacheRouter && (event.info as NavigationClientInfo | undefined)?.retry
+      ) return;
       const template = this.querySelector(
         "template",
       ) as unknown as HTMLTemplateElement;
@@ -68,6 +72,18 @@ const ClientRouterHandlers = new sourced.Handlers(async () => {
           if (routeMethod !== method) return [];
           const pathParams = match(fetchUrl);
           if (!pathParams) return [];
+          // Left before its content arrived (a Suspense fallback, or a
+          // placeholder marked `data-pending`), and it still hasn't. It may
+          // never come and restoring blocks the fetch, so fetch afresh.
+          if (
+            isCacheRouter &&
+            route.querySelector("template")?.content.querySelector(
+              '[id^="suspended-"], [data-pending]',
+            )
+          ) {
+            route.remove();
+            return [];
+          }
           return [{ route, pathParams }];
         },
       );
@@ -158,6 +174,8 @@ const ClientRouterHandlers = new sourced.Handlers(async () => {
               event && navigationApi.clientRouteBlockedEvents?.has(event) &&
               route.hasAttribute("fallback")
             ) continue;
+            const title = route.getAttribute("route-title");
+            if (title !== null) document.title = title;
             document.body.append(fn.cloneClientRoute(route, {
               ...pathParams,
               ...queryParams,

@@ -32,11 +32,13 @@ export type AppNavigation = Navigation & {
 export interface NavigationClientInfo {
   blockIntercept?: boolean;
   onlyUpdateUrl?: boolean;
+  /** Reloads the current page's content from the server, bypassing cached routes. */
+  retry?: boolean;
 }
 
 /** What `performFetchAndUpdate` did, for the navigation log. */
 export interface FetchReport {
-  outcome: "streaming" | "aborted" | "redirected" | "full load";
+  outcome: "streaming" | "aborted" | "redirected" | "full load" | "superseded";
   abortedPreviousGet?: boolean;
   status?: number;
   contentType?: string | null;
@@ -56,6 +58,13 @@ export const performFetchAndUpdateTools = new sourced.Handlers(async () => {
     ): Promise<FetchReport> {
       const method = requestMethod.toLowerCase() === "post" ? "post" : "get";
       const report: Partial<FetchReport> = {};
+
+      // Pages this response is for: the path committed (usually toUrl, but a
+      // client route can redirect) and any path the server redirects it to.
+      // Compared by path, as a query change can happen under a loading page.
+      const ownPaths = new Set([location.pathname, toUrl.pathname]);
+      const isSuperseded = () =>
+        method === "get" && !ownPaths.has(location.pathname);
 
       /** Tracks in-flight GET requests per pathname so rapid-fire calls abort stale ones. */
       const inflightGetRequests = (globalThis.navigation as AppNavigation)
@@ -128,8 +137,14 @@ export const performFetchAndUpdateTools = new sourced.Handlers(async () => {
       report.contentType = response.headers.get("Content-Type");
       const spaRedirect = response.headers.get("X-spa-redirect");
 
-      if (spaRedirect) {
+      // The user has moved on, so this response can't change the URL.
+      if (isSuperseded() && response.redirected) {
+        return { ...report, outcome: "superseded" };
+      }
+
+      if (spaRedirect && !isSuperseded()) {
         report.spaRedirect = spaRedirect;
+        ownPaths.add(new URL(spaRedirect, location.href).pathname);
         navigation.navigate(
           spaRedirect,
           {
@@ -157,7 +172,17 @@ export const performFetchAndUpdateTools = new sourced.Handlers(async () => {
         return { ...report, outcome: "redirected" };
       }
 
-      fn.processIncomingData(response);
+      // A request that left the path alone (a search under the page) isn't
+      // showing a page, so it still applies after the user moves on.
+      fn.processIncomingData(
+        response,
+        () =>
+          !isSuperseded()
+            ? undefined
+            : toUrl.pathname === fromUrl.pathname
+            ? "background"
+            : "page",
+      );
 
       if (method === "get") {
         inflightGetRequests.delete(destinationUrl.pathname);
@@ -286,7 +311,11 @@ export const navigationTools: Handlers<{
               const { outcome, ...fetchDetails } = await fn
                 .performFetchAndUpdate(
                   fetchUrl,
-                  fromUrl,
+                  // Routes send less when the source is close by, assuming
+                  // the rest is on the page. A retry can't assume that.
+                  navigationInfo?.retry
+                    ? new URL("/__tinytools_retry__", fromUrl)
+                    : fromUrl,
                   displayUrl,
                   e.formData,
                   details.method as "get" | "post",
@@ -334,6 +363,24 @@ export const navigationTools: Handlers<{
       }
     },
   };
+});
+
+/** Lets a stuck panel ask the server for the current page's content again. */
+export const retryNavigationTools: Handlers<{
+  /**
+   * Bind to a button's `onClick`. Refetches the current URL in place, skipping
+   * cached routes, and disables the button while the attempt runs.
+   */
+  retryNavigation(this: HTMLButtonElement): void;
+}> = new sourced.Handlers({
+  retryNavigation: function (this: HTMLButtonElement) {
+    this.disabled = true;
+    // The response replaces the button; if it never comes, allow another try.
+    setTimeout(() => {
+      this.disabled = false;
+    }, 5000);
+    globalThis.navigation.reload({ info: { retry: true } });
+  },
 });
 
 /**

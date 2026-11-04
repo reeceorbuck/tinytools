@@ -7,6 +7,7 @@ import { AssetTags, NewPartial } from "./components/mod.ts";
 import { LifecycleTags } from "./components/AssetTags.tsx";
 import {
   createNoContextToolUsageTracker,
+  inModuleLoadContext,
   withNoContextToolUsageTracker,
 } from "./clientTools.ts";
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
@@ -62,43 +63,49 @@ export async function sendUpdateStream(
   const { fn } = await tiny.imports(headHandler);
 
   const decoder = new TextDecoder();
-  await withNoContextToolUsageTracker(toolUsageTracker, async () => {
-    // The content renders first: the head copies the tracker's sets as it
-    // renders, so it then lists every tag, bundle and stylesheet the content
-    // used, including ones the page has not loaded yet.
-    const body = await new Response(renderToReadableStream(content)).text();
-    const update = (
-      <update update-paths={paths?.length ? JSON.stringify(paths) : undefined}>
-        <LifecycleTags
-          tags={toolUsageTracker.accessedLifecycleTags}
-          withRuntime
-        />
-        <NewPartial onLoad={fn.importIntoHead}>
-          <AssetTags
-            accessedHandlerFiles={toolUsageTracker.accessedHandlerFiles}
-            accessedStyleFiles={toolUsageTracker.accessedStyleFiles}
+  // Outside any request: one still running, such as a save pushing its change,
+  // would otherwise record what the content uses for itself, not this update.
+  await inModuleLoadContext(() =>
+    withNoContextToolUsageTracker(toolUsageTracker, async () => {
+      // The content renders first: the head copies the tracker's sets as it
+      // renders, so it then lists every tag, bundle and stylesheet the content
+      // used, including ones the page has not loaded yet.
+      const body = await new Response(renderToReadableStream(content)).text();
+      const update = (
+        <update
+          update-paths={paths?.length ? JSON.stringify(paths) : undefined}
+        >
+          <LifecycleTags
+            tags={toolUsageTracker.accessedLifecycleTags}
+            withRuntime
           />
-        </NewPartial>
-        {raw(body)}
-      </update>
-    );
-    await renderToReadableStream(update).pipeTo(
-      new WritableStream({
-        async write(chunk) {
-          const data = decoder.decode(chunk, { stream: true });
-          await Promise.all(targets.map(async (stream) => {
-            try {
-              await stream.writeSSE({ data });
-            } catch (error) {
-              onStreamWriteError?.(stream);
-              console.error(
-                "[tiny-tools] Failed writing an update to a stream; it may be closed.",
-                error,
-              );
-            }
-          }));
-        },
-      }),
-    );
-  });
+          <NewPartial onLoad={fn.importIntoHead}>
+            <AssetTags
+              accessedHandlerFiles={toolUsageTracker.accessedHandlerFiles}
+              accessedStyleFiles={toolUsageTracker.accessedStyleFiles}
+            />
+          </NewPartial>
+          {raw(body)}
+        </update>
+      );
+      await renderToReadableStream(update).pipeTo(
+        new WritableStream({
+          async write(chunk) {
+            const data = decoder.decode(chunk, { stream: true });
+            await Promise.all(targets.map(async (stream) => {
+              try {
+                await stream.writeSSE({ data });
+              } catch (error) {
+                onStreamWriteError?.(stream);
+                console.error(
+                  "[tiny-tools] Failed writing an update to a stream; it may be closed.",
+                  error,
+                );
+              }
+            }));
+          },
+        }),
+      );
+    })
+  );
 }

@@ -7,6 +7,9 @@ import { sourcedCollections } from "../clientTools.ts";
 
 const sourced = sourcedCollections(import.meta.url);
 
+/** Why a response is late: see `IncomingData`. */
+export type Superseded = "page" | "background";
+
 /** Detail of the `incomingdata` event dispatched on `window` for each complete unit of incoming data. */
 export type IncomingData =
   | {
@@ -14,6 +17,12 @@ export type IncomingData =
     element: HTMLElement;
     /** URLPattern pathnames from the update's `update-paths` attribute. */
     paths?: string[];
+    /**
+     * The user has left the page that made this request. `page`: it was to
+     * show a page, so only what can be cached is kept. `background`: it didn't
+     * change the path, so its partials still apply.
+     */
+    superseded?: Superseded;
   }
   | { type: "json"; data: unknown };
 
@@ -33,8 +42,12 @@ export const processIncomingDataTools: Handlers<{
    * Reads a response, streaming as it arrives, and dispatches an
    * `incomingdata` event for each complete `<update>` element, or once for a
    * JSON body. Other HTML is shown in the page's `#global-modal` dialog.
+   * `superseded` says, per update, if the user has left the requesting page.
    */
-  processIncomingData(response: Response): Promise<void>;
+  processIncomingData(
+    response: Response,
+    superseded?: () => Superseded | undefined,
+  ): Promise<void>;
   /**
    * Forwards window `incomingdata` events to this element's own
    * `onIncomingData` handlers.
@@ -49,17 +62,21 @@ export const processIncomingDataTools: Handlers<{
    * region currently on the page (which may show content for a more
    * specific path than the URL, e.g. a default conversation on /messages).
    * Applied partials are marked `optional-target`, as an update can target an
-   * element that isn't on this page.
+   * element that isn't on this page. A superseded update files its cacheable
+   * partials as cached routes and leaves the page and its title alone; one
+   * for a page with nothing to cache is discarded.
    */
   appendIncomingHtml(this: HTMLElement, event: IncomingDataEvent): void;
   /**
    * Applies the partials in incoming `<update>` elements to this router's
-   * cached routes whose `update-path` matches one of the update's paths.
+   * cached routes whose `update-path` matches one of the update's paths, and
+   * streamed Suspense content to the cached route holding its fallback.
    */
   updateCachedRoutes(this: HTMLElement, event: IncomingDataEvent): void;
 }> = new sourced.Handlers({
   processIncomingData: async function (
     response: Response,
+    superseded?: () => Superseded | undefined,
   ) {
     const contentType = response.headers.get("Content-Type") || "";
 
@@ -131,6 +148,7 @@ export const processIncomingDataTools: Handlers<{
             type: "html",
             element: updateElement as HTMLElement,
             paths,
+            superseded: superseded?.(),
           });
         }
       } else if (
@@ -174,8 +192,70 @@ export const processIncomingDataTools: Handlers<{
   },
   appendIncomingHtml: function (this: HTMLElement, event: IncomingDataEvent) {
     if (event.detail.type !== "html") return;
-    const { element, paths } = event.detail;
+    const { element, paths, superseded } = event.detail;
     const copy = element.cloneNode(true) as HTMLElement;
+    if (superseded) {
+      // A response's head and body sit in wrapper templates, a level above
+      // its partials.
+      const wrappers = Array.from(copy.children).filter((child) =>
+        child.tagName === "TEMPLATE" && !child.hasAttribute("for-partial-id")
+      ) as HTMLTemplateElement[];
+      const dropPartial = (partial: Element) => {
+        const trigger = partial.nextElementSibling;
+        if (trigger?.tagName === "LINK") trigger.remove();
+        partial.remove();
+      };
+      let title: string | null = null;
+      let filed = false;
+      const uncached: Element[] = [];
+      for (
+        const child of wrappers.flatMap((w) => Array.from(w.content.children))
+      ) {
+        if (child.tagName === "TITLE") {
+          title = child.textContent;
+          child.remove();
+        }
+        if (child.tagName !== "TEMPLATE") continue;
+        const partial = child as HTMLTemplateElement;
+        const collector = Array.from(partial.content.children).find((node) =>
+          node.tagName === "CACHE-COLLECTOR"
+        );
+        if (!collector) {
+          uncached.push(partial);
+          continue;
+        }
+        filed = true;
+        const partialId = partial.getAttribute("for-partial-id")!;
+        const target = document.getElementById(partialId);
+        const parts = collector.querySelector("template")?.content;
+        const blueprint = parts?.querySelector("client-route");
+        const route = blueprint?.cloneNode(true) as Element | undefined;
+        let router = Array.from(target?.parentElement?.children ?? []).find(
+          (element) =>
+            element.tagName === "CLIENT-ROUTER" &&
+            element.getAttribute("cache-owner-id") === partialId,
+        );
+        if (!router && target) {
+          router = parts?.querySelector("client-router") ?? undefined;
+          if (router) target.insertAdjacentElement("afterend", router);
+        }
+        const routes = router?.querySelector("template")?.content;
+        if (route && routes) {
+          route.querySelector<HTMLTemplateElement>("template[for-partial-id]")!
+            .content.append(...Array.from(partial.content.childNodes));
+          if (title !== null) route.setAttribute("route-title", title);
+          for (const existing of Array.from(routes.children)) {
+            if (existing.getAttribute("path") === route.getAttribute("path")) {
+              existing.remove();
+            }
+          }
+          routes.append(route);
+        }
+        dropPartial(partial);
+      }
+      // Partials beside a cached one (a list row) belong to the whole page.
+      if (superseded === "page" && !filed) uncached.forEach(dropPartial);
+    }
     const livePaths = [location.pathname];
     for (const collector of document.querySelectorAll("cache-collector")) {
       const updatePath = collector.querySelector("template")?.content
@@ -210,8 +290,8 @@ export const processIncomingDataTools: Handlers<{
     this.append(...Array.from(copy.childNodes));
   },
   updateCachedRoutes: function (this: HTMLElement, event: IncomingDataEvent) {
-    if (event.detail.type !== "html" || !event.detail.paths?.length) return;
-    const { element, paths } = event.detail;
+    if (event.detail.type !== "html") return;
+    const { element, paths = [] } = event.detail;
     const patterns = paths.map((pathname) => new URLPattern({ pathname }));
     const partials = Array.from(element.children).filter((child) =>
       child.tagName === "TEMPLATE" && child.hasAttribute("for-partial-id")
@@ -221,21 +301,23 @@ export const processIncomingDataTools: Handlers<{
     if (!partials.length || !routes) return;
     for (const route of Array.from(routes.children)) {
       const updatePath = route.getAttribute("update-path");
-      if (
-        !updatePath ||
-        !patterns.some((pattern) => pattern.test({ pathname: updatePath }))
-      ) continue;
+      const pathMatches = !!updatePath &&
+        patterns.some((pattern) => pattern.test({ pathname: updatePath }));
       const cached = route.querySelector<HTMLTemplateElement>(
         "template[for-partial-id]",
       )?.content;
       if (!cached) continue;
-      console.log("Applying update to cached route: ", updatePath);
       for (const partial of partials) {
+        const partialId = partial.getAttribute("for-partial-id")!;
+        // Suspense content finishes the view that was left mid-load.
+        if (!pathMatches && !partialId.startsWith("suspended-")) continue;
         // Partials for elements outside this cached content (e.g. a list
         // elsewhere on the page) don't apply here.
-        if (!cached.getElementById(partial.getAttribute("for-partial-id")!)) {
-          continue;
-        }
+        if (!cached.getElementById(partialId)) continue;
+        console.log(
+          "Applying update to cached route: ",
+          route.getAttribute("path"),
+        );
         // Partial insert handlers resolve their target within updateRoot.
         const copy = Object.assign(
           partial.cloneNode(true) as HTMLTemplateElement,

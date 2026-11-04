@@ -398,6 +398,33 @@ Deno.test("the library toasts reach one toaster from any instance", async () => 
   }
 });
 
+Deno.test("the library popover can try beside its trigger when tall", async () => {
+  const { component } = await imports(PopoverSignalComponent);
+  const form = component.instance();
+  assertStringIncludes(
+    await render(<form.Content tall>Fields</form.Content>),
+    "data-tall",
+  );
+});
+
+Deno.test("the library popover can centre itself on a narrow display", async () => {
+  const { component } = await imports(PopoverSignalComponent);
+  const form = component.instance();
+  assertStringIncludes(
+    await render(<form.Content centerWhenNarrow>Fields</form.Content>),
+    "data-center-when-narrow",
+  );
+});
+
+Deno.test("the library popover closes itself when it holds pickers", async () => {
+  const { component } = await imports(PopoverSignalComponent);
+  const form = component.instance();
+  assertStringIncludes(
+    await render(<form.Content holdsPickers>Fields</form.Content>),
+    'popover="manual"',
+  );
+});
+
 Deno.test("the library popover's parts share one open state", async () => {
   const { component } = await imports(PopoverSignalComponent);
   const actions = component.instance();

@@ -10,6 +10,8 @@ const sourced = sourcedCollections(import.meta.url);
  */
 type PartialTemplate = HTMLTemplateElement & {
   updateRoot?: DocumentFragment;
+  /** How many times Suspense content has waited for its fallback. */
+  fallbackWaits?: number;
 };
 
 /**
@@ -57,6 +59,17 @@ export const partialInsertHandlers: Handlers<{
     const existing = (this.updateRoot ?? document).getElementById(partialId);
     if (existing && existing !== this) {
       existing.replaceWith(...Array.from(this.content.childNodes));
+    } else if (
+      partialId.startsWith("suspended-") && !this.updateRoot &&
+      (this.fallbackWaits ?? 0) < 200
+    ) {
+      // Suspense content can overtake its fallback: the partial holding the
+      // fallback takes more load events to insert. Dropping the content would
+      // leave that fallback on show for good, so wait for it (up to 10s; a
+      // fallback that never comes is on a page the user has left).
+      this.fallbackWaits = (this.fallbackWaits ?? 0) + 1;
+      setTimeout(() => this.dispatchEvent(new Event("load")), 50);
+      return;
     } else if (!this.hasAttribute("optional-target")) {
       console.error(`No existing element found for partial-id "${partialId}".`);
     }

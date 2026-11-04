@@ -38,6 +38,9 @@ export const routeCacheTools = new sourced.Handlers({
       ?.content;
     if (!routes) return;
     let ownedNodes: Node[] = Array.from(target.childNodes);
+    // A response sets its title before its content arrives, and the next
+    // view's title is set before this content is replaced.
+    const title = document.title;
     const capture = (records: MutationRecord[]) => {
       const replacement = records.find((record) =>
         record.target === target &&
@@ -50,6 +53,7 @@ export const routeCacheTools = new sourced.Handlers({
       observer.disconnect();
       this.stopCacheObserver = undefined;
       const route = blueprint.cloneNode(true) as Element;
+      route.setAttribute("route-title", title);
       const insertion = route.querySelector<HTMLTemplateElement>(
         "template[for-partial-id]",
       )!;

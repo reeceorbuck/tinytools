@@ -36,6 +36,10 @@
  * </account.Content>
  * ```
  *
+ * Content holding a date input or other native picker can take `holdsPickers`.
+ * On iPadOS the tap that dismisses a picker otherwise closes the popover too;
+ * with it, that tap only dismisses the picker, and a later one closes as usual.
+ *
  * Colours come from custom properties a caller may set on the content or any
  * ancestor: `--popover-surface`, `--popover-border`, `--popover-text`,
  * `--popover-muted` and `--popover-accent`.
@@ -76,7 +80,44 @@ const popoverTools = new tiny.Handlers({
     return [...content.querySelectorAll<HTMLElement>('[role="menuitem"]')]
       .filter((item) => !item.matches(":disabled, [aria-disabled='true']"));
   },
+  /**
+   * While open, closes content the browser won't close by itself on a click
+   * outside it. A touch while a picker inside it has focus only dismisses the
+   * picker, so the next one is what closes it.
+   */
+  closeOnOutsideClick(content: WatchingContent, open: boolean): void {
+    content.outsideClicks?.abort();
+    content.outsideClicks = undefined;
+    if (!open) return;
+    const watch = content.outsideClicks = new AbortController();
+    let dismissingPicker = false;
+    document.addEventListener("pointerdown", (event) => {
+      const focused = document.activeElement;
+      dismissingPicker = event.pointerType !== "mouse" &&
+        content.contains(focused) && !!focused?.matches("input, select");
+    }, { capture: true, signal: watch.signal });
+    document.addEventListener("click", (event) => {
+      if (!content.isConnected) {
+        watch.abort();
+        return;
+      }
+      const target = event.target as Element;
+      if (
+        content.contains(target) ||
+        target.closest?.(`[popovertarget="${content.id}"]`)
+      ) return;
+      if (dismissingPicker) {
+        dismissingPicker = false;
+        (document.activeElement as HTMLElement | null)?.blur();
+        return;
+      }
+      content.hidePopover();
+    }, { capture: true, signal: watch.signal });
+  },
 });
+
+/** Content closing itself on outside clicks, and what it listens with. */
+type WatchingContent = HTMLElement & { outsideClicks?: AbortController };
 
 const popoverHandlers = new tiny.Handlers(async () => {
   const { fn, signal } = await tiny.imports(popoverSignals, popoverTools);
@@ -99,6 +140,20 @@ const popoverHandlers = new tiny.Handlers(async () => {
       if (open) this.showPopover();
       else this.hidePopover();
     },
+    /** Marks content that can't sit beside its trigger as it opens. */
+    placeContent: function (this: HTMLElement, event: Event) {
+      if (
+        (event as ToggleEvent).newState !== "open" ||
+        !this.hasAttribute("data-center-when-narrow")
+      ) return;
+      const box = document.querySelector(`[popovertarget="${this.id}"]`)
+        ?.getBoundingClientRect();
+      this.toggleAttribute(
+        "data-trigger-hidden",
+        !box || box.bottom <= 0 || box.top >= innerHeight ||
+          box.right <= 0 || box.left >= innerWidth,
+      );
+    },
     /**
      * Notes an open or close however it came about, and as a menu, focuses
      * its first item on opening.
@@ -106,12 +161,23 @@ const popoverHandlers = new tiny.Handlers(async () => {
     contentToggled: function (this: HTMLElement, event: Event) {
       const open = (event as ToggleEvent).newState === "open";
       signal.open.forInstance(this).value = open;
+      if (this.getAttribute("popover") === "manual") {
+        fn.closeOnOutsideClick(this as WatchingContent, open);
+      }
       if (open && this.getAttribute("role") === "menu") {
         fn.menuItems(this)[0]?.focus();
       }
     },
-    /** Moves between a menu's items with the arrow keys, Home and End. */
+    /**
+     * Closes content holding pickers on Escape, as the browser only does that
+     * for the usual kind, and moves between a menu's items with the arrow keys,
+     * Home and End.
+     */
     moveInMenu: function (this: HTMLElement, event: KeyboardEvent) {
+      if (event.key === "Escape" && this.getAttribute("popover") === "manual") {
+        this.hidePopover();
+        return;
+      }
       if (this.getAttribute("role") !== "menu") return;
       const items = fn.menuItems(this);
       const current = items.indexOf(document.activeElement as HTMLElement);
@@ -135,6 +201,18 @@ const popoverHandlers = new tiny.Handlers(async () => {
     },
   };
 });
+
+const centredCss = css`
+  position: fixed;
+  inset: 0;
+  box-sizing: border-box;
+  width: fit-content;
+  height: fit-content;
+  max-width: calc(100vw - 1rem);
+  margin: auto;
+  position-area: none;
+  position-try-fallbacks: none;
+`;
 
 const popoverStyles = new tiny.Styles({
   content: css`
@@ -191,6 +269,23 @@ const popoverStyles = new tiny.Styles({
         max-width: none;
         width: anchor-size(width);
       }
+    }
+    /* Too tall to fit above or below a trigger mid-screen, so it can go beside it. */
+    @supports (position-area: bottom) {
+      &[data-tall] {
+        position-try-fallbacks: flip-block, flip-inline,
+          flip-block flip-inline, left span-all, right span-all;
+      }
+    }
+    /* Beside its trigger there may be no room, so it leaves the anchor. */
+    @media (max-width: 40rem) {
+      &[data-center-when-narrow] {
+        ${centredCss};
+      }
+    }
+    /* Nor can it sit beside a trigger scrolled out of view. */
+    &[data-trigger-hidden] {
+      ${centredCss};
     }
     @media (prefers-reduced-motion: reduce) {
       transition: none;
@@ -261,6 +356,15 @@ type ContentProps = {
   side?: "top" | "bottom" | "left" | "right";
   /** As wide as the trigger, where anchor positioning is supported. */
   matchTriggerWidth?: boolean;
+  /**
+   * Centred on the screen on a narrow display, or when its trigger is out of
+   * view, such as when an item in a menu opens it instead.
+   */
+  centerWhenNarrow?: boolean;
+  /** Tall content, which also tries beside its trigger when it fits neither above nor below. */
+  tall?: boolean;
+  /** Holds a native picker, so the tap dismissing one doesn't close it too. */
+  holdsPickers?: boolean;
   /** Its id, for a `popovertarget` of the page's own. */
   id?: string;
   children?: unknown;
@@ -322,15 +426,18 @@ export const PopoverSignalComponent: SignalComponent<{
       ), [signal.open]),
       Content: instanced((props: ContentProps) => (
         <div
-          popover="auto"
+          popover={props.holdsPickers ? "manual" : "auto"}
           id={props.id}
           class={styled.content}
           role={props.menu ? "menu" : "dialog"}
           aria-label={props.label}
           data-side={props.side}
           data-match-trigger-width={props.matchTriggerWidth ? "" : undefined}
+          data-center-when-narrow={props.centerWhenNarrow ? "" : undefined}
+          data-tall={props.tall ? "" : undefined}
           onConnect={[signal.open, fn.adoptContent]}
           onSignal={fn.showContent}
+          onBeforeToggle={fn.placeContent}
           onToggle={fn.contentToggled}
           onKeyDown={fn.moveInMenu}
           onClick={fn.closeOnChoice}
