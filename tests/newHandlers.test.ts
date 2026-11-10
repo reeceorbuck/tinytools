@@ -261,9 +261,9 @@ Deno.test({
       });
       let notifications = 0;
       subscriber.addEventListener("signal", () => notifications++);
-      // A load subscribes once and sends nothing until a change.
-      textModule.text.call(subscriber, new Event("load"));
-      textModule.text.call(subscriber, new Event("load"));
+      // Subscribing on load registers once and sends nothing until a change.
+      textModule.text$subscribe.call(subscriber, new Event("load"));
+      textModule.text$subscribe.call(subscriber, new Event("load"));
       assertEquals(notifications, 0);
       textModule.text().value = "first";
       assertEquals(notifications, 1);
@@ -272,7 +272,7 @@ Deno.test({
       subscriber.dispatchEvent(new Event("tt-fire-signals"));
       assertEquals(notifications, 1);
       subscriber.abortController = new AbortController();
-      textModule.text.call(subscriber, new Event("load"));
+      textModule.text$subscribe.call(subscriber, new Event("load"));
       assertEquals(notifications, 1);
       textModule.text().value = "third";
       assertEquals(notifications, 2);
@@ -362,7 +362,11 @@ Deno.test({
         plainBundle.code,
         "const tools = { Signal: __tiny_Signal,",
       );
-      assertStringIncludes(plainBundle.code, "const signals = (() =>");
+      // Given every tool, the factory may return scopes, so they are lifted.
+      assertStringIncludes(
+        plainBundle.code,
+        "const signals = __tiny_flattenScopes((() =>",
+      );
       assertEquals(plainBundle.module.total().value, 2);
       const expressionBundle = await load(expression);
       assertStringIncludes(
@@ -377,7 +381,7 @@ Deno.test({
       const clashingBundle = await load(clashing);
       assertStringIncludes(
         clashingBundle.code,
-        "const signals = defineSignals({ Signal: __tiny_Signal,",
+        "const signals = __tiny_flattenScopes(defineSignals({ Signal: __tiny_Signal,",
       );
       assertEquals(clashingBundle.module.Signal().value, 3);
     } finally {
@@ -389,7 +393,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "Signals bundles scope perInstance signals to the collection's roots",
+  name: "Signals bundles scope Scope signals to their level's roots",
   sanitizeOps: false,
   sanitizeResources: false,
   async fn() {
@@ -397,19 +401,19 @@ Deno.test({
     const directory = "./.test-build-output/instance-signals";
     const layers = new Signals(
       import.meta.url,
-      ({ Signal, Computed, perInstance }) => {
-        const layer = perInstance(() => ({ material: new Signal("bulk") }));
+      ({ Signal, Computed, Scope }) => {
+        const layer = new Scope(() => ({ material: new Signal("bulk") }));
         const materials = new Computed(
           () => layer.material.all.value.join(", "),
           [layer.material.all],
         );
-        return { ...layer, materials };
+        return { layer, materials };
       },
     );
     const { parseHTML } = await import("linkedom");
     // The second root also roots another collection.
     const window = parseHTML(
-      `<html><body><p tt-instance="${layers.instanceKey}"><i id="a"></i></p><p tt-instance="other ${layers.instanceKey}"><i id="b"></i></p></body></html>`,
+      `<html><body><p tt-instance="${layers.scopes.layer.key}"><i id="a"></i></p><p tt-instance="other ${layers.scopes.layer.key}"><i id="b"></i></p></body></html>`,
     );
     Object.assign(globalThis, {
       document: window.document,
@@ -444,7 +448,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "Signal references offer update, toggle and fire for their kind",
+  name:
+    "Signal references offer update, toggle, increment and fire for their kind",
   sanitizeOps: false,
   sanitizeResources: false,
   async fn() {
@@ -452,13 +457,13 @@ Deno.test({
     const directory = "./.test-build-output/signal-actions";
     const actions = new Signals(
       import.meta.url,
-      ({ Signal, Computed, Trigger, perInstance }) => {
+      ({ Signal, Computed, Trigger, Scope }) => {
         const size = new Signal(76);
         const italic = new Signal(false);
         const reset = new Trigger();
         const doubled = new Computed(() => size.value * 2);
-        const row = perInstance(() => ({ open: new Signal(false) }));
-        return { size, italic, reset, doubled, ...row };
+        const row = new Scope(() => ({ open: new Signal(false) }));
+        return { size, italic, reset, doubled, row };
       },
     );
     const consumer = new Handlers(import.meta.url, async () => {
@@ -471,7 +476,7 @@ Deno.test({
     });
     const { parseHTML } = await import("linkedom");
     const window = parseHTML(
-      `<html><body><p tt-instance="${actions.instanceKey}"><i id="a"></i></p></body></html>`,
+      `<html><body><p tt-instance="${actions.scopes.row.key}"><i id="a"></i></p></body></html>`,
     );
     Object.assign(globalThis, { document: window.document });
     try {
@@ -484,11 +489,17 @@ Deno.test({
       assertEquals(
         Object.keys(module).filter((name) => name.includes("$")).sort(),
         [
+          "doubled$subscribe",
+          "italic$subscribe",
           "italic$toggle",
           "italic$update",
+          "open$subscribe",
           "open$toggle",
           "open$update",
           "reset$fire",
+          "reset$subscribe",
+          "size$increment",
+          "size$subscribe",
           "size$update",
         ],
       );
@@ -499,6 +510,8 @@ Deno.test({
         target: { value: "120", dataset: {}, name: "size" },
       });
       assertEquals(module.size().value, 120);
+      module.size$increment.call(element, new Event("click"));
+      assertEquals(module.size().value, 121);
       // A toggle flips the value whatever the event.
       module.italic$toggle.call(element, new Event("click"));
       assertEquals(module.italic().value, true);
@@ -536,6 +549,42 @@ Deno.test({
         ],
         `${filename}.reset$fire`,
       );
+      // A bare signal does nothing on a click, so it is refused; a
+      // trigger fires on any event but connect, which needs `subscribe`.
+      assertThrows(
+        () => handlerReferenceAttributes("onClick", signal.size),
+        TypeError,
+        "onClick={signal.size} does nothing: use one of its actions",
+      );
+      assertEquals(
+        handlerReferenceAttributes("onClick", signal.reset)?.[
+          "tt-handler-click"
+        ],
+        `${filename}.reset`,
+      );
+      assertThrows(
+        () => handlerReferenceAttributes("onConnect", signal.reset),
+        TypeError,
+        "onConnect={signal.reset} does not subscribe: use signal.reset.subscribe",
+      );
+      assertEquals(
+        handlerReferenceAttributes("onConnect", signal.doubled.subscribe)?.[
+          "tt-handler-connect"
+        ],
+        `${filename}.doubled$subscribe`,
+      );
+      assertEquals(
+        handlerReferenceAttributes("onInput", signal.size)?.[
+          "tt-handler-input"
+        ],
+        `${filename}.size`,
+      );
+      assertThrows(
+        // @ts-expect-error A boolean cannot be incremented.
+        () => signal.italic.increment,
+        TypeError,
+        "signal.italic.increment is only available on a Signal holding a number",
+      );
       assertThrows(
         // @ts-expect-error A number cannot be toggled.
         () => signal.size.toggle,
@@ -558,6 +607,7 @@ Deno.test({
             onClick: [
               signal.italic.toggle,
               signal.open.toggle,
+              signal.size.increment,
               signal.reset.fire,
             ],
           },

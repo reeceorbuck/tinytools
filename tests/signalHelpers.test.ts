@@ -28,11 +28,12 @@ Deno.test("setCssProperty writes the signal's named custom property", async () =
   assertEquals(properties.size, 1);
 });
 
-Deno.test("a signal bound to another event counts it", () => {
+Deno.test("a signal does nothing on another event but increment adds 1", () => {
   type Dispatching<Value> = {
     value: Value;
     subscribe(target: EventTarget): void;
     handleEvent(target: unknown, event: Event): unknown;
+    increment(): void;
   };
   const { Signal } = signalClasses();
   const requests = new Signal<number>(0) as unknown as Dispatching<number>;
@@ -41,11 +42,16 @@ Deno.test("a signal bound to another event counts it", () => {
   listener.addEventListener("signal", () => notifications++);
   requests.subscribe(listener);
   const click = { type: "click" } as Event;
-  requests.handleEvent({}, click);
-  requests.handleEvent({}, click);
+  assertThrows(
+    () => requests.handleEvent({}, click),
+    TypeError,
+    "does nothing on a click event",
+  );
+  requests.increment();
+  requests.increment();
   assertEquals([requests.value, notifications], [2, 2]);
   const text = new Signal<string>("a") as unknown as Dispatching<string>;
-  assertThrows(() => text.handleEvent({}, click), TypeError, "counts");
+  assertThrows(() => text.increment(), TypeError, "numeric");
 });
 
 Deno.test("a trigger fires on every event and on fire()", () => {
@@ -150,7 +156,13 @@ Deno.test("a load subscription sends changes only, and fires on request", () => 
   const subscriber = signal as unknown as {
     handleEvent(target: unknown, event: Event): unknown;
   };
-  subscriber.handleEvent(target, new Event("load"));
+  // A bare signal no longer subscribes: `subscribe` does.
+  assertThrows(
+    () => subscriber.handleEvent(target, new Event("load")),
+    TypeError,
+    "does nothing on a load event",
+  );
+  signal.subscribe(target);
   assertEquals(seen, []);
   signal.value = 2;
   assertEquals(seen, [2]);
@@ -210,10 +222,12 @@ Deno.test("setValue writes any signal, only on a change", async () => {
 function boundElement(
   attributes: Record<string, string>,
   properties: Record<string, unknown> = {},
+  localName = "input",
 ) {
   const values = new Map(Object.entries(attributes));
   const writes: string[] = [];
   const element = {
+    localName,
     get attributes() {
       return [...values].map(([name, value]) => ({ name, value }));
     },
@@ -254,6 +268,7 @@ Deno.test("setBound writes each binding of the event's signal, only on a change"
     "tt-aria-expanded-signal": "bundle.expanded",
     "tt-value-signal": "bundle.status",
     "tt-checked-signal": "bundle.done",
+    "tt-src-signal": "bundle.status",
     // The element's own handlers are not a binding.
     "tt-handler-signal": "bundle.setBound",
   }, { value: "", checked: false });
@@ -273,7 +288,7 @@ Deno.test("setBound writes each binding of the event's signal, only on a change"
     };
     // Only bindings of the event's signal are written; false is text for
     // attributes, an unchanged value is not rewritten, and null removes an
-    // attribute and empties a value.
+    // attribute and empties a value. `src` is written as an attribute.
     setBound.call(element, { signal: expanded });
     setBound.call(element, { signal: expanded });
     setBound.call(element, { signal: done });
@@ -285,9 +300,35 @@ Deno.test("setBound writes each binding of the event's signal, only on a change"
       "checked:true",
       "data-status=open",
       "value:open",
+      "src=open",
       "-data-status",
       "value:",
+      "-src",
     ]);
+  } finally {
+    global.handlers = previous;
+  }
+});
+
+Deno.test("setBound writes the value attribute of elements but input and textarea", async () => {
+  const setBound = await loadHandler("setBound");
+  const { Signal } = signalClasses();
+  const choice = new Signal<string | null>("a");
+  const { element, writes } = boundElement(
+    { "tt-value-signal": "bundle.choice" },
+    { value: "" },
+    "option",
+  );
+  const global = globalThis as { handlers?: unknown };
+  const previous = global.handlers;
+  try {
+    global.handlers = { bundle: { choice: () => choice } };
+    setBound.call(element, { signal: choice });
+    setBound.call(element, { signal: choice });
+    // Removed for null, so an option falls back to its text.
+    choice.value = null;
+    setBound.call(element, { signal: choice });
+    assertEquals(writes, ["value=a", "-value"]);
   } finally {
     global.handlers = previous;
   }

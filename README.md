@@ -152,14 +152,14 @@ app.get("/counter", async (c) => {
   const { signal } = await tiny.imports(counter);
   return c.render(
     <>
-      <button type="button" onClick={signal.count}>Add one</button>
+      <button type="button" onClick={signal.count.increment}>Add one</button>
       <p>Clicked {signal.count} times.</p>
     </>,
   );
 });
 ```
 
-A click on a numeric signal adds one, and `{signal.count}` renders as live text.
+`signal.count.increment` adds one on each click, and `{signal.count}` renders as live text.
 Signals also bind to inputs (`onInput={signal.query.update}`), attributes and
 properties (`checked={signal.open}`), and derive computed values from each
 other.

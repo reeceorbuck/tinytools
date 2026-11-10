@@ -25,8 +25,9 @@ export const signalBindingTools = new sourced.Handlers({
    * Writes the signal into each property or attribute the element was given
    * it as (`<input value={signal.query} />`, `<div data-status={signal.status}>`),
    * found by their `tt-<name>-signal` attributes; ones bound to other signals
-   * are left alone. `value` takes the value as a string, `data-*` and
-   * `aria-*` attributes as their text (removed for `null`), and other
+   * are left alone. An input's or textarea's `value` takes the value as a
+   * string; `src`, `data-*`, `aria-*` and any other element's `value`
+   * attribute as their text (removed for `null`), and other
    * properties (`checked`, `hidden`, ...) as a boolean. A property is only
    * written when it differs, so typing is not interrupted by its own signal
    * coming back. The JSX runtime binds this for you.
@@ -36,7 +37,7 @@ export const signalBindingTools = new sourced.Handlers({
     const { value } = event.signal;
     for (const { name, value: bound } of [...this.attributes]) {
       const property =
-        /^tt-(value|checked|selected|disabled|hidden|(?:data|aria)-.+)-signal$/
+        /^tt-(value|checked|selected|disabled|hidden|src|(?:data|aria)-.+)-signal$/
           .exec(name)?.[1];
       if (!property) continue;
       const dot = bound.indexOf(".");
@@ -54,7 +55,10 @@ export const signalBindingTools = new sourced.Handlers({
       if ((forInstance?.call(signal, this) ?? signal) !== event.signal) {
         continue;
       }
-      if (/^(data|aria)-/.test(property)) {
+      if (
+        /^(?:(?:data|aria)-|src$)/.test(property) ||
+        (property === "value" && !/^(?:input|textarea)$/.test(this.localName))
+      ) {
         const text = value?.toString() ?? null;
         if (this.getAttribute(property) === text) continue;
         if (text === null) this.removeAttribute(property);
@@ -75,14 +79,15 @@ export const signalBindingTools = new sourced.Handlers({
 
 /**
  * Helpers for consuming `tiny.Signals` values in the browser. Bind them to the
- * `onSignal` event of an element subscribed with `onConnect={signal.name}`.
+ * `onSignal` event of an element subscribed with
+ * `onConnect={signal.name.subscribe}`.
  */
 export const signalTools: Handlers<{
   /**
    * Runs the element's `onSignal` handler once for each signal it has
    * subscribed to so far, with that signal's current value. Subscribing alone
    * only hears later changes, so list this after the signals in `onConnect`
-   * (`onConnect={[signal.filter, fn.fireSelfSignal]}`) when the element must
+   * (`onConnect={[signal.filter.subscribe, fn.fireSelfSignal]}`) when the element must
    * catch up with a value that may have changed before it connected.
    */
   fireSelfSignal(this: HTMLElement): void;

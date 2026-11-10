@@ -38,7 +38,7 @@
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
 import { h, type JSX } from "../../jsx-runtime.ts";
 import {
-  type InstancedComponent,
+  type ExposedSignals,
   type InstanceSignals,
   optimized,
   type Signal,
@@ -53,15 +53,15 @@ const tiny = optimized(import.meta.url);
  * Per instance: the chosen option's value and text, and whether the list is
  * open.
  */
-const comboboxSignals = new tiny.Signals(({ Signal, perInstance }) =>
-  perInstance(() => ({
+const comboboxSignals = new tiny.Signals(({ Signal, Scope }) =>
+  new Scope(() => ({
     value: new Signal(""),
     label: new Signal(""),
     open: new Signal<boolean>(false),
   }))
 );
 
-/** The signals the combobox's parts expose. */
+/** The signals a combobox exposes. */
 type ComboboxExposed = InstanceSignals<{
   value: Signal<string>;
   label: Signal<string>;
@@ -412,15 +412,16 @@ const comboboxStyles = new tiny.Styles({
 
 /**
  * `Input` is the text box, holding its `Option`s (or fetching them from its
- * `source`). `Value` shows the chosen option's text. Both expose
+ * `source`). `Value` shows the chosen option's text. The combobox exposes
  * `signal.value`, the chosen option's value, and `signal.label`, its text.
  */
 export const ComboboxSignalComponent: SignalComponent<{
-  Input: InstancedComponent<ComboboxExposed, InputProps>;
-  Value: InstancedComponent<ComboboxExposed, Record<never, never>>;
+  signal: ExposedSignals<ComboboxExposed>;
+  Input: (props: InputProps) => JSX.Element;
+  Value: () => JSX.Element;
   Option: (props: OptionProps) => JSX.Element;
 }> = new tiny.SignalComponent(
-  async ({ instanced }) => {
+  async () => {
     const { fn, signal, styled } = await tiny.imports(
       comboboxSignals,
       comboboxHandlers,
@@ -428,7 +429,8 @@ export const ComboboxSignalComponent: SignalComponent<{
       signalTools,
     );
     return {
-      Input: instanced((props: InputProps) => {
+      signal: [signal.value, signal.label],
+      Input: (props: InputProps) => {
         const list = `tiny-listbox-${crypto.randomUUID().slice(0, 8)}`;
         return (
           <div
@@ -437,9 +439,9 @@ export const ComboboxSignalComponent: SignalComponent<{
             data-source={props.source}
             data-invalid={props.invalid ?? "Choose one of the options."}
             onConnect={[
-              signal.value,
-              signal.label,
-              signal.open,
+              signal.value.subscribe,
+              signal.label.subscribe,
+              signal.open.subscribe,
               fn.adoptCombobox,
             ]}
             onSignal={[fn.showChoice, fn.showList]}
@@ -481,15 +483,12 @@ export const ComboboxSignalComponent: SignalComponent<{
             </div>
           </div>
         );
-      }, [signal.value, signal.label]),
-      Value: instanced(
-        () => (
-          <output
-            onConnect={[signal.label, fn.fireSelfSignal]}
-            onSignal={fn.setTextContent}
-          />
-        ),
-        [signal.value, signal.label],
+      },
+      Value: () => (
+        <output
+          onConnect={[signal.label.subscribe, fn.fireSelfSignal]}
+          onSignal={fn.setTextContent}
+        />
       ),
       Option: (props: OptionProps) => (
         <div

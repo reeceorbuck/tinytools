@@ -32,10 +32,10 @@
  */
 
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
-import { h } from "../../jsx-runtime.ts";
+import { h, type JSX } from "../../jsx-runtime.ts";
 import { createContext, useContext } from "hono/jsx";
 import {
-  type InstancedComponent,
+  type ExposedSignals,
   type InstanceSignals,
   optimized,
   type Signal,
@@ -46,11 +46,11 @@ import { css } from "../../scopedStyles.ts";
 const tiny = optimized(import.meta.url);
 
 /** The selected tab's value, one per instance. */
-const tabsSignals = new tiny.Signals(({ Signal, perInstance }) =>
-  perInstance(() => ({ selected: new Signal("") }))
+const tabsSignals = new tiny.Signals(({ Signal, Scope }) =>
+  new Scope(() => ({ selected: new Signal("") }))
 );
 
-/** The signals the tabs' parts expose. */
+/** The signals a set of tabs exposes. */
 type TabsExposed = InstanceSignals<{ selected: Signal<string> }>;
 
 /** The tab list's props. */
@@ -223,22 +223,24 @@ const TabsProvider = TabsContext.Provider as unknown as (
 
 /**
  * `List` holds the `Tab`s written inside it; each `Tab` chooses the `Panel`s
- * of its `value`. All three expose `signal.selected`, the chosen value,
+ * of its `value`. The tabs expose `signal.selected`, the chosen value,
  * which selects that tab when set.
  */
 export const TabsSignalComponent: SignalComponent<{
-  List: InstancedComponent<TabsExposed, ListProps>;
-  Tab: InstancedComponent<TabsExposed, TabProps>;
-  Panel: InstancedComponent<TabsExposed, PanelProps>;
+  signal: ExposedSignals<TabsExposed>;
+  List: (props: ListProps) => JSX.Element;
+  Tab: (props: TabProps) => JSX.Element;
+  Panel: (props: PanelProps) => JSX.Element;
 }> = new tiny.SignalComponent(
-  async ({ instanced }) => {
+  async () => {
     const { fn, signal, styled } = await tiny.imports(
       tabsSignals,
       tabsHandlers,
       tabsStyles,
     );
     return {
-      List: instanced((props: ListProps) => (
+      signal: [signal.selected],
+      List: (props: ListProps) => (
         <div
           role="tablist"
           class={styled.list}
@@ -246,7 +248,7 @@ export const TabsSignalComponent: SignalComponent<{
           aria-orientation={props.vertical ? "vertical" : undefined}
           data-value={props.value}
           data-remember={props.remember}
-          onConnect={[signal.selected, fn.adoptTabs]}
+          onConnect={[signal.selected.subscribe, fn.adoptTabs]}
           onSignal={fn.rememberTab}
           onKeyDown={fn.moveTab}
         >
@@ -254,8 +256,8 @@ export const TabsSignalComponent: SignalComponent<{
             {props.children}
           </TabsProvider>
         </div>
-      ), [signal.selected]),
-      Tab: instanced((props: TabProps) => {
+      ),
+      Tab: (props: TabProps) => {
         const { value } = useContext(TabsContext);
         // Without a list value, the first connect picks the first tab; until
         // then every tab stays reachable.
@@ -269,15 +271,15 @@ export const TabsSignalComponent: SignalComponent<{
             aria-selected={String(selected)}
             tabindex={selected || value === undefined ? 0 : -1}
             disabled={props.disabled}
-            onConnect={[signal.selected, fn.showTab]}
+            onConnect={[signal.selected.subscribe, fn.showTab]}
             onSignal={fn.showTab}
             onClick={fn.selectTab}
           >
             {props.children ?? props.value}
           </button>
         );
-      }, [signal.selected]),
-      Panel: instanced((props: PanelProps) => (
+      },
+      Panel: (props: PanelProps) => (
         <section
           role="tabpanel"
           class={styled.panel}
@@ -285,12 +287,12 @@ export const TabsSignalComponent: SignalComponent<{
           aria-label={props.label}
           data-value={props.value}
           hidden={!props.selected}
-          onConnect={[signal.selected, fn.showPanel]}
+          onConnect={[signal.selected.subscribe, fn.showPanel]}
           onSignal={fn.showPanel}
         >
           {props.children}
         </section>
-      ), [signal.selected]),
+      ),
     };
   },
 );

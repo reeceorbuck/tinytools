@@ -17,9 +17,9 @@
  */
 
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
-import { h } from "../../jsx-runtime.ts";
+import { h, type JSX } from "../../jsx-runtime.ts";
 import {
-  type InstancedComponent,
+  type ExposedSignals,
   type InstanceSignals,
   optimized,
   type Signal,
@@ -34,11 +34,11 @@ const tiny = optimized(import.meta.url);
  * the parts made together by `component.instance()` share one count,
  * wherever they sit on the page.
  */
-const counterSignals = new tiny.Signals(({ Signal, perInstance }) =>
-  perInstance(() => ({ count: new Signal(0) }))
+const counterSignals = new tiny.Signals(({ Signal, Scope }) =>
+  new Scope(() => ({ count: new Signal(0) }))
 );
 
-/** The signals the counter's parts expose. */
+/** The signals a counter exposes. */
 type CounterExposed = InstanceSignals<{ count: Signal<number> }>;
 
 const counterHandlers = new tiny.Handlers(async () => {
@@ -65,27 +65,29 @@ const counterStyles = new tiny.Styles({
 });
 
 /**
- * `CounterDisplay` shows the count and `Increment` changes it by `by`. Both
- * expose `signal.count`: a click bound to it outside the component adds 1.
+ * `CounterDisplay` shows the count and `Increment` changes it by `by`. The
+ * counter exposes `signal.count`: `onClick={counter.signal.count.increment}`
+ * outside the component adds 1.
  */
 export const CounterSignalComponent: SignalComponent<{
-  CounterDisplay: InstancedComponent<CounterExposed>;
-  Increment: InstancedComponent<CounterExposed, { by: number }>;
+  signal: ExposedSignals<CounterExposed>;
+  CounterDisplay: JSX.Element;
+  Increment: (props: { by: number }) => JSX.Element;
 }> = new tiny.SignalComponent(
-  async ({ instanced }) => {
+  async () => {
     const { fn, signal, styled } = await tiny.imports(
       counterSignals,
       counterHandlers,
       counterStyles,
     );
     return {
-      CounterDisplay: instanced(
+      signal: [signal.count],
+      CounterDisplay: (
         <output class={styled.counterDisplay} aria-live="polite">
           {signal.count}
-        </output>,
-        [signal.count],
+        </output>
       ),
-      Increment: instanced((props: { by: number }) => (
+      Increment: (props: { by: number }) => (
         <button
           type="button"
           class={styled.counterButton}
@@ -95,7 +97,7 @@ export const CounterSignalComponent: SignalComponent<{
         >
           {props.by < 0 ? `−${-props.by}` : `+${props.by}`}
         </button>
-      ), [signal.count]),
+      ),
     };
   },
 );

@@ -29,13 +29,16 @@ import type { Context } from "hono";
 import { raw } from "hono/html";
 import type { HtmlEscapedString } from "hono/utils/html";
 import {
+  type EvaluationSeed,
+  type FlattenScopes,
+  flattenScopes,
   type InstanceGroup,
   type InstanceLevels,
   type InstanceSeed,
   InstanceSignalHandle,
-  type InstanceSignals,
   type InternalSignalTools,
   type ReadonlySignal,
+  type Scope,
   type Signal,
   type SignalAccessors,
   type SignalAction,
@@ -1255,29 +1258,39 @@ type SignalsCollection<
 > = ClientToolsClass<SignalAccessors<Definitions>, Empty, Empty> & {
   readonly _isSignals: true;
   /**
-   * Marks an instance root for this collection's `perInstance` signals:
+   * Marks an instance root for the signals of the `Scope` this
+   * collection's factory returns directly:
    * `<fieldset tt-instance={collection.instanceKey}>`. Per-instance signals
    * bound anywhere inside it resolve to that instance. One element can root
    * several collections by listing their keys separated by spaces.
    */
   readonly instanceKey: string;
-  /** The root marker for the signals of `perInstance(name, ...)`. */
-  instanceKeyFor(name: InstanceLevels<Definitions>): string;
   /**
    * A `tt-seed` value that starts a root's new instance from `values`
    * instead of the factory's initial values, so it begins as the server
    * rendered it:
    * `<fieldset tt-instance={c.instanceKey} tt-seed={c.seed({ shade: "B1" })}>`.
-   * Only writable signals of the unnamed `perInstance` are accepted. An
-   * instance resumed on the same element keeps its own values. A root has
-   * one `tt-seed`, so it can seed one of the collections it roots.
+   * Only writable signals of the unnamed `Scope` are accepted, so without
+   * one nothing is. An instance resumed on the same element keeps its own
+   * values. A root has one `tt-seed`, so it can seed one of the collections
+   * it roots.
    */
-  seed(values: InstanceSeed<Definitions>): string;
-  /** As `seed`, for a root of `perInstance(name, ...)`. */
-  seedFor<Level extends InstanceLevels<Definitions> & string>(
-    name: Level,
-    values: InstanceSeed<Definitions, Level>,
+  seed(
+    values: [keyof InstanceSeed<Definitions>] extends [never] ? never
+      : InstanceSeed<Definitions>,
   ): string;
+  /**
+   * `key` and `seed` for each `Scope` returned under a key, by that key:
+   * `<li tt-instance={c.scopes.box.key} tt-seed={c.scopes.box.seed({ ... })}>`.
+   */
+  readonly scopes: {
+    readonly [Level in InstanceLevels<Definitions> & string]: {
+      /** The root marker for the level's signals. */
+      readonly key: string;
+      /** As the collection's `seed`, for a root of this level. */
+      seed(values: InstanceSeed<Definitions, Level>): string;
+    };
+  };
   /**
    * Runs the factory on the server with `inputs` written to its writable
    * signals and returns every signal's value, so initial markup can be
@@ -1286,12 +1299,13 @@ type SignalsCollection<
    * definition resolves it first, so the result is a promise.
    *
    * Per-instance signals report a fresh instance's values, or with `seed`
-   * (the object given to `seed()`) those of an instance started from it, so
-   * a seeded root renders its first text from the same computeds.
+   * (the object given to `seed()` or `scopes.<name>.seed()`) those of an
+   * instance started from it, so a seeded root renders its first text from
+   * the same computeds.
    */
   evaluateUsingInitialValues(
     inputs?: SignalInputs<Definitions>,
-    seed?: InstanceSeed<Definitions>,
+    seed?: EvaluationSeed<Definitions>,
   ): Deferred extends true ? Promise<SignalValues<Definitions>>
     : SignalValues<Definitions>;
   /**
@@ -1304,7 +1318,7 @@ type SignalsCollection<
    */
   withInputs(
     inputs?: SignalInputs<Definitions>,
-    seed?: InstanceSeed<Definitions>,
+    seed?: EvaluationSeed<Definitions>,
   ): SignalsCollection<Definitions, Deferred>;
 };
 
@@ -1349,21 +1363,18 @@ type ShapeSignals<Shape extends SignalShape> = {
 
 /**
  * The builders `define` receives in `tiny.Signals(tools, define)`, with a
- * `perInstance` whose callback returns a shape, as `define` does.
+ * `Scope` whose callback returns a shape, as `define` does.
  */
-type ShapeTools = Omit<SignalTools, "perInstance"> & {
-  perInstance: {
-    /** Signals every instance root gets its own copy of; see `SignalTools`. */
-    <Shape extends SignalShape>(
-      define: () => Shape & ThisType<ShapeSignals<Shape>>,
-    ): InstanceSignals<ShapeSignals<Shape>>;
-    /** A named group, required when nested inside another `perInstance`. */
-    <const Level extends string, Shape extends SignalShape>(
-      name: Level,
-      define: () => Shape & ThisType<ShapeSignals<Shape>>,
-    ): InstanceSignals<ShapeSignals<Shape>, Level>;
-  };
+type ShapeTools = Omit<SignalTools, "Scope"> & {
+  /** Signals every instance root gets its own copy of; see `SignalTools`. */
+  Scope: new <Shape extends SignalShape>(
+    define: () => Shape & ThisType<ShapeSignals<Shape>>,
+  ) => Scope<ShapeSignals<Shape>>;
 };
+
+/** A factory's definitions as the collection exports them. */
+type Exported<Definitions> = FlattenScopes<Definitions> extends
+  infer Flat extends SignalDefinitions ? Flat : never;
 
 /**
  * `define` in `tiny.Signals(tools, define)`: given what `tools` import and
@@ -1392,26 +1403,26 @@ interface SignalsConstructor {
     definition: (
       tools: SignalTools,
     ) => Promise<(tools: SignalTools) => Definitions>,
-  ): SignalsCollection<Definitions, true>;
+  ): SignalsCollection<Exported<Definitions>, true>;
   /** A factory that needs nothing from module scope. */
   new <Definitions extends SignalDefinitions>(
     factory: (tools: SignalTools) => Definitions,
-  ): SignalsCollection<Definitions, false>;
+  ): SignalsCollection<Exported<Definitions>, false>;
   /** @deprecated Create the collection from `optimized(import.meta.url)` and leave the URL out. */
   new <Definitions extends SignalDefinitions>(
     sourceFileUrl: string | URL,
     definition: (
       tools: SignalTools,
     ) => Promise<(tools: SignalTools) => Definitions>,
-  ): SignalsCollection<Definitions, true>;
+  ): SignalsCollection<Exported<Definitions>, true>;
   /** @deprecated Create the collection from `optimized(import.meta.url)` and leave the URL out. */
   new <Definitions extends SignalDefinitions>(
     sourceFileUrl: string | URL,
     factory: (tools: SignalTools) => Definitions,
-  ): SignalsCollection<Definitions, false>;
+  ): SignalsCollection<Exported<Definitions>, false>;
   /**
    * One writable signal per initial value: `new tiny.Signals({ count: 0 })`.
-   * Use a factory for `Computed`, `Trigger` or `perInstance`.
+   * Use a factory for `Computed`, `Trigger` or `Scope`.
    */
   new <Values extends Record<string, SignalValue>>(
     values: Values,
@@ -1427,8 +1438,8 @@ interface SignalsConstructor {
    * => ({ isEven: () => signal.count.value % 2 === 0 }))`. Each function
    * returned becomes a `Computed`, each initial value a writable signal, and
    * a signal already built is kept, so `define` may also take `Signal`,
-   * `Computed`, `Trigger`, `perInstance` and `signalsFrom` and return
-   * `{ ...perInstance(() => ({ ... })) }`. A computed written as a method
+   * `Computed`, `Trigger`, `Scope` and `signalsFrom` and return
+   * `new Scope(() => ({ ... }))`. A computed written as a method
    * reads the collection's own signals as `this`:
    * `{ areas: [], summary() { return this.areas.value.join(", "); } }`.
    * As in a handler, destructure `signal`, `fn` and `constants` by those
@@ -1440,7 +1451,7 @@ interface SignalsConstructor {
   >(
     tools: TTools,
     define: ShapeDefinition<TTools, Shape>,
-  ): SignalsCollection<ShapeSignals<Shape>, true>;
+  ): SignalsCollection<Exported<ShapeSignals<Shape>>, true>;
   /** @deprecated Create the collection from `optimized(import.meta.url)` and leave the URL out. */
   new <
     const TTools extends Importable | readonly [Importable, ...Importable[]],
@@ -1449,7 +1460,7 @@ interface SignalsConstructor {
     sourceFileUrl: string | URL,
     tools: TTools,
     define: ShapeDefinition<TTools, Shape>,
-  ): SignalsCollection<ShapeSignals<Shape>, true>;
+  ): SignalsCollection<Exported<ShapeSignals<Shape>>, true>;
 }
 
 interface StylesConstructor {
@@ -2310,15 +2321,15 @@ function valuesFactory(values: Record<string, SignalValue>): SignalFactory {
 }
 
 /** The builders a `tiny.Signals(tools, define)` definition may take. */
-const SHAPE_BUILDERS = ["Trigger", "perInstance", "signalsFrom"];
+const SHAPE_BUILDERS = ["Trigger", "Scope", "signalsFrom"];
 
 /**
  * The factory for `new tiny.Signals(tools, ({ signal }) => ({ ... }))`: the
  * definition's source called with what it imports and the signal builders,
  * each function it returns becoming a `Computed` (`this` is the collection's
  * own signals) and each initial value a writable `Signal`; anything already
- * built (a `Signal`, `Computed`, `Trigger` or `perInstance` result) is kept.
- * The `perInstance` it receives builds each instance's shape the same way.
+ * built (a `Signal`, `Computed`, `Trigger` or `Scope`) is kept. The
+ * `Scope` it receives builds each instance's shape the same way.
  * Its source is what ships, so `signal`, `fn` and `constants` resolve as in
  * a handler, and only the builders it names are imported in the browser.
  */
@@ -2333,15 +2344,16 @@ function importedShapeFactory(
   const tools = ["Signal", "Computed", "shapeSignals", ...builders];
   const given = [...imported, "Signal", "Computed", ...builders].map((name) =>
     // Each instance's shape is built as the collection's is.
-    name === "perInstance" ? "perInstance: shapedPerInstance" : name
+    name === "Scope" ? "Scope: ShapedScope" : name
   );
   try {
     return new Function(`return ({ ${tools.join(", ")} }) => {
   ${
-      builders.includes("perInstance")
-        ? `const shapedPerInstance = (...args) => {
-    const define = args.pop();
-    return perInstance(...args, () => shapeSignals(define(), Signal, Computed));
+      builders.includes("Scope")
+        ? `const ShapedScope = class extends Scope {
+    constructor(define) {
+      super(() => shapeSignals(define(), Signal, Computed));
+    }
   };`
         : ""
     }
@@ -2356,16 +2368,23 @@ function importedShapeFactory(
   }
 }
 
+/** The bundle expression `result`, a factory's, with its scopes lifted out. */
+function flattened(tools: { flatten?: string }, result: string): string {
+  return tools.flatten ? `${tools.flatten}(${result})` : result;
+}
+
 /** Calls a compiled factory, explaining a module-scope capture. */
 function runSignalFactory(
   factory: SignalFactory,
   tools: SignalTools,
 ): SignalDefinitions {
   try {
-    const definitions = factory(tools);
+    const definitions = flattenScopes(factory(tools)) as SignalDefinitions;
     // Signals are EventTargets; per-instance handles name theirs per group.
     for (const [name, signal] of Object.entries(definitions ?? {})) {
-      if (signal instanceof EventTarget) signal.name ??= name;
+      if (signal instanceof EventTarget) {
+        (signal as ReadonlySignal<unknown>).name ??= name;
+      }
     }
     return definitions;
   } catch (error) {
@@ -2401,7 +2420,7 @@ function signalNames(factory: SignalFactory): Map<string, SignalAction[]> {
     )
   ) {
     throw new TypeError(
-      "Signals factory must synchronously return an object of Signal or Computed instances, or perInstance signals.",
+      "Signals factory must synchronously return an object of Signal or Computed instances, or a Scope.",
     );
   }
   return new Map(
@@ -2667,7 +2686,7 @@ class SignalsClass extends HandlersClass {
         tools = signalToolsPrelude(split.parameter, instanceKey);
         prelude.code = [
           declarations + tools.code,
-          `const ${graph} = (${split.body})();`,
+          `const ${graph} = ${flattened(tools, `(${split.body})()`)};`,
         ].filter(Boolean).join("\n");
       } else {
         const define = free("defineSignals");
@@ -2675,7 +2694,7 @@ class SignalsClass extends HandlersClass {
         tools = signalToolsPrelude(undefined, instanceKey);
         prelude.code = declarations + tools.code + "\n" +
           `const ${define} = ${factory};\n` +
-          `const ${graph} = ${define}(${tools.tools});`;
+          `const ${graph} = ${flattened(tools, `${define}(${tools.tools})`)};`;
       }
       // Each signal without a name is named after its key, as on the server.
       prelude.code +=
@@ -2765,17 +2784,26 @@ class SignalsClass extends HandlersClass {
     };
   }
 
-  /** Must match the key `perInstance(name, ...)` builds in signals.ts. */
-  instanceKeyFor(name: string): string {
-    return `${this.instanceKey}-${name}`;
-  }
-
   seed(values: Record<string, unknown>): string {
     return JSON.stringify({ [this.instanceKey]: values });
   }
 
-  seedFor(name: string, values: Record<string, unknown>): string {
-    return JSON.stringify({ [this.instanceKeyFor(name)]: values });
+  get scopes(): Record<
+    string,
+    { key: string; seed(values: Record<string, unknown>): string }
+  > {
+    return new Proxy({}, {
+      get: (_, level) => {
+        if (typeof level !== "string") return undefined;
+        // Must match the key `InstanceGroup.name(level)` builds in signals.ts.
+        const key = `${this.instanceKey}-${level}`;
+        return {
+          key,
+          seed: (values: Record<string, unknown>) =>
+            JSON.stringify({ [key]: values }),
+        };
+      },
+    });
   }
 
   /**
@@ -3246,18 +3274,25 @@ type AnySignalsCollection = AnyClientToolsInstance & {
 };
 
 /**
- * One instance of an imported signal component: the component itself, to
- * render as `<Box />`, with `signal` references that act on it from anywhere
- * on the page, whether or not `<Box />` itself is rendered: an element using
- * one carries the instance's `tt-link`, as its own root does. A `class` is
- * added to its root's own (`<Box class={styled.wide} />`); the component
- * never sees it.
+ * One instance of an imported signal component, made on its own by
+ * `component.Box.instance()`: the component itself, to render as `<Box />`,
+ * with `signal` references to the signals its factory exposes, acting on it
+ * from anywhere on the page, whether or not `<Box />` itself is rendered: an
+ * element using one carries the instance's `tt-link`, as its own root does.
  */
 export type Instance<TSignals, Props, Result> =
-  & ((props: Props & { class?: string }) => Result)
+  & Part<Props, Result>
   & {
     readonly signal: SignalReferences<TSignals>;
   };
+
+/**
+ * One part of a copy from `component.instance()`, to render as
+ * `<box.Box />`. A `class` is added to its root's own
+ * (`<box.Box class={styled.wide} />`); the component never sees it. The
+ * signals it acts on are the copy's, `box.signal`.
+ */
+export type Part<Props, Result> = (props: Props & { class?: string }) => Result;
 
 /**
  * A signal component as `tiny.imports()` returns it under `component`:
@@ -3273,32 +3308,39 @@ export type ImportedComponent<Name extends string, TSignals, Props, Result> = {
    * shared by every instance inside that element.
    */
   readonly scopeKey: string;
-  /**
-   * The exposed signals, acting on whichever instance or enclosing element
-   * the element using them sits in, rather than on one instance.
-   */
-  readonly signal: SignalReferences<TSignals>;
 };
 
 // deno-lint-ignore no-explicit-any
 type AnyImportedComponent = ImportedComponent<string, any, any, any>;
 
-/** One instance of each imported component, by name. */
-export type ComponentInstances<TComponents> = {
-  -readonly [Name in keyof TComponents]: TComponents[Name] extends
-    ImportedComponent<string, infer TSignals, infer Props, infer Result>
-    ? Instance<TSignals, Props, Result>
-    : never;
-};
+/**
+ * One copy of the imported components: a part of each, by name, and
+ * `signal`, the signals they expose, acting on this copy.
+ */
+export type ComponentInstances<TComponents> =
+  & {
+    -readonly [
+      Name in keyof TComponents as Name extends "signal" ? never : Name
+    ]: TComponents[Name] extends
+      ImportedComponent<string, infer _TSignals, infer Props, infer Result>
+      ? Part<Props, Result>
+      : never;
+  }
+  & {
+    readonly signal: TComponents extends { readonly signal: infer TSignals }
+      ? TSignals
+      : SignalReferences<Empty>;
+  };
 
 /** `component.instance()` of a `tiny.imports()`. */
 export type ComponentLinker<TComponents> = {
   /**
-   * One copy of the imported components: an instance of each, by name,
-   * all sharing one instance of their signals wherever they sit on the
-   * page, so a box and its button are parts of one box. Name the copy and
-   * use its parts by dot, so go-to-definition reaches them:
-   * `const box = component.instance()`, then `<box.Box />`.
+   * One copy of the imported components: a part of each, by name, all
+   * sharing one instance of their signals wherever they sit on the page,
+   * so a box and its button are parts of one box. Name the copy and use its
+   * parts and signals by dot, so go-to-definition reaches them:
+   * `const box = component.instance()`, then `<box.Box />` and
+   * `box.signal.press`.
    */
   instance(): ComponentInstances<TComponents>;
   /**
@@ -3318,38 +3360,27 @@ export type ComponentLinker<TComponents> = {
   instance(id: string): ComponentInstances<TComponents>;
 };
 
-declare const instancedBrand: unique symbol;
+declare const exposedBrand: unique symbol;
 
 /**
- * What `instanced(render, [...])` makes: a component and the signals its
- * instances expose, for a `tiny.SignalComponent` factory to return by name.
- */
-export type Instanced<TSignals, Props, Result> = {
-  readonly [instancedBrand]: {
-    signals: TSignals;
-    props: Props;
-    result: Result;
-  };
-};
-
-/**
- * What `instanced()` makes, stated rather than inferred, for an exported
- * `tiny.SignalComponent`'s type (JSR does not infer the types of a published
+ * A `tiny.SignalComponent`'s `signal` list, stated rather than inferred, for
+ * an exported component's type (JSR does not infer the types of a published
  * module). `Signals` are the exposed signals as their collection defines
- * them, `InstanceSignals<{ open: Signal<boolean> }>` for a per-instance
- * `open`; `Props` the component's props.
+ * them: `ExposedSignals<InstanceSignals<{ open: Signal<boolean> }>>` for a
+ * per-instance `open`.
  */
-export type InstancedComponent<
-  Signals extends SignalDefinitions = Empty,
-  Props = Empty,
-  Result = JSX.Element,
-> = Instanced<SignalAccessors<Signals>, Props, Result>;
+export type ExposedSignals<Signals extends SignalDefinitions = Empty> =
+  & readonly (
+    & HandlerReference<string, unknown>
+    & SignalOrigin<Partial<SignalAccessors<Signals>>>
+  )[]
+  & { readonly [exposedBrand]?: SignalAccessors<Signals> };
 
 /**
- * The signals named by an `instanced()` list, by name: each reference's own
- * entry in its collection, so the editor still goes to its definition.
+ * The signals named by a `signal` list, by name: each reference's own entry
+ * in its collection, so the editor still goes to its definition.
  */
-type ExposedSignals<References extends readonly unknown[]> =
+type ListedSignals<References extends readonly unknown[]> =
   [References[number]] extends [never] ? Empty
     : UnionToIntersection<
       References[number] extends SignalOrigin<infer Entry>
@@ -3357,34 +3388,18 @@ type ExposedSignals<References extends readonly unknown[]> =
         : never
     >;
 
-/** The tools a `tiny.SignalComponent` factory receives. */
-export type SignalComponentTools = {
-  /**
-   * Makes the factory's component, and names the signals other code may
-   * drive on each instance: `instanced(() => <div />, [signal.press])`, with
-   * signals from a `tiny.imports()` in the factory. Signals left out, or
-   * all of them when there is no list, stay internal to the component.
-   */
-  instanced<
-    Props,
-    Result,
-    const References extends readonly HandlerReference<string, unknown>[] = [],
-  >(
-    render: (props: Props) => Result,
-    exposed?: References,
-  ): Instanced<ExposedSignals<References>, Props, Result>;
-  /** The same for a component without props: `instanced(<div />, [...])`. */
-  instanced<
-    const References extends readonly HandlerReference<string, unknown>[] = [],
-  >(
-    markup: JSX.Element,
-    exposed?: References,
-  ): Instanced<ExposedSignals<References>, Empty, JSX.Element>;
-};
+/** The signals a factory's components expose, from its `signal` list. */
+type ExposedBy<TComponents> = TComponents extends
+  { readonly signal: infer List }
+  ? typeof exposedBrand extends keyof List
+    ? Exclude<List[typeof exposedBrand], undefined>
+  : List extends readonly unknown[] ? ListedSignals<List>
+  : Empty
+  : Empty;
 
 /** How a component given as a function or as markup renders, if it is one. */
-function renderOf(value: unknown): InstancedParts["render"] | undefined {
-  if (typeof value === "function") return value as InstancedParts["render"];
+function renderOf(value: unknown): ComponentPart["render"] | undefined {
+  if (typeof value === "function") return value as ComponentPart["render"];
   if (isMarkup(value)) return () => value;
 }
 
@@ -3409,101 +3424,98 @@ const signalComponentScope = new AsyncLocalStorage<
   { leaves: Set<string>; enclosing: Set<string> }
 >();
 
-type InstancedParts = {
+/**
+ * One component of a factory, and the signals its factory exposes: the same
+ * map for each of that factory's components.
+ */
+type ComponentPart = {
   render: (props: Record<string, unknown>) => unknown;
   exposed: Map<string, SignalSource>;
 };
 
-const instancedParts = new WeakMap<object, InstancedParts>();
-
-const signalComponentTools: SignalComponentTools = {
-  instanced(
-    component: unknown,
-    references?: readonly HandlerReference<string, unknown>[],
-  ) {
-    const render = renderOf(component);
-    if (!render) {
+/** The signals a factory's `signal` list exposes, by name. */
+function exposedSignals(list: unknown): Map<string, SignalSource> {
+  const exposed = new Map<string, SignalSource>();
+  if (list === undefined) return exposed;
+  for (const reference of Array.isArray(list) ? list : [undefined]) {
+    const found = signalSources.get(reference);
+    if (!found) {
       throw new TypeError(
-        "instanced() takes the component, a function or JSX, as its first argument: instanced(render, [signal.press]).",
+        "A tiny.SignalComponent's `signal` lists signals from a tiny.imports() in its factory: signal: [signal.press].",
       );
     }
-    const exposed = new Map<string, SignalSource>();
-    for (const reference of references ?? []) {
-      const found = signalSources.get(reference);
-      if (!found) {
-        throw new TypeError(
-          "instanced() exposes signals from a tiny.imports() in the factory: instanced(render, [signal.press]).",
-        );
-      }
-      exposed.set(found.name, found.source);
-    }
-    const parts = {};
-    instancedParts.set(parts, { render, exposed });
-    return parts as never;
-  },
-};
+    exposed.set(found.name, found.source);
+  }
+  return exposed;
+}
 
 /**
  * A component whose instances other code renders and drives. Like
  * `tiny.Signals`, it takes a factory; the factory imports what the component
- * renders with and returns its components by name,
- * `{ ColorBox: instanced(() => <div />, [signal.press]) }`; each is separate,
- * sharing only the factory's imports. `tiny.imports()` of it runs the
- * factory for the request and returns `component.ColorBox`,
- * whose `instance()` gives one instance to render as `<Instance />`
- * (its root links into that instance of the innermost level of every
- * collection the factory imported) and drive through `instance.signal`.
+ * renders with and returns its components by name, each a function or JSX,
+ * and under `signal` the signals other code may drive on each instance:
+ * `{ signal: [signal.press], ColorBox: () => <div /> }`. Signals it leaves
+ * out, or all of them without a `signal` list, stay internal. Each
+ * component is separate, sharing only the factory's imports.
+ * `tiny.imports()` of it runs the factory for the request and returns
+ * `component.ColorBox`, and `component.instance()` gives one copy of each
+ * component to render as `<box.ColorBox />` (its root links into that
+ * instance of the innermost level of every collection the factory imported)
+ * and drive through `box.signal`.
  */
-export class SignalComponent<TComponents extends AnyInstancedComponents> {
+export class SignalComponent<TComponents extends AnyComponentParts> {
   /** The factory passed in, run by each `tiny.imports()` of the component. */
-  readonly factory: (
-    tools: SignalComponentTools,
-  ) => TComponents | Promise<TComponents>;
+  readonly factory: () => TComponents | Promise<TComponents>;
 
   /**
    * Takes the factory that imports what the components render with and
-   * returns them by name.
+   * returns them by name, with the signals they expose.
    */
-  constructor(
-    factory: (
-      tools: SignalComponentTools,
-    ) => TComponents | Promise<TComponents>,
-  ) {
+  constructor(factory: () => TComponents | Promise<TComponents>) {
     this.factory = factory;
   }
 }
 
 /**
  * What a `tiny.SignalComponent` factory returns: its components, by name,
- * each a plain function or JSX, or from `instanced()` to expose signals.
+ * each a plain function or JSX, and under `signal` the signals they expose.
  */
-type AnyInstancedComponents = Record<
+type AnyComponentParts = Record<
   string,
   // deno-lint-ignore no-explicit-any
-  Instanced<any, any, any> | ((props: any) => unknown) | JSX.Element
+  ((props: any) => unknown) | JSX.Element | ExposedSignals<any>
 >;
 
-type AnySignalComponent = SignalComponent<AnyInstancedComponents>;
+type AnySignalComponent = SignalComponent<AnyComponentParts>;
 
-/** The `component` of a `tiny.imports()` of signal components. */
-type ExtractComponents<T> = T extends SignalComponent<infer TComponents> ? {
-    readonly [
-      // `keyof TComponents` alone (not `& string`) keeps each name linked to
-      // the factory's entry, for the editor's go to definition.
-      Name in keyof TComponents
-    ]: TComponents[Name] extends
-      Instanced<infer TSignals, infer Props, infer Result>
-      ? ImportedComponent<Name & string, TSignals, Props, Result>
-      : TComponents[Name] extends (props: infer Props) => infer Result
-        ? ImportedComponent<Name & string, ExposedSignals<[]>, Props, Result>
-      : TComponents[Name] extends JSX.Element ? ImportedComponent<
+/**
+ * The `component` of a `tiny.imports()` of signal components: each
+ * component by name, and `signal`, the signals they expose, acting on
+ * whichever instance or enclosing element the element using them sits in,
+ * rather than on one instance.
+ */
+type ExtractComponents<T> = T extends SignalComponent<infer TComponents> ?
+    & {
+      readonly [
+        // `keyof TComponents` (not `& string`) keeps each name linked to the
+        // factory's entry, for the editor's go to definition.
+        Name in keyof TComponents as Name extends "signal" ? never : Name
+      ]: TComponents[Name] extends (props: infer Props) => infer Result
+        ? ImportedComponent<
           Name & string,
-          ExposedSignals<[]>,
-          Empty,
-          JSX.Element
+          ExposedBy<TComponents>,
+          Props,
+          Result
         >
-      : never;
-  }
+        : TComponents[Name] extends JSX.Element ? ImportedComponent<
+            Name & string,
+            ExposedBy<TComponents>,
+            Empty,
+            JSX.Element
+          >
+        : never;
+    }
+    & { readonly signal: SignalReferences<ExposedBy<TComponents>> }
   : Empty;
 
 /**
@@ -3518,21 +3530,34 @@ function newLinkId(): string {
   }`;
 }
 
-type AnyInstance = Instance<unknown, Record<string, unknown>, unknown>;
-
 /** The link ids of one copy from `component.instance()`, and of its group. */
 type CopyLink = { group: string; copy: string };
 
+/** A part to render, and the `tt-link` tokens its root carries. */
+type LinkedPart = {
+  part: Part<Record<string, unknown>, unknown>;
+  links?: string;
+};
+
+/** Each factory's exposed signals, with the links they act on. */
+type ExposingFactories = Map<Map<string, SignalSource>, string | undefined>;
+
 /** The `component` of a request's `tiny.imports()`. */
 function linkableComponents(
-  components: (InstancedParts & {
+  components: (ComponentPart & {
     name: string;
     instanceKeys: string;
     enclosing: string[];
   })[],
-): Record<string, AnyImportedComponent> & ComponentLinker<unknown> {
-  const makers = new Map<string, (link?: CopyLink) => AnyInstance>();
-  const imported: Record<string, AnyImportedComponent> = Object.fromEntries(
+): Record<string, unknown> & ComponentLinker<unknown> {
+  const makers = new Map<
+    string,
+    {
+      exposed: Map<string, SignalSource>;
+      make: (link?: CopyLink) => LinkedPart;
+    }
+  >();
+  const imported: Record<string, unknown> = Object.fromEntries(
     components.map(({ name, render, exposed, instanceKeys, enclosing }) => {
       if (name === "instance") {
         throw new TypeError(
@@ -3540,7 +3565,7 @@ function linkableComponents(
         );
       }
       const leaves = instanceKeys.split(" ").filter(Boolean);
-      const make = (link?: CopyLink) => {
+      const make = (link?: CopyLink): LinkedPart => {
         // A copy's parts share every level, and the copies made together
         // share the outer ones. Alone, an instance links only the innermost
         // levels, and takes the outer ones from the element it sits in.
@@ -3557,7 +3582,7 @@ function linkableComponents(
           ...(links ? { "tt-link": links } : {}),
         };
         // Named after the component, for stack traces and devtools.
-        const component = {
+        const part = {
           [name]: ({ class: className, ...props }: Record<string, unknown>) =>
             markResult(
               render(props),
@@ -3567,27 +3592,40 @@ function linkableComponents(
               props,
             ),
         }[name];
-        return Object.assign(markedComponent(component), {
-          signal: instanceSignals(exposed, links),
-        });
+        return { part: markedComponent(part), links };
       };
       const component: AnyImportedComponent = {
         name,
         scopeKey: enclosing.join(" "),
-        signal: instanceSignals(exposed),
-        instance: () => make(),
+        instance: () => {
+          const { part, links } = make();
+          return Object.assign(part, {
+            signal: instanceSignals(exposed, links),
+          });
+        },
       };
-      makers.set(name, make);
+      makers.set(name, { exposed, make });
       return [name, component];
     }),
   );
-  const instances = (group: string, copy: number) =>
-    Object.fromEntries(
-      [...makers].map((
-        [name, make],
-      ) => [name, make({ group, copy: `${group}.${copy}` })]),
+  const unlinked: ExposingFactories = new Map(
+    [...makers.values()].map(({ exposed }) => [exposed, undefined]),
+  );
+  const instances = (group: string, copy: number) => {
+    const link = { group, copy: `${group}.${copy}` };
+    // A factory's parts in one copy carry the same links.
+    const linked: ExposingFactories = new Map();
+    const parts = Object.fromEntries(
+      [...makers].map(([name, { exposed, make }]) => {
+        const { part, links } = make(link);
+        linked.set(exposed, links);
+        return [name, part];
+      }),
     );
+    return Object.assign(parts, { signal: exposedReferences(linked) });
+  };
   return Object.assign(imported, {
+    signal: exposedReferences(unlinked),
     instance: ((repeat?: number | string) => {
       if (typeof repeat === "string") {
         // A link id is one token of `tt-link`'s `<level>=<id>` list.
@@ -3611,6 +3649,32 @@ function linkableComponents(
       );
     }) as ComponentLinker<unknown>["instance"],
   });
+}
+
+/**
+ * References to the signals each factory exposes, bound to the links beside
+ * it, or, with none, resolving by ancestry. A name two factories imported
+ * together both expose has no one instance to act on.
+ */
+function exposedReferences(
+  factories: ExposingFactories,
+): SignalReferences<unknown> {
+  const bound = [...factories].map(([exposed, links]) => ({
+    exposed,
+    signal: instanceSignals(exposed, links) as Record<string, unknown>,
+  }));
+  return new Proxy({}, {
+    get(_target, name) {
+      if (typeof name !== "string") return undefined;
+      const exposing = bound.filter(({ exposed }) => exposed.has(name));
+      if (exposing.length > 1) {
+        throw new TypeError(
+          `Two components imported together both expose signal.${name}: import each in its own tiny.imports() to say which one it is.`,
+        );
+      }
+      return exposing[0]?.signal[name];
+    },
+  }) as SignalReferences<unknown>;
 }
 
 /**
@@ -3960,7 +4024,7 @@ async function importsAt(
   const source: SignalSource = (links) =>
     createSignalReferences(resolveSignal, rendering, links);
   const references = createSignalReferences(resolveSignal, rendering);
-  // Remembers where each reference came from, for `instanced()`.
+  // Remembers where each reference came from, for a factory's `signal` list.
   const signal = new Proxy(references, {
     get(target, name, receiver) {
       const reference = Reflect.get(target, name, receiver);
@@ -3972,32 +4036,26 @@ async function importsAt(
       return reference;
     },
   });
-  const instancedComponents = await Promise.all(
+  const factoryParts = await Promise.all(
     (components as AnySignalComponent[]).map((component) => {
       const levels = {
         leaves: new Set<string>(),
         enclosing: new Set<string>(),
       };
       return signalComponentScope.run(levels, async () => {
-        const entries = Object.entries(
-          await component.factory(signalComponentTools) ?? {},
-        );
-        return entries.map(([name, value]) => {
-          // A plain function or markup is a component that exposes no
-          // signals.
-          const render = instancedParts.has(value)
-            ? undefined
-            : renderOf(value);
-          const parts = render
-            ? { render, exposed: new Map<string, SignalSource>() }
-            : instancedParts.get(value);
-          if (!parts) {
+        const { signal: list, ...parts } = await component.factory() ?? {};
+        // Every component of the factory shares its one list.
+        const exposed = exposedSignals(list);
+        return Object.entries(parts).map(([name, value]) => {
+          const render = renderOf(value);
+          if (!render) {
             throw new TypeError(
-              `A tiny.SignalComponent factory returns its components by name, each a function, JSX or from instanced(): '${name}' is none of these.`,
+              `A tiny.SignalComponent factory returns its components by name, each a function or JSX, and under \`signal\` the signals they expose: '${name}' is neither.`,
             );
           }
           return {
-            ...parts,
+            render,
+            exposed,
             name,
             owner: component,
             instanceKeys: [...levels.leaves].join(" "),
@@ -4008,18 +4066,25 @@ async function importsAt(
     }),
   ).then((lists) => lists.flat());
   let constants = mergeConstants({}, constantSets);
-  let component = linkableComponents(instancedComponents);
+  let component = linkableComponents(factoryParts);
   if (site) {
     const componentOwners = new Map<string, object>(
-      instancedComponents.map(({ name, owner }) => [name, owner]),
+      factoryParts.map(({ name, owner }) => [name, owner]),
+    );
+    const exposingOwners = new Set(
+      factoryParts.filter(({ exposed }) => exposed.size)
+        .map(({ owner }) => owner),
     );
     use = trackImports(site, [
       ...imported.map((item) => describeImport(item)),
       ...components.map((owner) =>
         describeImport(
           owner,
-          instancedComponents.filter((part) => part.owner === owner)
-            .map(({ name }) => name),
+          [
+            ...(exposingOwners.has(owner) ? ["signal"] : []),
+            ...factoryParts.filter((part) => part.owner === owner)
+              .map(({ name }) => name),
+          ],
         )
       ),
     ]);
@@ -4032,11 +4097,12 @@ async function importsAt(
       },
     });
     // A part read from the linker, or from the copies it makes, is a read
-    // of the component that defines it.
+    // of the component that defines it; `signal`, of each that exposes some.
     const parts = <Parts extends object>(made: Parts): Parts =>
       new Proxy(made, {
         get(target, name, receiver) {
-          if (typeof name === "string") use(componentOwners.get(name));
+          if (name === "signal") exposingOwners.forEach(use);
+          else if (typeof name === "string") use(componentOwners.get(name));
           return Reflect.get(target, name, receiver);
         },
       });
@@ -4107,7 +4173,7 @@ export async function registerSignalTextTools(): Promise<void> {
 /**
  * Implements `signal.name.initial` and a signal reference placed as a JSX
  * child, which renders the initial value inside `<signal-text
- * onConnect={signal} onSignal={fn.setTextContent}>`, so the text is there
+ * onConnect={signal.name.subscribe} onSignal={fn.setTextContent}>`, so the text is there
  * before any script runs and follows each change after; a custom element is
  * inline, like a span.
  * Both must be synchronous to sit inline in JSX, so `signalBindingTools` is built
@@ -4153,9 +4219,9 @@ async function signalRendering(
   };
   return {
     initial,
-    text: (reference, initialText) =>
+    text: (subscribe, initialText) =>
       jsx("signal-text", {
-        onConnect: reference,
+        onConnect: subscribe,
         onSignal: fn.setTextContent,
         // Written as setTextContent writes it.
         children: `${initialText}`,

@@ -213,8 +213,8 @@ Deno.test({
     const directory = "./.test-build-output/signal-component-instance";
     const boxSignals = new Signals(
       import.meta.url,
-      ({ Trigger, perInstance }) =>
-        perInstance(() => ({ press: new Trigger(), internal: new Trigger() })),
+      ({ Trigger, Scope }) =>
+        new Scope(() => ({ press: new Trigger(), internal: new Trigger() })),
     );
     const strings = (...parts: string[]) =>
       Object.assign(parts, { raw: parts }) as unknown as TemplateStringsArray;
@@ -230,9 +230,9 @@ Deno.test({
           class: props.own ? "own" : undefined,
           children: props.label,
         });
-    const BoxComponent = new SignalComponent(async ({ instanced }) => {
+    const BoxComponent = new SignalComponent(async () => {
       const { signal } = await imports(boxSignals);
-      return { Box: instanced(Box, [signal.press]) };
+      return { signal: [signal.press], Box };
     });
     try {
       await buildScriptFiles({ fresh: true, publicDir: directory });
@@ -301,34 +301,46 @@ Deno.test({
       await assertRejects(
         () =>
           imports(
-            new SignalComponent(({ instanced }) => // deno-lint-ignore no-explicit-any
-            ({ Box: instanced(Box, [{} as any]) })),
+            // deno-lint-ignore no-explicit-any
+            new SignalComponent(() => ({ signal: [{} as any], Box })),
           ),
         TypeError,
-        "exposes signals from a tiny.imports()",
+        "lists signals from a tiny.imports()",
+      );
+      // The list is a list, even of one.
+      await assertRejects(
+        async () => {
+          const { signal } = await imports(boxSignals);
+          await imports(
+            // @ts-expect-error `signal` is a list of references
+            new SignalComponent(() => ({ signal: signal.press, Box })),
+          );
+        },
+        TypeError,
+        "lists signals from a tiny.imports()",
       );
       // With an enclosing level, an instance's root carries only its own
       // level, and the page encloses instances in a root of `scopeKey`.
       const nested = new Signals(
         import.meta.url,
-        ({ Trigger, perInstance }) =>
-          perInstance(() => ({
+        ({ Trigger, Scope }) =>
+          new Scope(() => ({
             recolor: new Trigger(),
-            ...perInstance("box", () => ({ press: new Trigger() })),
+            box: new Scope(() => ({ press: new Trigger() })),
           })),
       );
       await nested.ensureBuilt();
       const { component: grouped } = await imports(
-        new SignalComponent(async ({ instanced }) => {
+        new SignalComponent(async () => {
           const { signal } = await imports(nested);
-          return { Box: instanced(Box, [signal.press, signal.recolor]) };
+          return { signal: [signal.press, signal.recolor], Box };
         }),
       );
       assertEquals(grouped.Box.scopeKey, nested.instanceKey);
       const inGroup = grouped.Box.instance();
       const inGroupLink = linkOf(String(await inGroup({ label: "c" })))!;
       assertEquals(
-        inGroupLink.startsWith(`${nested.instanceKeyFor("box")}=link-`),
+        inGroupLink.startsWith(`${nested.scopes.box.key}=link-`),
         true,
       );
       // The outer level is the enclosing element's, for its references too.
@@ -338,7 +350,7 @@ Deno.test({
       );
       // Without an instance, exposed signals resolve by ancestry.
       assertEquals(
-        String(jsx("button", { onClick: grouped.Box.signal.recolor }))
+        String(jsx("button", { onClick: grouped.signal.recolor }))
           .includes("tt-link"),
         false,
       );
@@ -353,7 +365,7 @@ Deno.test({
             "").split(" ").map((token) => token.split("=")),
         );
       const outer = nested.instanceKey;
-      const inner = nested.instanceKeyFor("box");
+      const inner = nested.scopes.box.key;
       const alone = await linksOf(grouped.instance().Box);
       assertEquals(Object.keys(alone).sort(), [outer, inner].sort());
       const copies = grouped.instance(2);
@@ -395,28 +407,60 @@ Deno.test({
       await assertRejects(
         () =>
           imports(
-            new SignalComponent(({ instanced }) => ({
-              instance: instanced(Box),
-            })),
+            new SignalComponent(() => ({ instance: Box })),
           ),
         TypeError,
         "can't name a component 'instance'",
       );
 
-      // A factory may return several components; each has its own instances.
+      // A factory may return several components; each has its own instances,
+      // and every one exposes the factory's signals.
       const { component: pair } = await imports(
-        new SignalComponent(async ({ instanced }) => {
+        new SignalComponent(async () => {
           const { signal } = await imports(boxSignals);
-          return {
-            Box: instanced(Box, [signal.press]),
-            Quiet: instanced(Box),
-          };
+          return { signal: [signal.press], Box, Other: Box };
         }),
       );
       assertEquals(pair.Box.instance().name, "Box");
-      const quiet = pair.Quiet.instance();
-      // @ts-expect-error Quiet exposes no signals
-      assertEquals(quiet.signal.press, undefined);
+      const other = pair.Other.instance();
+      assertStringIncludes(
+        String(jsx("button", { onClick: other.signal.press })),
+        `tt-link="${linkOf(String(await other({ label: "o" })))}"`,
+      );
+      // A copy's signals act on the copy, whose parts carry none of their own.
+      const copy = pair.instance();
+      const copyLink = linkOf(String(await copy.Box({ label: "p" })));
+      assertEquals(linkOf(String(await copy.Other({ label: "q" }))), copyLink);
+      assertStringIncludes(
+        String(jsx("button", { onClick: copy.signal.press })),
+        `tt-link="${copyLink}"`,
+      );
+      // @ts-expect-error a copy's parts carry no signals
+      assertEquals(copy.Box.signal, undefined);
+      // @ts-expect-error `internal` is not exposed
+      assertEquals(copy.signal.internal, undefined);
+      // Without a copy, the component's signals resolve by ancestry.
+      assertEquals(
+        String(jsx("button", { onClick: pair.signal.press }))
+          .includes("tt-link"),
+        false,
+      );
+      // A name two components imported together both expose has no one
+      // copy to act on, so reading it throws; their other parts still work.
+      const { component: both } = await imports(
+        BoxComponent,
+        new SignalComponent(async () => {
+          const { signal } = await imports(boxSignals);
+          return { signal: [signal.press], Second: Box };
+        }),
+      );
+      const bothCopy = both.instance();
+      assertThrows(() => bothCopy.signal.press, TypeError, "both expose");
+      assertThrows(() => both.signal.press, TypeError, "both expose");
+      assertStringIncludes(
+        String(await bothCopy.Second({ label: "r" })),
+        ">r<",
+      );
       // A plain function is a component that exposes no signals.
       const { component: plain } = await imports(
         new SignalComponent(() => ({ Box })),
@@ -426,19 +470,16 @@ Deno.test({
       const plainHtml = String(await plainBox({ label: "h" }));
       assertStringIncludes(plainHtml, ">h</output>");
       assertEquals(plainHtml.includes(" id="), false);
-      // @ts-expect-error a plain function exposes no signals
-      assertEquals(plainBox.signal.press, undefined);
+      // @ts-expect-error a factory without a list exposes no signals
+      assertEquals(plain.instance().signal.press, undefined);
       // So is markup, rendered as it is, in both JSX modes.
       const { component: markup } = await imports(
-        new SignalComponent(async ({ instanced }) => {
+        new SignalComponent(async () => {
           const { signal } = await imports(boxSignals);
           return {
+            signal: [signal.press],
             Plain: jsx("output", { children: "i" }) as unknown as JSX.Element,
             Precompiled: jsxTemplate(strings("<output>i</output>")),
-            Exposing: instanced(
-              jsx("output", {}) as unknown as JSX.Element,
-              [signal.press],
-            ),
           };
         }),
       );
@@ -449,14 +490,14 @@ Deno.test({
         assertStringIncludes(html, ">i</output>");
       }
       assertStringIncludes(
-        String(jsx("button", { onClick: fromMarkup.Exposing.signal.press })),
-        `tt-link="${linkOf(String(await fromMarkup.Exposing({})))}"`,
+        String(jsx("button", { onClick: fromMarkup.signal.press })),
+        `tt-link="${linkOf(String(await fromMarkup.Plain({})))}"`,
       );
       await assertRejects(
-        // @ts-expect-error a component is a function, JSX or from instanced(...)
+        // @ts-expect-error a component is a function or JSX
         () => imports(new SignalComponent(() => ({ Box: 1 }))),
         TypeError,
-        "'Box' is none of these",
+        "'Box' is neither",
       );
     } finally {
       await Deno.remove(directory, { recursive: true }).catch(() => {});
@@ -502,8 +543,8 @@ Deno.test({
       assertEquals(
         // Bundle names carry content hashes.
         html.replace(/(\w+)_[0-9a-f]{5}\./g, "$1."),
-        `<p>${bound("signalImports_test.count", 3)} doubled is ${
-          bound("signalImports_test.doubled", 6)
+        `<p>${bound("signalImports_test.count$subscribe", 3)} doubled is ${
+          bound("signalImports_test.doubled$subscribe", 6)
         }</p>`,
       );
     } finally {
@@ -537,10 +578,10 @@ Deno.test({
       const unhashed = (html: unknown) =>
         String(html).replace(/(\w+)_[0-9a-f]{5}\./g, "$1.");
       const alone =
-        `value="tea" tt-value-signal="signalImports_test.query" tt-handler-connect="signalImports_test.query" tt-handler-signal="signals.setBound"`;
+        `value="tea" tt-value-signal="signalImports_test.query" tt-handler-connect="signalImports_test.query$subscribe" tt-handler-signal="signals.setBound"`;
       assertEquals(
         unhashed(jsx("input", { value: signal.query })),
-        `<input value="tea" tt-value-signal="signalImports_test.query" tt-handler-connect="signalImports_test.query" is="tt-input" tt-handler-signal="signals.setBound"/>`,
+        `<input value="tea" tt-value-signal="signalImports_test.query" tt-handler-connect="signalImports_test.query$subscribe" is="tt-input" tt-handler-signal="signals.setBound"/>`,
       );
       assertEquals(
         unhashed(jsxTemplate(
@@ -553,18 +594,18 @@ Deno.test({
       const merged = [
         'value="tea"',
         'tt-value-signal="signalImports_test.query"',
-        `tt-handler-connect="signalImports_test.query signalImports_test.filter signalImports_test.focus"`,
+        `tt-handler-connect="signalImports_test.query$subscribe signalImports_test.filter$subscribe signalImports_test.focus"`,
         `tt-handler-signal="signals.setBound signalImports_test.focus"`,
       ];
       const fromJsx = unhashed(jsx("input", {
-        onConnect: [signal.filter, fn.focus],
+        onConnect: [signal.filter.subscribe, fn.focus],
         value: signal.query,
         onSignal: fn.focus,
       }));
       for (const part of merged) assertStringIncludes(fromJsx, part);
       const precompiled = unhashed(jsxTemplate(
         strings("<input ", " ", " ", "/>"),
-        jsxAttr("onConnect", [signal.filter, fn.focus]),
+        jsxAttr("onConnect", [signal.filter.subscribe, fn.focus]),
         jsxAttr("value", signal.query),
         jsxAttr("onSignal", fn.focus),
       ));
@@ -572,11 +613,29 @@ Deno.test({
       // Each attribute appears once.
       assertEquals(precompiled.match(/tt-handler-connect=/g)?.length, 1);
       assertEquals(precompiled.match(/tt-handler-signal=/g)?.length, 1);
-      // A select's value attribute is not what it shows.
+      // Other elements with a value attribute take it as text.
+      for (
+        const html of [
+          unhashed(jsx("option", { value: signal.query })),
+          unhashed(jsxTemplate(
+            strings("<meter ", "></meter>"),
+            jsxAttr("value", signal.query),
+          )),
+        ]
+      ) {
+        assertStringIncludes(html, 'value="tea"');
+        assertStringIncludes(
+          html,
+          'tt-value-signal="signalImports_test.query"',
+        );
+      }
+      // A select has no value attribute to render.
+      const valueTags =
+        "only <button>, <data>, <input>, <li>, <meter>, <option>, <progress> or <textarea> can";
       assertThrows(
         () => jsx("select", { value: signal.query }),
         TypeError,
-        "only <input> or <textarea> can",
+        valueTags,
       );
       assertThrows(
         () =>
@@ -585,13 +644,13 @@ Deno.test({
             jsxAttr("value", signal.query),
           ),
         TypeError,
-        "only <input> or <textarea> can",
+        valueTags,
       );
       // A textarea's initial value is its text; the element's own onConnect
       // (fn.fireSelfSignal, say) follows the binding's signal.
       const textareaParts = [
         'tt-value-signal="signalImports_test.query"',
-        `tt-handler-connect="signalImports_test.query signalImports_test.focus"`,
+        `tt-handler-connect="signalImports_test.query$subscribe signalImports_test.focus"`,
         `tt-handler-signal="signals.setBound"`,
       ];
       const textarea = unhashed(jsx("textarea", {
@@ -684,7 +743,7 @@ Deno.test({
           'checked=""',
           'tt-value-signal="signalImports_test.query"',
           'tt-checked-signal="signalImports_test.query"',
-          `tt-handler-connect="signalImports_test.query"`,
+          `tt-handler-connect="signalImports_test.query$subscribe"`,
           `tt-handler-signal="signals.setBound"`,
         ]
       ) assertStringIncludes(both, part);
@@ -697,7 +756,7 @@ Deno.test({
           selected: signal.query,
           children: "Tea",
         })),
-        `<option value="tea" selected="" tt-selected-signal="signalImports_test.query" tt-handler-connect="signalImports_test.query" is="tt-option" tt-handler-signal="signals.setBound">Tea</option>`,
+        `<option value="tea" selected="" tt-selected-signal="signalImports_test.query" tt-handler-connect="signalImports_test.query$subscribe" is="tt-option" tt-handler-signal="signals.setBound">Tea</option>`,
       );
       assertStringIncludes(
         unhashed(jsx("option", { selected: signal.filter })),
@@ -739,6 +798,27 @@ Deno.test({
         TypeError,
         "only <button>, <fieldset>, <input>, <optgroup>, <option>, <select> or <textarea> can",
       );
+      // src is text on media tags; withInitial renders the given URL.
+      for (
+        const html of [
+          unhashed(jsx("img", { src: signal.query.withInitial("/a.png") })),
+          unhashed(jsxTemplate(
+            strings("<img ", " />"),
+            jsxAttr("src", signal.query.withInitial("/a.png")),
+          )),
+        ]
+      ) {
+        assertStringIncludes(html, 'src="/a.png"');
+        assertStringIncludes(
+          html,
+          'tt-src-signal="signalImports_test.query"',
+        );
+      }
+      assertThrows(
+        () => jsx("div", { src: signal.query }),
+        TypeError,
+        "only <img>, <source>, <video>, <audio> or <iframe> can",
+      );
       // Precompile passes hidden to jsxAttr: false leaves it out, not "false".
       for (
         const [bound, expected] of [[signal.filter, ""], [
@@ -761,7 +841,7 @@ Deno.test({
         'aria-expanded="0"',
         'tt-data-status-signal="signalImports_test.query"',
         'tt-aria-expanded-signal="signalImports_test.filter"',
-        `tt-handler-connect="signalImports_test.query signalImports_test.filter"`,
+        `tt-handler-connect="signalImports_test.query$subscribe signalImports_test.filter$subscribe"`,
         `tt-handler-signal="signals.setBound"`,
       ];
       const attributesFromJsx = unhashed(jsx("div", {

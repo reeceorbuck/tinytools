@@ -301,7 +301,8 @@ const toastStyles = new tiny.Styles({
       }
     }
     &:has([data-toast-link]:hover) {
-      background: var(--toast-hover, light-dark(oklch(97.6% 0.004 258.3), oklch(23.5% 0.004 258.3)));
+      background: var(--toast-hover, light-dark(oklch(97.6% 0.004 258.3),
+        oklch(23.5% 0.004 258.3)));
     }
     &:has([data-toast-link]:focus-visible) {
       outline: 2px solid var(--toast-accent);
@@ -416,7 +417,7 @@ export const ToastSignalComponent: SignalComponent<{
         data-duration={props.duration}
         data-toast-class={styled.toast}
         data-close-class={styled.closeButton}
-        onConnect={[signal.queue, fn.showToasts]}
+        onConnect={[signal.queue.subscribe, fn.showToasts]}
         onSignal={fn.showToasts}
         onClick={fn.closeToast}
         onPointerEnter={fn.pauseToasts}

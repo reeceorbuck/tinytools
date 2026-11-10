@@ -44,9 +44,9 @@
  */
 
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
-import { h } from "../../jsx-runtime.ts";
+import { h, type JSX } from "../../jsx-runtime.ts";
 import {
-  type InstancedComponent,
+  type ExposedSignals,
   type InstanceSignals,
   optimized,
   type ReadonlySignal,
@@ -62,8 +62,8 @@ const tiny = optimized(import.meta.url);
  * Per instance: every checkbox's value, the chosen ones, and the last one
  * clicked, where a shift-click's range starts.
  */
-const selectionSignals = new tiny.Signals(({ Signal, Computed, perInstance }) =>
-  perInstance(() => {
+const selectionSignals = new tiny.Signals(({ Signal, Computed, Scope }) =>
+  new Scope(() => {
     const values = new Signal<string[]>([]);
     const selected = new Signal<string[]>([]);
     return {
@@ -194,7 +194,7 @@ const selectionStyles = new tiny.Styles({
   `,
 });
 
-/** The signals every selection part exposes. */
+/** The signals a selection exposes. */
 type SelectionExposed = InstanceSignals<{
   selected: Signal<string[]>;
   count: ReadonlySignal<number>;
@@ -237,18 +237,19 @@ type ClearProps = { children?: unknown };
  * `Checkbox` chooses its row's `value`, `SelectAll` chooses every row, `Count`
  * shows "3 of 12 selected", `Bar` shows its children only while any are
  * chosen, `Action` is a button enabled only then, and `Clear` drops them
- * all. Every part exposes `signal.selected`, the chosen values, and
+ * all. The selection exposes `signal.selected`, the chosen values, and
  * `signal.count`.
  */
 export const SelectionSignalComponent: SignalComponent<{
-  Checkbox: InstancedComponent<SelectionExposed, CheckboxProps>;
-  SelectAll: InstancedComponent<SelectionExposed, SelectAllProps>;
-  Count: InstancedComponent<SelectionExposed>;
-  Bar: InstancedComponent<SelectionExposed, BarProps>;
-  Action: InstancedComponent<SelectionExposed, ActionProps>;
-  Clear: InstancedComponent<SelectionExposed, ClearProps>;
+  signal: ExposedSignals<SelectionExposed>;
+  Checkbox: (props: CheckboxProps) => JSX.Element;
+  SelectAll: (props: SelectAllProps) => JSX.Element;
+  Count: JSX.Element;
+  Bar: (props: BarProps) => JSX.Element;
+  Action: (props: ActionProps) => JSX.Element;
+  Clear: (props: ClearProps) => JSX.Element;
 }> = new tiny.SignalComponent(
-  async ({ instanced }) => {
+  async () => {
     const { fn, signal, styled } = await tiny.imports(
       selectionSignals,
       selectionHandlers,
@@ -257,9 +258,9 @@ export const SelectionSignalComponent: SignalComponent<{
     );
     // Parts placed after checkboxes rendered `checked` connect once those
     // have changed these signals, so each catches up with `fireSelfSignal`.
-    const exposed = [signal.selected, signal.count] as const;
     return {
-      Checkbox: instanced((props: CheckboxProps) => (
+      signal: [signal.selected, signal.count],
+      Checkbox: (props: CheckboxProps) => (
         <input
           type="checkbox"
           class={styled.checkbox}
@@ -269,42 +270,45 @@ export const SelectionSignalComponent: SignalComponent<{
           checked={props.checked}
           aria-label={props.label ? `Select ${props.label}` : "Select"}
           data-selection-item
-          onConnect={[signal.selected, fn.joinSelection]}
+          onConnect={[signal.selected.subscribe, fn.joinSelection]}
           onDisconnect={fn.leaveSelection}
           onSignal={fn.showSelected}
           onClick={fn.toggleSelected}
         />
-      ), exposed),
-      SelectAll: instanced((props: SelectAllProps) => (
+      ),
+      SelectAll: (props: SelectAllProps) => (
         <input
           type="checkbox"
           class={styled.checkbox}
           aria-label={props.label ?? "Select all"}
-          onConnect={[signal.selected, signal.values, fn.showAll]}
+          onConnect={[
+            signal.selected.subscribe,
+            signal.values.subscribe,
+            fn.showAll,
+          ]}
           onSignal={fn.showAll}
           onClick={fn.toggleAll}
         />
-      ), exposed),
-      Count: instanced(
+      ),
+      Count: (
         <output
           aria-live="polite"
-          onConnect={[signal.summary, fn.fireSelfSignal]}
+          onConnect={[signal.summary.subscribe, fn.fireSelfSignal]}
           onSignal={fn.setTextContent}
-        />,
-        exposed,
+        />
       ),
-      Bar: instanced((props: BarProps) => (
+      Bar: (props: BarProps) => (
         <div
           role="toolbar"
           class={styled.bar}
           aria-label={props.label ?? "Selection actions"}
           hidden={signal.none}
-          onConnect={[signal.none, fn.fireSelfSignal]}
+          onConnect={[signal.none.subscribe, fn.fireSelfSignal]}
         >
           {props.children}
         </div>
-      ), exposed),
-      Action: instanced((props: ActionProps) => (
+      ),
+      Action: (props: ActionProps) => (
         <button
           type={props.type ?? "submit"}
           name={props.name}
@@ -312,18 +316,15 @@ export const SelectionSignalComponent: SignalComponent<{
           form={props.form}
           formaction={props.formaction}
           disabled={signal.none}
-          onConnect={[signal.none, fn.fireSelfSignal]}
+          onConnect={[signal.none.subscribe, fn.fireSelfSignal]}
         >
           {props.children}
         </button>
-      ), exposed),
-      Clear: instanced(
-        (props: ClearProps) => (
-          <button type="button" onClick={fn.clearSelection}>
-            {props.children ?? "Clear"}
-          </button>
-        ),
-        exposed,
+      ),
+      Clear: (props: ClearProps) => (
+        <button type="button" onClick={fn.clearSelection}>
+          {props.children ?? "Clear"}
+        </button>
       ),
     };
   },

@@ -523,7 +523,15 @@ type ElementEventOverridesStrict =
 
 /** The tags that take a signal as each property, as `signalProperties` lists. */
 type SignalPropertyTags = {
-  [Property in SignalProperty]: Property extends "value" ? "input" | "textarea"
+  [Property in SignalProperty]: Property extends "value" ?
+      | "button"
+      | "data"
+      | "input"
+      | "li"
+      | "meter"
+      | "option"
+      | "progress"
+      | "textarea"
     : Property extends "checked" ? "input"
     : Property extends "selected" ? "option"
     : Property extends "disabled" ?
@@ -534,6 +542,7 @@ type SignalPropertyTags = {
         | "option"
         | "select"
         | "textarea"
+    : Property extends "src" ? "img" | "source" | "video" | "audio" | "iframe"
     : string;
 };
 

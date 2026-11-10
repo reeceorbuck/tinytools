@@ -61,7 +61,8 @@ export type HandlerProp<TFunction> = HandlerReference<string, TFunction>;
 /**
  * Type for a component prop that receives a signal reference from
  * `tiny.imports()`, such as `signal.query`, which the component binds as an
- * element property or attribute or subscribes with `onConnect`.
+ * element property or attribute or subscribes with
+ * `onConnect={props.query.subscribe}`.
  *
  * @example
  * ```tsx
@@ -76,6 +77,8 @@ export type SignalProp<Value = unknown> =
     readonly initial: Value;
     /** See `RenderableSignal.withInitial`. */
     withInitial(initial?: Value): SignalProp<Value>;
+    /** The signal's `subscribe` action, for `onConnect`. */
+    readonly subscribe: HandlerReference<string, (event: Event) => void>;
   };
 
 /**
@@ -108,8 +111,10 @@ export type SignalReferences<TSignals> = {
 
 /**
  * The actions a signal reference offers as a JSX handler, for its kind:
- * `onInput={signal.size.update}` takes the control's value,
- * `onClick={signal.open.toggle}` flips a boolean and
+ * `onConnect={signal.total.subscribe}` runs the element's `onSignal` on
+ * each later change, `onInput={signal.size.update}` takes the control's value,
+ * `onClick={signal.open.toggle}` flips a boolean,
+ * `onClick={signal.count.increment}` adds 1 to a number and
  * `onClick={signal.addRow.fire}` fires a trigger.
  */
 export type SignalActions<TName extends string, Signal> = {
@@ -129,8 +134,10 @@ export function signalActionHandler(
 
 /** What each action needs, for the error when a signal lacks it. */
 const signalActionKinds: Record<SignalAction, string> = {
+  subscribe: "a signal",
   update: "a writable Signal",
   toggle: "a Signal holding a boolean",
+  increment: "a Signal holding a number",
   fire: "a Trigger",
 };
 
@@ -139,7 +146,7 @@ declare const signalOriginBrand: unique symbol;
 /**
  * Type-only: the signal's entry in the collection it came from. A `Pick`
  * keeps the link to where the signal is declared, so types rebuilt from a
- * list of references (`instanced(render, [signal.press])`) still go to
+ * list of references (a component's `signal: [signal.press]`) still go to
  * its definition in the editor.
  */
 export type SignalOrigin<TEntry> = {
@@ -199,11 +206,26 @@ export const signalProperties: {
       | "selected"
       | "disabled"
       | "hidden"
+      | "src"
   ]: { readonly tags?: readonly string[] };
 } = {
-  // A select's `value` attribute is not what it shows. A textarea's is not
-  // either, so a textarea renders no initial value (see signalPropertyProps).
-  value: { tags: ["input", "textarea"] },
+  // A select has no `value` attribute, so its initial value cannot render. A
+  // textarea's is its text (see signalPropertyProps). An input's and a
+  // textarea's are written as the live property; the others', whose property
+  // is a number (meter, progress, li) or falls back to their text when the
+  // attribute is gone (option), as attribute text.
+  value: {
+    tags: [
+      "button",
+      "data",
+      "input",
+      "li",
+      "meter",
+      "option",
+      "progress",
+      "textarea",
+    ],
+  },
   checked: { tags: ["input"] },
   selected: { tags: ["option"] },
   disabled: {
@@ -218,6 +240,9 @@ export const signalProperties: {
     ],
   },
   hidden: {},
+  // Written as attribute text, as `data-*` is: the `src` property reads back
+  // resolved to an absolute URL.
+  src: { tags: ["img", "source", "video", "audio", "iframe"] },
 };
 
 export type SignalProperty = keyof typeof signalProperties;
@@ -242,6 +267,17 @@ export function isSignalAttribute(name: unknown): name is SignalAttribute {
   return typeof name === "string" && /^(data|aria)-./.test(name);
 }
 
+/**
+ * Whether `binding` on `tag` is written as attribute text, as `setBound`
+ * writes it: `src`, `data-*`, `aria-*` and the `value` of any element but an
+ * input or textarea.
+ */
+function isTextBinding(binding: SignalBinding, tag?: string): boolean {
+  return isSignalAttribute(binding) || binding === "src" ||
+    (binding === "value" && tag !== undefined &&
+      !["input", "textarea"].includes(tag.toLowerCase()));
+}
+
 /** Whether `name` is a property or attribute a signal reference can be given as. */
 export function isSignalBinding(name: unknown): name is SignalBinding {
   return isSignalProperty(name) || isSignalAttribute(name);
@@ -250,8 +286,8 @@ export function isSignalBinding(name: unknown): name is SignalBinding {
 /** What `tiny.imports()` gives signal references to implement `RenderableSignal`. */
 export type SignalRendering = {
   initial(name: string): unknown;
-  /** Live text for `reference`, starting from `initial`. */
-  text(reference: object, initial: unknown): JSX.Element;
+  /** Live text for the signal whose `subscribe` action is given, from `initial`. */
+  text(subscribe: object, initial: unknown): JSX.Element;
   /** The handler an element given a signal as a property runs (`setBound`). */
   setter(): object;
 };
@@ -275,11 +311,17 @@ type SignalPropertyBinding = {
   omitted: boolean;
   /** `<bundle>.<name>`, which the setter checks each signal event against. */
   signal: string;
-  /** The signal reference, subscribed by `onConnect`. */
+  /** The signal's `subscribe` action, bound to `onConnect`. */
   onConnect: object;
   /** The setter, run by `onSignal`. */
   onSignal: object;
 };
+
+/** The events a bare signal that is not a trigger acts on. */
+const BARE_SIGNAL_EVENTS = new Set(["input", "change"]);
+
+/** The events a signal is subscribed on, with its `subscribe` action. */
+const SUBSCRIBE_EVENTS = new Set(["connect", "load"]);
 
 const referenceDetails = new WeakMap<
   object,
@@ -288,6 +330,11 @@ const referenceDetails = new WeakMap<
     resolved: string;
     /** The `tt-link` of the component instance a reference from `instance.signal` acts on. */
     links?: string;
+    /**
+     * A bare signal (not one of its actions): a trigger fires on any event
+     * but connect and load, the others only read input and change.
+     */
+    signal?: { trigger: boolean };
   }
 >();
 
@@ -313,7 +360,7 @@ export function signalChild(value: unknown): unknown {
 /** Each signal reference's binding as an element property or attribute. */
 const signalBindings = new WeakMap<
   object,
-  (binding: SignalBinding) => SignalPropertyBinding
+  (binding: SignalBinding, tag?: string) => SignalPropertyBinding
 >();
 
 /** Whether `value` is a signal reference, which an element property binds as live. */
@@ -360,7 +407,7 @@ export function signalPropertyProps(
       ? `${owners.slice(0, -1).join(", ")} or ${owners.at(-1)}`
       : owners[0];
     throw new TypeError(
-      `<${tag}> cannot take a signal as its ${misplaced}; only ${list} can. Bind onConnect={signal.name} and an onSignal handler of your own instead.`,
+      `<${tag}> cannot take a signal as its ${misplaced}; only ${list} can. Bind onConnect={signal.name.subscribe} and an onSignal handler of your own instead.`,
     );
   }
   const expanded: Record<string, unknown> = { ...props };
@@ -369,7 +416,7 @@ export function signalPropertyProps(
   /** The setter, which writes every binding of the element. */
   let setter: object | undefined;
   for (const name of bound) {
-    const binding = signalBindings.get(props[name] as object)!(name);
+    const binding = signalBindings.get(props[name] as object)!(name, tag);
     if (binding.omitted) {
       // The element keeps its own markup (a textarea's children).
       delete expanded[name];
@@ -442,6 +489,19 @@ export function handlerReferenceAttributes(
     }
     if (!handlerReferencePattern.test(details.resolved)) {
       throw new TypeError(`Invalid handler reference: ${details.name}`);
+    }
+    if (details.signal && SUBSCRIBE_EVENTS.has(eventName)) {
+      throw new TypeError(
+        `${attributeName}={signal.${details.name}} does not subscribe: use signal.${details.name}.subscribe.`,
+      );
+    }
+    if (
+      details.signal && !details.signal.trigger &&
+      !BARE_SIGNAL_EVENTS.has(eventName)
+    ) {
+      throw new TypeError(
+        `${attributeName}={signal.${details.name}} does nothing: use one of its actions, such as signal.${details.name}.increment, .toggle or .update.`,
+      );
     }
     return details.resolved;
   });
@@ -531,7 +591,7 @@ export function createSignalReferences<TSignals>(
       ): object => {
         const reference: object = Object.freeze(Object.defineProperties({}, {
           value: { get: unavailable, set: unavailable },
-          subscribe: { get: unavailable },
+          subscribe: { get: () => action("subscribe") },
           unsubscribe: { get: unavailable },
           initial: { get: initialOf },
           withInitial: {
@@ -540,6 +600,7 @@ export function createSignalReferences<TSignals>(
           },
           update: { get: () => action("update") },
           toggle: { get: () => action("toggle") },
+          increment: { get: () => action("increment") },
           fire: { get: () => action("fire") },
           // A template literal (`${signal.x}`) would stringify the reference.
           [Symbol.toPrimitive]: {
@@ -554,11 +615,11 @@ export function createSignalReferences<TSignals>(
           reference,
           () =>
             renderingFor("as a JSX child").text(
-              reference,
+              action("subscribe"),
               omitted ? "" : initialOf(),
             ),
         );
-        signalBindings.set(reference, (binding) => {
+        signalBindings.set(reference, (binding, tag) => {
           const rendering = renderingFor(`as ${binding}`);
           const initial = initialOf();
           const signal = resolved;
@@ -567,18 +628,27 @@ export function createSignalReferences<TSignals>(
           }
           return {
             // Written as the setter writes it.
-            initial: isSignalAttribute(binding)
+            initial: isTextBinding(binding, tag)
               ? initial?.toString()
               : binding === "value"
               ? initial?.toString() ?? ""
               : Boolean(initial),
             omitted,
             signal,
-            onConnect: reference,
+            onConnect: action("subscribe"),
             onSignal: rendering.setter(),
           };
         });
-        referenceDetails.set(reference, { name, resolved, links });
+        referenceDetails.set(reference, {
+          name,
+          resolved,
+          links,
+          signal: {
+            trigger:
+              typeof resolveHandler(signalActionHandler(name, "fire")) ===
+                "string",
+          },
+        });
         return reference;
       };
       return createReference(() =>

@@ -25,10 +25,10 @@
  */
 
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
-import { h } from "../../jsx-runtime.ts";
+import { h, type JSX } from "../../jsx-runtime.ts";
 import {
+  type ExposedSignals,
   type HandlerReference,
-  type InstancedComponent,
   type InstanceSignals,
   optimized,
   type ReadonlySignal,
@@ -107,8 +107,8 @@ const dateTools = new tiny.Handlers(dateFunctions);
  */
 const datePickerSignals = new tiny.Signals(async () => {
   const { fn } = await tiny.imports(dateTools);
-  return ({ Signal, Computed, perInstance }) =>
-    perInstance(() => {
+  return ({ Signal, Computed, Scope }) =>
+    new Scope(() => {
       const date = new Signal("");
       return {
         date,
@@ -119,14 +119,11 @@ const datePickerSignals = new tiny.Signals(async () => {
     });
 });
 
-/** The signals `DateInput` exposes. */
-type DateInputExposed = InstanceSignals<{
+/** The signals a date picker exposes. */
+type DatePickerExposed = InstanceSignals<{
   date: Signal<string>;
   weekday: ReadonlySignal<string>;
 }>;
-
-/** The signals `Weekday` exposes. */
-type WeekdayExposed = InstanceSignals<{ weekday: ReadonlySignal<string> }>;
 
 /** Props for the picker's `DateInput`. */
 type DateInputProps = {
@@ -224,45 +221,44 @@ const datePickerStyles = new tiny.Styles({
 /**
  * `DateInput` is the input itself: a form field named `name`. `Weekday`
  * names its day, `Step` moves it by `by` days or weeks and `Today` sets it to
- * today. `DateInput` and `Weekday` expose `signal.date` and `signal.weekday`.
+ * today. The picker exposes `signal.date` and `signal.weekday`.
  */
 export const DatePickerSignalComponent: SignalComponent<{
-  DateInput: InstancedComponent<DateInputExposed, DateInputProps>;
-  Weekday: InstancedComponent<WeekdayExposed, WeekdayProps>;
-  Step: InstancedComponent<Record<never, never>, StepProps>;
-  Today: InstancedComponent<Record<never, never>, TodayProps>;
+  signal: ExposedSignals<DatePickerExposed>;
+  DateInput: (props: DateInputProps) => JSX.Element;
+  Weekday: (props: WeekdayProps) => JSX.Element;
+  Step: (props: StepProps) => JSX.Element;
+  Today: (props: TodayProps) => JSX.Element;
 }> = new tiny.SignalComponent(
-  async ({ instanced }) => {
+  async () => {
     const { fn, signal, styled } = await tiny.imports(
       datePickerSignals,
       datePickerHandlers,
       datePickerStyles,
     );
     return {
-      DateInput: instanced((props: DateInputProps) => (
+      signal: [signal.date, signal.weekday],
+      DateInput: (props: DateInputProps) => (
         <input
           type={props.type ?? "date"}
           id={props.id}
           name={props.name}
           value={props.value ?? ""}
           data-skip-weekends={props.skipWeekends || undefined}
-          onConnect={[signal.date, fn.adoptInput]}
+          onConnect={[signal.date.subscribe, fn.adoptInput]}
           onSignal={fn.showDate}
           onInput={signal.date}
           onChange={props.onChange}
         />
-      ), [signal.date, signal.weekday]),
-      Weekday: instanced(
-        (props: WeekdayProps) => (
-          <output>
-            {signal.weekday.withInitial(
-              dateFunctions.weekday(props.value ?? ""),
-            )}
-          </output>
-        ),
-        [signal.weekday],
       ),
-      Step: instanced((props: StepProps) => {
+      Weekday: (props: WeekdayProps) => (
+        <output>
+          {signal.weekday.withInitial(
+            dateFunctions.weekday(props.value ?? ""),
+          )}
+        </output>
+      ),
+      Step: (props: StepProps) => {
         const count = Math.abs(props.by);
         const direction = props.by < 0 ? "Previous" : "Next";
         const label = props.label ??
@@ -286,12 +282,12 @@ export const DatePickerSignalComponent: SignalComponent<{
             {props.children ?? (props.by < 0 ? "‹" : "›")}
           </button>
         );
-      }),
-      Today: instanced((props: TodayProps) => (
+      },
+      Today: (props: TodayProps) => (
         <button type="button" class={styled.dateButton} onClick={fn.today}>
           {props.children ?? "Today"}
         </button>
-      )),
+      ),
     };
   },
 );

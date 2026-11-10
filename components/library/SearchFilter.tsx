@@ -35,10 +35,10 @@
  */
 
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
-import { h } from "../../jsx-runtime.ts";
+import { h, type JSX } from "../../jsx-runtime.ts";
 import {
+  type ExposedSignals,
   type HandlerReference,
-  type InstancedComponent,
   type InstanceSignals,
   optimized,
   type ReadonlySignal,
@@ -54,9 +54,9 @@ const tiny = optimized(import.meta.url);
  * how many of its elements there are and how many match it.
  */
 const searchFilterSignals = new tiny.Signals((
-  { Signal, Computed, perInstance },
+  { Signal, Computed, Scope },
 ) =>
-  perInstance(() => {
+  new Scope(() => {
     const query = new Signal("");
     const shown = new Signal(0);
     const total = new Signal(0);
@@ -132,11 +132,9 @@ type InputHandler =
   | HandlerReference<string, (event: Event) => unknown>
   | readonly HandlerReference<string, (event: Event) => unknown>[];
 
-/** The signals `FilterInput` exposes. */
-type FilterInputExposed = InstanceSignals<{ query: Signal<string> }>;
-
-/** The signals `Results` and `MatchCount` expose. */
-type ResultsExposed = InstanceSignals<{
+/** The signals a search filter exposes. */
+type SearchFilterExposed = InstanceSignals<{
+  query: Signal<string>;
   shown: Signal<number>;
   total: Signal<number>;
   summary: ReadonlySignal<string>;
@@ -171,24 +169,25 @@ type NoMatchesProps = { children?: unknown };
 /**
  * `FilterInput` is the search box, `Results` holds what it filters,
  * `MatchCount` shows "3 of 40" while it filters and `NoMatches` shows its
- * children while nothing matches. `FilterInput` exposes `signal.query`;
- * `Results` and `MatchCount` expose `signal.shown`, `signal.total` and
- * `signal.summary`.
+ * children while nothing matches. The filter exposes `signal.query`,
+ * `signal.shown`, `signal.total` and `signal.summary`.
  */
 export const SearchFilterSignalComponent: SignalComponent<{
-  FilterInput: InstancedComponent<FilterInputExposed, FilterInputProps>;
-  Results: InstancedComponent<ResultsExposed, ResultsProps>;
-  MatchCount: InstancedComponent<ResultsExposed>;
-  NoMatches: InstancedComponent<Record<never, never>, NoMatchesProps>;
+  signal: ExposedSignals<SearchFilterExposed>;
+  FilterInput: (props: FilterInputProps) => JSX.Element;
+  Results: (props: ResultsProps) => JSX.Element;
+  MatchCount: JSX.Element;
+  NoMatches: (props: NoMatchesProps) => JSX.Element;
 }> = new tiny.SignalComponent(
-  async ({ instanced }) => {
+  async () => {
     const { fn, signal, styled } = await tiny.imports(
       searchFilterSignals,
       searchFilterHandlers,
       searchFilterStyles,
     );
     return {
-      FilterInput: instanced((props: FilterInputProps) => (
+      signal: [signal.query, signal.shown, signal.total, signal.summary],
+      FilterInput: (props: FilterInputProps) => (
         <input
           type="search"
           class={styled.mergeClasses(styled.filterInput, props.class)}
@@ -198,35 +197,32 @@ export const SearchFilterSignalComponent: SignalComponent<{
           placeholder={props.placeholder ?? props.label ?? "Filter"}
           value={props.value ?? ""}
           autocomplete="off"
-          onConnect={[signal.query, fn.adoptQuery]}
-          onInput={[signal.query, ...[props.onInput ?? []].flat()]}
+          onConnect={[signal.query.subscribe, fn.adoptQuery]}
+          onInput={[signal.query.update, ...[props.onInput ?? []].flat()]}
         />
-      ), [signal.query]),
-      Results: instanced((props: ResultsProps) => {
+      ),
+      Results: (props: ResultsProps) => {
         const Tag = props.as ?? "div";
         return (
           <Tag
             class={styled.results}
-            onConnect={[signal.query, fn.applyFilter]}
+            onConnect={[signal.query.subscribe, fn.applyFilter]}
             onSignal={fn.applyFilter}
           >
             {props.children}
           </Tag>
         );
-      }, [signal.shown, signal.total, signal.summary]),
-      MatchCount: instanced(
-        <output aria-live="polite">{signal.summary}</output>,
-        [signal.shown, signal.total, signal.summary],
-      ),
-      NoMatches: instanced((props: NoMatchesProps) => (
+      },
+      MatchCount: <output aria-live="polite">{signal.summary}</output>,
+      NoMatches: (props: NoMatchesProps) => (
         <p
           hidden
-          onConnect={[signal.noMatches, fn.showNoMatches]}
+          onConnect={[signal.noMatches.subscribe, fn.showNoMatches]}
           onSignal={fn.showNoMatches}
         >
           {props.children ?? "No matches."}
         </p>
-      )),
+      ),
     };
   },
 );

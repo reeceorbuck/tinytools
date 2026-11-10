@@ -38,7 +38,7 @@ Deno.test("the library counter's parts share one count", async () => {
   assertEquals(linkOf(display), linkOf(button));
   // The count shown elsewhere joins the same instance, rendered display or not.
   const outside = await render(
-    <span>{counter.CounterDisplay.signal.count}</span>,
+    <span>{counter.signal.count}</span>,
   );
   assertEquals(linkOf(outside), linkOf(button));
 });
@@ -73,7 +73,7 @@ Deno.test("the library date picker's parts share one date", async () => {
   );
   assertStringIncludes(weekInput, 'type="week"');
   assertEquals(
-    linkOf(await render(<span>{week.DateInput.signal.date}</span>)),
+    linkOf(await render(<span>{week.signal.date}</span>)),
     linkOf(weekInput),
   );
   assertEquals(linkOf(weekInput) === linkOf(input), false);

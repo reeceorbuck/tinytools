@@ -60,7 +60,7 @@ app.get("/counter", async (c) => {
   const { signal } = await tiny.imports(counter);
   return c.render(
     <>
-      <button type="button" onClick={signal.count}>Add one</button>
+      <button type="button" onClick={signal.count.increment}>Add one</button>
       <p>Clicked {signal.count} times.</p>
     </>,
   );

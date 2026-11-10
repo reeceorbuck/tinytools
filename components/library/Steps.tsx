@@ -38,9 +38,9 @@
  */
 
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
-import { h } from "../../jsx-runtime.ts";
+import { h, type JSX } from "../../jsx-runtime.ts";
 import {
-  type InstancedComponent,
+  type ExposedSignals,
   type InstanceSignals,
   optimized,
   type ReadonlySignal,
@@ -55,7 +55,7 @@ const tiny = optimized(import.meta.url);
 /** A step, as the progress list and buttons know it. */
 type StepEntry = { id: string; title: string };
 
-/** The signals the steps' parts expose. */
+/** The signals a set of steps exposes. */
 type StepsExposed = InstanceSignals<{
   current: Signal<string>;
   index: ReadonlySignal<number>;
@@ -92,8 +92,8 @@ type SubmitProps = {
  * Per instance: the steps in page order, and the id of the one showing.
  * The rest follows from those two.
  */
-const stepsSignals = new tiny.Signals(({ Signal, Computed, perInstance }) =>
-  perInstance(() => {
+const stepsSignals = new tiny.Signals(({ Signal, Computed, Scope }) =>
+  new Scope(() => {
     const steps = new Signal<StepEntry[]>([]);
     const current = new Signal("");
     const at = () => steps.value.findIndex((step) => step.id === current.value);
@@ -381,18 +381,19 @@ const stepsStyles = new tiny.Styles({
 /**
  * `Step`s hold the form's fields, one showing at a time. `Progress` lists
  * them, `Status` says which is showing, and `Back`, `Next` and `Submit`
- * move through them and send the form. All expose `signal.current`, the
- * showing step's id, and `signal.index`, its place.
+ * move through them and send the form. The steps expose `signal.current`,
+ * the showing step's id, and `signal.index`, its place.
  */
 export const StepsSignalComponent: SignalComponent<{
-  Step: InstancedComponent<StepsExposed, StepProps>;
-  Progress: InstancedComponent<StepsExposed, ProgressProps>;
-  Status: InstancedComponent<StepsExposed, Record<never, never>>;
-  Back: InstancedComponent<StepsExposed, MoveProps>;
-  Next: InstancedComponent<StepsExposed, MoveProps>;
-  Submit: InstancedComponent<StepsExposed, SubmitProps>;
+  signal: ExposedSignals<StepsExposed>;
+  Step: (props: StepProps) => JSX.Element;
+  Progress: (props: ProgressProps) => JSX.Element;
+  Status: () => JSX.Element;
+  Back: (props: MoveProps) => JSX.Element;
+  Next: (props: MoveProps) => JSX.Element;
+  Submit: (props: SubmitProps) => JSX.Element;
 }> = new tiny.SignalComponent(
-  async ({ instanced }) => {
+  async () => {
     const { fn, signal, styled } = await tiny.imports(
       stepsSignals,
       stepsHandlers,
@@ -401,16 +402,20 @@ export const StepsSignalComponent: SignalComponent<{
     );
     // Controls placed after the steps connect once the steps have changed
     // these signals, so each catches up with `fireSelfSignal`.
-    const exposed = [signal.current, signal.index];
     return {
-      Step: instanced((props: StepProps) => (
+      signal: [signal.current, signal.index],
+      Step: (props: StepProps) => (
         <fieldset
           id={props.id}
           class={styled.step}
           tabindex="-1"
           data-title={props.title}
           data-current={props.current ? "" : undefined}
-          onConnect={[signal.steps, signal.current, fn.joinSteps]}
+          onConnect={[
+            signal.steps.subscribe,
+            signal.current.subscribe,
+            fn.joinSteps,
+          ]}
           onSignal={fn.showStep}
           onDisconnect={fn.leaveSteps}
           onKeyDown={fn.enterInStep}
@@ -418,48 +423,49 @@ export const StepsSignalComponent: SignalComponent<{
           <legend>{props.title}</legend>
           {props.children}
         </fieldset>
-      ), exposed),
-      Progress: instanced((props: ProgressProps) => (
+      ),
+      Progress: (props: ProgressProps) => (
         <ol
           class={styled.progress}
           aria-label={props.label ?? "Progress"}
-          onConnect={[signal.steps, signal.current, fn.showProgress]}
+          onConnect={[
+            signal.steps.subscribe,
+            signal.current.subscribe,
+            fn.showProgress,
+          ]}
           onSignal={fn.showProgress}
           onClick={fn.jumpToStep}
         />
-      ), exposed),
-      Status: instanced(
-        () => (
-          <output
-            onConnect={[signal.summary, fn.fireSelfSignal]}
-            onSignal={fn.setTextContent}
-          />
-        ),
-        exposed,
       ),
-      Back: instanced((props: MoveProps) => (
+      Status: () => (
+        <output
+          onConnect={[signal.summary.subscribe, fn.fireSelfSignal]}
+          onSignal={fn.setTextContent}
+        />
+      ),
+      Back: (props: MoveProps) => (
         <button
           type="button"
           class={styled.scripted}
           disabled={signal.onFirst}
-          onConnect={[signal.onFirst, fn.fireSelfSignal]}
+          onConnect={[signal.onFirst.subscribe, fn.fireSelfSignal]}
           onClick={fn.previousStep}
         >
           {props.children ?? "Back"}
         </button>
-      ), exposed),
-      Next: instanced((props: MoveProps) => (
+      ),
+      Next: (props: MoveProps) => (
         <button
           type="button"
           class={styled.scripted}
           hidden={signal.onLast}
-          onConnect={[signal.onLast, fn.fireSelfSignal]}
+          onConnect={[signal.onLast.subscribe, fn.fireSelfSignal]}
           onClick={fn.nextStep}
         >
           {props.children ?? "Next"}
         </button>
-      ), exposed),
-      Submit: instanced((props: SubmitProps) => (
+      ),
+      Submit: (props: SubmitProps) => (
         <button
           type="submit"
           class={styled.submit}
@@ -468,12 +474,12 @@ export const StepsSignalComponent: SignalComponent<{
           form={props.form}
           formaction={props.formaction}
           hidden={signal.notLast}
-          onConnect={[signal.notLast, fn.fireSelfSignal]}
+          onConnect={[signal.notLast.subscribe, fn.fireSelfSignal]}
           onClick={fn.checkSteps}
         >
           {props.children ?? "Submit"}
         </button>
-      ), exposed),
+      ),
     };
   },
 );

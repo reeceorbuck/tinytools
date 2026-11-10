@@ -279,8 +279,8 @@ Deno.test({
 
 Deno.test("Signals cannot read another collection's per-instance signals", async () => {
   reset();
-  const rows = new Signals(({ Signal, perInstance }) =>
-    perInstance(() => ({ open: new Signal(false) }))
+  const rows = new Signals(({ Signal, Scope }) =>
+    new Scope(() => ({ open: new Signal(false) }))
   );
   const reader = new Signals(rows, ({ signal }) => ({
     // @ts-expect-error a per-instance signal has no single value
@@ -364,8 +364,8 @@ Deno.test({
     const defaults = new Constants({ entry: { quantity: 1, product: "A" } });
     const notes = new Signals(
       defaults,
-      ({ constants, Computed, Trigger, perInstance, signalsFrom }) => ({
-        ...perInstance(() => {
+      ({ constants, Computed, Trigger, Scope, signalsFrom }) => ({
+        entry: new Scope(() => {
           const entry = signalsFrom(constants.entry);
           const text = new Computed(() =>
             `${entry.quantity.value}x ${entry.product.value}`
@@ -378,7 +378,7 @@ Deno.test({
     const checkTypes = async () => {
       const { signal } = await imports(notes);
       const heading: Signal<string> = signal.heading;
-      void [heading, notes.instanceKey, signal.text.all];
+      void [heading, notes.scopes.entry.key, signal.text.all];
     };
     void checkTypes;
     try {
@@ -395,7 +395,7 @@ Deno.test({
           notes._handlerFilenames.get("text")
         }.js`,
       );
-      assertStringIncludes(code, "perInstanceFor");
+      assertStringIncludes(code, "scopeFor");
       assertStringIncludes(code, "TriggerInstance");
     } finally {
       await Deno.remove(directory, { recursive: true }).catch(() => {});
@@ -406,7 +406,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "Signals shorthand perInstance takes a shape, nested levels too",
+  name: "Signals shorthand Scope takes a shape, nested levels too",
   sanitizeOps: false,
   sanitizeResources: false,
   async fn() {
@@ -415,9 +415,9 @@ Deno.test({
     const defaults = new Constants({ note: { next: "Review", count: 2 } });
     const notes = new Signals(
       defaults,
-      ({ constants, perInstance }) =>
-        perInstance(() => ({
-          ...perInstance("entry", () => ({
+      ({ constants, Scope }) =>
+        new Scope(() => ({
+          entry: new Scope(() => ({
             product: "A",
             description() {
               return `${this.product.value} x${this.quantity.value}`;
@@ -427,8 +427,8 @@ Deno.test({
           ...constants.note,
           noteText() {
             return `${this.next.value}: ${
-              this.description.all.value.join("; ") ||
-              this.description.initialValue
+              this.entry.description.all.value.join("; ") ||
+              this.entry.description.initialValue
             }`;
           },
         })),
@@ -436,9 +436,9 @@ Deno.test({
     const checkTypes = async () => {
       const { signal } = await imports(notes);
       void [signal.noteText.all, signal.description.all, signal.next.all];
-      void notes.instanceKeyFor("entry");
-      new Signals(defaults, ({ perInstance }) =>
-        perInstance(() => ({
+      void notes.scopes.entry.key;
+      new Signals(defaults, ({ Scope }) =>
+        new Scope(() => ({
           next: "x",
           bad() {
             // @ts-expect-error next holds a string
@@ -463,7 +463,7 @@ Deno.test({
         }.js`,
       );
       assertStringIncludes(code, "shapeSignals");
-      assertStringIncludes(code, "perInstanceFor");
+      assertStringIncludes(code, "scopeFor");
     } finally {
       await Deno.remove(directory, { recursive: true }).catch(() => {});
       reset();

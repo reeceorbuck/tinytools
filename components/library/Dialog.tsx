@@ -46,7 +46,7 @@
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
 import { h, type JSX } from "../../jsx-runtime.ts";
 import {
-  type InstancedComponent,
+  type ExposedSignals,
   type InstanceSignals,
   optimized,
   type Signal,
@@ -59,11 +59,11 @@ import type { SignalEvent } from "../../handlers/signals.ts";
 const tiny = optimized(import.meta.url);
 
 /** Whether the dialog is open, one per instance. */
-const dialogSignals = new tiny.Signals(({ Signal, perInstance }) =>
-  perInstance(() => ({ open: new Signal<boolean>(false) }))
+const dialogSignals = new tiny.Signals(({ Signal, Scope }) =>
+  new Scope(() => ({ open: new Signal<boolean>(false) }))
 );
 
-/** The signals the dialog's parts expose. */
+/** The signals a dialog exposes. */
 type DialogExposed = InstanceSignals<{ open: Signal<boolean> }>;
 
 /** Props for the dialog's `Open` and `Close` buttons. */
@@ -241,24 +241,26 @@ const dialogStyles = new tiny.Styles({
 
 /**
  * `Panel` is the dialog, `Open` a button opening it and `Close` a button
- * closing it; all three expose `signal.open`, which opens the panel when set
- * true. `Confirm` stands alone: it wraps a submit button, and its own dialog
+ * closing it. The dialog exposes `signal.open`, which opens the panel when
+ * set true. `Confirm` stands alone: it wraps a submit button, and its own dialog
  * asks before the button's form submits, in place of `confirm()`.
  */
 export const DialogSignalComponent: SignalComponent<{
-  Open: InstancedComponent<DialogExposed, DialogButtonProps>;
-  Panel: InstancedComponent<DialogExposed, PanelProps>;
-  Close: InstancedComponent<DialogExposed, DialogButtonProps>;
+  signal: ExposedSignals<DialogExposed>;
+  Open: (props: DialogButtonProps) => JSX.Element;
+  Panel: (props: PanelProps) => JSX.Element;
+  Close: (props: DialogButtonProps) => JSX.Element;
   Confirm: (props: ConfirmProps) => JSX.Element;
 }> = new tiny.SignalComponent(
-  async ({ instanced }) => {
+  async () => {
     const { fn, signal, styled } = await tiny.imports(
       dialogSignals,
       dialogHandlers,
       dialogStyles,
     );
     return {
-      Open: instanced((props: DialogButtonProps) => (
+      signal: [signal.open],
+      Open: (props: DialogButtonProps) => (
         <button
           type="button"
           class={styled.scripted}
@@ -268,8 +270,8 @@ export const DialogSignalComponent: SignalComponent<{
         >
           {props.children ?? "Open"}
         </button>
-      ), [signal.open]),
-      Panel: instanced((props: PanelProps) => (
+      ),
+      Panel: (props: PanelProps) => (
         <dialog
           id={props.id}
           class={styled.panel}
@@ -277,7 +279,7 @@ export const DialogSignalComponent: SignalComponent<{
           data-modal={props.modeless ? undefined : ""}
           data-start-open={props.open ? "" : undefined}
           data-restore-on-close={props.restoreOnClose ? "" : undefined}
-          onConnect={[signal.open, fn.adoptDialog]}
+          onConnect={[signal.open.subscribe, fn.adoptDialog]}
           onSignal={fn.showDialog}
           onToggle={fn.dialogToggled}
           onClose={fn.dialogClosed}
@@ -286,20 +288,17 @@ export const DialogSignalComponent: SignalComponent<{
         >
           {props.children}
         </dialog>
-      ), [signal.open]),
-      Close: instanced(
-        (props: DialogButtonProps) => (
-          <button
-            type="button"
-            class={props.children ? undefined : styled.closeButton}
-            aria-label={props.label ?? (props.children ? undefined : "Close")}
-            title={props.children ? undefined : "Close"}
-            onClick={fn.closeDialog}
-          >
-            {props.children ?? "×"}
-          </button>
-        ),
-        [signal.open],
+      ),
+      Close: (props: DialogButtonProps) => (
+        <button
+          type="button"
+          class={props.children ? undefined : styled.closeButton}
+          aria-label={props.label ?? (props.children ? undefined : "Close")}
+          title={props.children ? undefined : "Close"}
+          onClick={fn.closeDialog}
+        >
+          {props.children ?? "×"}
+        </button>
       ),
       Confirm: transparent((props: ConfirmProps) => (
         <tiny-confirm onClick={fn.askToConfirm}>

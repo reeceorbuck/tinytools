@@ -60,18 +60,17 @@ export interface Trigger extends ReadonlySignal<unknown> {
   readonly [triggerSignal]?: true;
 }
 
-/** Type-only marker recording which named `perInstance` a signal belongs to. */
+/** Type-only marker recording which named `Scope` level a signal belongs to. */
 declare const instanceLevel: unique symbol;
 
 /**
- * A signal defined inside `perInstance`: every instance root (an element
- * whose `tt-instance` attribute holds the collection's `instanceKey`) gets
- * its own copy.
- * Bound in JSX (`onChange={signal.name}`, `onConnect={signal.name}`,
- * `onClick={signal.name}`) it resolves to the instance enclosing the
+ * A signal defined inside a `Scope`: every instance root (an element whose
+ * `tt-instance` attribute holds the level's key) gets its own copy.
+ * Bound in JSX (`onChange={signal.name}`, `onConnect={signal.name.subscribe}`,
+ * `onClick={signal.name.increment}`) it resolves to the instance enclosing the
  * element, so markup needs nothing extra.
- * `Level` is the name given to `perInstance(name, ...)`, or `never` for an
- * unnamed one.
+ * `Level` is the key its `Scope` is returned under, or `never` for one the
+ * factory returns directly.
  */
 export interface InstanceSignal<
   Value = SignalValue,
@@ -99,7 +98,7 @@ export interface InstanceSignal<
   subscribe(target: Element): void;
   /** Ends `target`'s subscription to the instance enclosing it. */
   unsubscribe(target: Element): void;
-  /** Type-only: the named `perInstance` level this signal belongs to. */
+  /** Type-only: the named `Scope` level this signal belongs to. */
   readonly [instanceLevel]?: Level;
 }
 
@@ -107,25 +106,34 @@ export interface InstanceSignal<
 type AnyInstanceSignal = InstanceSignal<any, any, any>;
 
 /** What a signal reference can do as a JSX handler: `signal.name.<action>`. */
-export type SignalAction = "update" | "toggle" | "fire";
+export type SignalAction =
+  | "subscribe"
+  | "update"
+  | "toggle"
+  | "increment"
+  | "fire";
 
 /**
- * The actions a signal of type `S` offers (see `signalActions`): `fire` for
- * a trigger, `update` for a writable signal and `toggle` too for a boolean
- * one, none for a computed. A per-instance signal offers its instance's.
+ * The actions a signal of type `S` offers (see `signalActions`): `subscribe`
+ * for every signal, `fire` for a trigger, `update` for a writable signal,
+ * `toggle` too for a boolean one and `increment` for a number. A per-instance signal offers its instance's.
  */
 export type SignalActionsOf<S> = S extends // deno-lint-ignore no-explicit-any
 InstanceSignal<any, infer Instance, any> ? SignalActionsOf<Instance>
-  : typeof triggerSignal extends keyof S ? "fire"
+  : "subscribe" | SignalChangesOf<S>;
+
+/** The actions of `SignalActionsOf` that change the signal. */
+type SignalChangesOf<S> = typeof triggerSignal extends keyof S ? "fire"
   : typeof writableSignal extends keyof S ?
       | "update"
-      | (S extends Signal<infer Value>
-        ? [Value] extends [boolean] ? "toggle" : never
+      | (S extends Signal<infer Value> ? [Value] extends [boolean] ? "toggle"
+        : [Value] extends [number] ? "increment"
+        : never
         : never)
   : never;
 
 /**
- * The per-instance handles `perInstance` returns, one per signal it defines.
+ * The per-instance handles a `Scope` holds, one per signal it defines.
  * Nested per-instance signals keep their own level.
  */
 export type InstanceSignals<Definitions, Level extends string = never> = {
@@ -138,17 +146,79 @@ export type InstanceSignals<Definitions, Level extends string = never> = {
     : never;
 };
 
-/** What a `perInstance` callback may return: signals, or nested per-instance signals. */
+/** Type-only marker telling a `Scope` apart from the signals it holds. */
+declare const scopeSignals: unique symbol;
+
+/** Any `Scope`, as a factory or another `Scope` may return it. */
+type AnyScope = { readonly [scopeSignals]: true };
+
+/**
+ * What `new Scope(define)` makes: a per-instance handle for each signal
+ * `define` returns, so a computed beside it can read `scope.name.all`.
+ * Returned from the factory directly it is the unnamed level; returned
+ * under a key (`{ box: new Scope(...) }`) the level is named after the key.
+ * Either way its signals are exported under their own names.
+ */
+export type Scope<Definitions = Record<string, never>> =
+  & InstanceSignals<FlattenScopes<Definitions>>
+  & AnyScope;
+
+// deno-lint-ignore no-explicit-any
+type UnionToIntersection<U> = (U extends any ? (u: U) => void : never) extends
+  (i: infer I) => void ? I : never;
+
+/** The signals of a `Scope` returned under the key `Level`. */
+type Leveled<S, Level extends string> = {
+  [Name in keyof S as Name extends typeof scopeSignals ? never : Name]:
+    S[Name] extends { readonly [instanceLevel]?: infer Own }
+      ? [Exclude<Own, undefined>] extends [never]
+        // deno-lint-ignore no-explicit-any
+        ? S[Name] extends InstanceSignal<infer Value, infer Instance, any>
+          ? InstanceSignal<Value, Instance, Level>
+        : S[Name]
+      : S[Name]
+      : S[Name];
+};
+
+type Flattened<T> = { [Name in keyof T]: T[Name] };
+
+/** The signals of every `Scope` among `Definitions`, each of its key's level. */
+type ScopeMembers<Definitions> = UnionToIntersection<
+  {
+    [Name in keyof Definitions]: typeof scopeSignals extends
+      keyof Definitions[Name] ? Leveled<Definitions[Name], Name & string>
+      : never;
+  }[keyof Definitions]
+>;
+
+/**
+ * Definitions as a factory or a `Scope` exports them: each `Scope` among
+ * them replaced by its signals, of the level named after its key. A
+ * `Scope` returned directly is the unnamed level.
+ */
+export type FlattenScopes<Definitions> = typeof scopeSignals extends
+  keyof Definitions ? Omit<Definitions, typeof scopeSignals>
+  : Flattened<
+    & {
+      [
+        Name in keyof Definitions as typeof scopeSignals extends
+          keyof Definitions[Name] ? never : Name
+      ]: Definitions[Name];
+    }
+    & ScopeMembers<Definitions>
+  >;
+
+/** What a `Scope` callback may return: signals, nested per-instance signals and nested scopes. */
 export type InstanceDefinitions = Record<
   string,
   | ReadonlySignal<unknown>
   | InstanceSignal<unknown, ReadonlySignal<unknown>, string>
+  | AnyScope
 >;
 
 /**
- * The `perInstance` names used by a collection's signals: what
- * `instanceKeyFor` accepts. A named group counts once at least one of its
- * signals is returned from the factory.
+ * The named `Scope` levels of a collection's signals: the keys `scopes`
+ * accepts. A level counts once at least one of its signals is exported.
  */
 export type InstanceLevels<Definitions> = {
   [Name in keyof Definitions]: Definitions[Name] extends
@@ -213,34 +283,28 @@ export interface SignalTools {
   signalsFrom<Values extends Record<string, SignalValue>>(
     initialValues: Values,
   ): { [Key in keyof Values]: Signal<Values[Key]> };
-  /** Defines signals that every instance root gets its own copy of. */
-  perInstance: {
-    /**
-     * Defines signals that every instance root gets its own copy of. `define`
-     * runs once per instance, so `Signal`s and `Computed`s inside it see only
-     * that instance's values. Spread the result into the collection to export
-     * the signals by name. Roots carry `tt-instance={collection.instanceKey}`.
-     */
-    <Definitions extends InstanceDefinitions>(
-      define: () => Definitions,
-    ): InstanceSignals<Definitions>;
-    /**
-     * A named group, required when nested inside another `perInstance`: one
-     * group per parent instance, whose `.all` covers only the roots inside
-     * that parent. Roots carry `tt-instance={collection.instanceKeyFor(name)}`.
-     */
-    <const Level extends string, Definitions extends InstanceDefinitions>(
-      name: Level,
-      define: () => Definitions,
-    ): InstanceSignals<Definitions, Level>;
-  };
+  /**
+   * Defines signals that every instance root gets its own copy of. `define`
+   * runs once per instance, so `Signal`s and `Computed`s inside it see only
+   * that instance's values. Returned from the factory directly it is the
+   * unnamed level, whose roots carry `tt-instance={collection.instanceKey}`.
+   * Returned under a key (`{ box: new Scope(...) }`), from the factory or
+   * from another `Scope`, the level is named after the key and its roots
+   * carry `tt-instance={collection.scopes.box.key}`. A nested level has one
+   * group per parent instance, whose `.all` covers only the roots inside
+   * that parent. Either way its signals are exported by their own names.
+   */
+  Scope: new <Definitions extends InstanceDefinitions>(
+    define: () => Definitions,
+  ) => Scope<Definitions>;
 }
 
-/** What a Signals factory returns: its signals and per-instance signals. */
+/** What a Signals factory returns: its signals, per-instance signals and scopes. */
 export type SignalDefinitions = Record<
   string,
   | ReadonlySignal<unknown>
   | InstanceSignal<unknown, ReadonlySignal<unknown>, string>
+  | AnyScope
 >;
 
 /**
@@ -293,7 +357,7 @@ export type SignalValues<Definitions extends SignalDefinitions> = {
 
 /**
  * The values an instance root can start its instance with: the writable
- * signals of one `perInstance` level (`Level` is its name, `never` for the
+ * signals of one `Scope` level (`Level` is its name, `never` for the
  * unnamed top level). Seeds travel as JSON.
  */
 export type InstanceSeed<
@@ -314,6 +378,23 @@ export type InstanceSeed<
     : never;
 };
 
+/**
+ * The values `evaluateUsingInitialValues` can start a collection's instances
+ * from: writable signals of any level, each level taking its own names. A
+ * nested level starts fresh, so naming one of its signals throws when the
+ * evaluation runs.
+ */
+export type EvaluationSeed<Definitions extends SignalDefinitions> = {
+  [
+    Name in keyof Definitions as Definitions[Name] extends // deno-lint-ignore no-explicit-any
+    InstanceSignal<any, infer Instance, any>
+      ? typeof writableSignal extends keyof Instance ? Name : never
+      : never
+  ]?: Definitions[Name] extends // deno-lint-ignore no-explicit-any
+  InstanceSignal<infer Value, any, any> ? Value
+    : never;
+};
+
 // ============================================================================
 // Runtime
 //
@@ -321,7 +402,7 @@ export type InstanceSeed<
 // server and shipped to the browser as source (see `signalModules.ts`), split
 // into modules by feature so a page only loads what its collections use:
 // `Signal` and `signalsFrom` (always), `Computed`, `Trigger` and
-// `perInstance`. Each shipped function may therefore only use the DOM, `tiny`
+// `Scope`. Each shipped function may therefore only use the DOM, `tiny`
 // and the names its module declares or imports: see `signalModules.ts`.
 // ============================================================================
 
@@ -485,26 +566,25 @@ export class SignalInstance<Value = SignalValue> extends EventTarget
     this.value = !this.#value as Value;
   }
 
+  /** Adds 1 to a numeric signal (`onClick={signal.count.increment}`). */
+  increment(): void {
+    if (typeof this.#value !== "number") {
+      throw new TypeError(
+        `Only a numeric signal can be incremented: '${this.name}' holds a ${typeof this
+          .#value}.`,
+      );
+    }
+    this.value = (this.#value + 1) as Value;
+  }
+
   handleEvent(target: unknown, event?: Event | null): this {
     if (event?.type === "input" || event?.type === "change") {
       this.read(event.target as unknown as Control);
-    } else if (
-      (event?.type === "connect" || event?.type === "load") &&
-      target instanceof EventTarget
-    ) {
-      // Subscribing only listens: `onSignal` runs on the next change, not
-      // now. `load` is for `<body>` and the other elements the browser
-      // fires it on.
-      this.subscribe(target);
     } else if (event) {
-      // Any other event (a click, say) is counted, so subscribers run on
-      // each one and the value stays a change to notify about.
-      if (typeof this.#value !== "number") {
-        throw new TypeError(
-          `A signal bound to a ${event.type} event counts those events, so it must hold a number.`,
-        );
-      }
-      this.value = (this.#value + 1) as Value;
+      // Any other event (a click, say) needs an explicit action.
+      throw new TypeError(
+        `A signal does nothing on a ${event.type} event: use one of its actions (signal.${this.name}.subscribe, .increment, .toggle or .update).`,
+      );
     }
     return this;
   }
@@ -522,17 +602,20 @@ export function signalsFrom(
 
 /**
  * The signals of a shape, as `tiny.Signals(tools, define)` and its
- * `perInstance` return it: each function a computed whose `this` is the
+ * `Scope` return it: each function a computed whose `this` is the
  * shape's own signals, each initial value a writable signal, and anything
  * already built kept. Computeds run when built, so each is built when first
- * read: one may read a sibling declared after it. The classes are passed in
- * so the server can check a factory with inert computeds.
+ * read: one may read a sibling declared after it. A `Scope` in it is kept,
+ * so `this.box` is that Scope and `this.box.name` one of its signals; one
+ * returned instead of a shape is returned as it is. The classes are passed
+ * in so the server can check a factory with inert computeds.
  */
 export function shapeSignals(
   shape: Record<string, unknown>,
   Signal: new (value: unknown) => unknown,
   Computed: new (compute: () => unknown) => unknown,
 ): Record<string, unknown> {
+  if (Object.getPrototypeOf(shape) !== Object.prototype) return shape;
   const signals: Record<string, unknown> = {};
   const pending = new Map<string | symbol, () => unknown>();
   const own = new Proxy(signals, {
@@ -577,13 +660,12 @@ export class TriggerInstance extends SignalInstance<number> implements Trigger {
     throw new TypeError("Triggers have no value to set: call `fire()`.");
   }
 
-  /** Every event fires it, except the ones that subscribe. */
-  override handleEvent(target: unknown, event?: Event | null): this {
-    if (
-      (event?.type === "connect" || event?.type === "load") &&
-      target instanceof EventTarget
-    ) {
-      this.subscribe(target);
+  /** Every event fires it, except connect and load: those need `subscribe`. */
+  override handleEvent(_target: unknown, event?: Event | null): this {
+    if (event?.type === "connect" || event?.type === "load") {
+      throw new TypeError(
+        `A trigger does not subscribe on ${event.type}: use signal.${this.name}.subscribe.`,
+      );
     } else if (event) {
       this.fire();
     }
@@ -653,14 +735,14 @@ export class ComputedInstance<Value> extends SignalInstance<Value>
 type Graph = Record<string, SignalInstance<unknown> | InstanceSignalHandle>;
 
 /**
- * Where a `perInstance` call is running: `undefined` at the top of the
- * factory (instances span the document), `null` while building a detached
- * template (inert), or the instance root of the enclosing `perInstance`
- * (nested instances live inside it).
+ * Where a `Scope` is being made: `undefined` at the top of the factory
+ * (instances span the document), `null` while building a detached template
+ * (inert), or the instance root of the enclosing `Scope` (nested instances
+ * live inside it).
  */
 let currentScope: Element | null | undefined;
 
-/** @internal Runs `run` with `scope` as the current `perInstance` scope. */
+/** @internal Runs `run` with `scope` as the current `Scope` root. */
 export function withScope<Result>(
   scope: Element | null,
   run: () => Result,
@@ -675,7 +757,7 @@ export function withScope<Result>(
 }
 
 /**
- * @internal One `perInstance` call: a copy of its graph per instance root, created
+ * @internal One `Scope`: a copy of its graph per instance root, created
  * the first time something inside the root resolves one of its signals
  * (an `onConnect` or `onChange` reference). A nested call makes one group per
  * instance of its parent, holding only the roots inside that instance.
@@ -687,7 +769,10 @@ export function withScope<Result>(
  */
 export class InstanceGroup {
   #define: () => Graph;
-  #key: string;
+  /** The collection's instance key, which the level's key starts with. */
+  #base: string;
+  /** Set once the `Scope` is returned (see `flattenScopes`). */
+  #key: string | undefined;
   #scope: Element | null | undefined;
   #instances = new Map<Element, Graph>();
   /** Instances shared by linked elements, by link id. */
@@ -701,14 +786,37 @@ export class InstanceGroup {
 
   /** The `tt-instance` key of this group's roots. */
   get key(): string {
+    if (this.#key === undefined) {
+      throw new Error(
+        "These per-instance signals belong to a Scope that is not returned: return it from the factory, or under a key ({ box: new Scope(...) }).",
+      );
+    }
     return this.#key;
   }
 
-  constructor(define: () => Graph, key: string) {
-    this.#define = () => InstanceGroup.#named(define());
-    this.#key = key;
+  /** Whether the `Scope` has been returned, which gives its level a key. */
+  get named(): boolean {
+    return this.#key !== undefined;
+  }
+
+  constructor(define: () => Graph, instanceKey: string) {
+    this.#define = () => InstanceGroup.#named(flattenScopes(define(), true));
+    this.#base = instanceKey;
     this.#scope = currentScope;
     this.template = withScope(null, this.#define);
+  }
+
+  /**
+   * Keys the level: the collection's `instanceKey` for the unnamed level,
+   * `<instanceKey>-<level>` for one returned under the key `level`.
+   */
+  name(level?: string): void {
+    if (this.#key !== undefined) {
+      throw new TypeError(
+        `A Scope can be returned once; '${level ?? "it"}' returns it again.`,
+      );
+    }
+    this.#key = level ? `${this.#base}-${level}` : this.#base;
   }
 
   /**
@@ -718,17 +826,17 @@ export class InstanceGroup {
    * so a control outside a component can drive one of its instances.
    */
   instanceFor(element: Element): Graph {
-    const selector =
-      `[tt-instance~="${this.#key}"], [tt-link*="${this.#key}="]`;
+    const key = this.key;
+    const selector = `[tt-instance~="${key}"], [tt-link*="${key}="]`;
     let root = element?.closest?.(selector);
-    while (root && !root.matches(`[tt-instance~="${this.#key}"]`)) {
+    while (root && !root.matches(`[tt-instance~="${key}"]`)) {
       const link = this.#linkOf(root);
       if (link) return this.#linkedGraph(link, root);
       root = root.parentElement?.closest(selector) ?? null;
     }
     if (!root || (this.#scope && !this.#scope.contains(root))) {
       throw new Error(
-        `Per-instance signals must be used inside an instance root: an element with tt-instance="${this.#key}" (the collection's \`instanceKey\`, or \`instanceKeyFor(name)\` for a named perInstance).`,
+        `Per-instance signals must be used inside an instance root: an element with tt-instance="${key}" (the collection's \`instanceKey\`, or \`scopes.<name>.key\` for a Scope returned under a key).`,
       );
     }
     let graph = this.#instances.get(root);
@@ -750,7 +858,7 @@ export class InstanceGroup {
 
   /** The link id `element`'s `tt-link` gives this group, if any. */
   #linkOf(element: Element): string | undefined {
-    const prefix = `${this.#key}=`;
+    const prefix = `${this.key}=`;
     return element.getAttribute("tt-link")?.split(/\s+/)
       .find((token) => token.startsWith(prefix))?.slice(prefix.length);
   }
@@ -780,7 +888,7 @@ export class InstanceGroup {
       try {
         InstanceGroup.#write(
           graph,
-          JSON.parse(seed)?.[this.#key] ?? {},
+          JSON.parse(seed)?.[this.key] ?? {},
           (message) => console.error(message),
         );
       } catch {
@@ -831,7 +939,7 @@ export class InstanceGroup {
       const signal = graph[name];
       if (signal?.constructor !== SignalInstance) {
         report(
-          `Cannot seed '${name}': it is not a writable signal of this perInstance level.`,
+          `Cannot seed '${name}': it is not a writable signal of this Scope level.`,
         );
         continue;
       }
@@ -842,7 +950,7 @@ export class InstanceGroup {
   aggregate(name: string): SignalInstance<unknown[]> {
     if (this.template[name] instanceof InstanceSignalHandle) {
       throw new TypeError(
-        "`.all` is not available for a nested per-instance signal here: read it inside the enclosing perInstance, where it covers that instance.",
+        "`.all` is not available for a nested per-instance signal here: read it inside the enclosing Scope, where it covers that instance.",
       );
     }
     let aggregate = this.#aggregates.get(name);
@@ -986,6 +1094,11 @@ export class InstanceSignalHandle<Value = unknown>
     this.forInstance(target as Element).toggle();
   }
 
+  /** `signal.name.increment`, on the instance enclosing the element. */
+  increment(target: unknown): void {
+    this.forInstance(target as Element).increment();
+  }
+
   /** `signal.name.fire`, on the instance enclosing the element. */
   fire(target: unknown): void {
     (this.forInstance(target as Element) as unknown as TriggerInstance).fire();
@@ -999,57 +1112,116 @@ export class InstanceSignalHandle<Value = unknown>
 
 /**
  * @internal The actions a signal offers in JSX for its kind, as
- * `signal.name.<action>`: `fire` for triggers, `update` for writable
- * signals and `toggle` too for boolean ones. Read from a factory's
+ * `signal.name.<action>`: `subscribe` for every signal, `fire` for triggers,
+ * `update` for writable signals, `toggle` too for boolean ones and
+ * `increment` for numbers. Read from a factory's
  * server-side (inert) run, where computeds are not `SignalInstance` itself.
  */
 export function signalActions(signal: unknown): SignalAction[] {
   if (signal instanceof InstanceSignalHandle) {
     return signalActions(signal.templateSignal);
   }
-  if (signal instanceof TriggerInstance) return ["fire"];
-  if (signal?.constructor !== SignalInstance) return [];
-  return typeof (signal as SignalInstance<unknown>).value === "boolean"
-    ? ["update", "toggle"]
-    : ["update"];
+  if (signal instanceof TriggerInstance) return ["subscribe", "fire"];
+  if (signal?.constructor !== SignalInstance) return ["subscribe"];
+  const value = (signal as SignalInstance<unknown>).value;
+  return typeof value === "boolean"
+    ? ["subscribe", "update", "toggle"]
+    : typeof value === "number"
+    ? ["subscribe", "update", "increment"]
+    : ["subscribe", "update"];
 }
 
 /**
- * The `perInstance` of the collection whose instance roots carry
- * `instanceKey` (named levels carry `<instanceKey>-<name>`).
+ * A `Scope`: one per-instance handle per signal its callback returns, kept
+ * as its own properties so a computed beside it reads `scope.name.all`.
+ * Its level has no key until it is returned (see `flattenScopes`).
  */
-export function perInstanceFor(
-  instanceKey: string,
-): SignalTools["perInstance"] {
-  return ((
-    ...args: [define: () => Graph] | [name: string, define: () => Graph]
-  ): Record<string, InstanceSignalHandle> => {
-    const [name, define] = args.length === 2 ? args : [undefined, args[0]];
-    if (currentScope !== undefined && !name) {
-      throw new TypeError(
-        'A nested perInstance needs a name, e.g. perInstance("layer", () => ...), so its roots can be told apart from its parent\'s.',
-      );
-    }
-    const group = new InstanceGroup(
-      define,
-      name ? `${instanceKey}-${name}` : instanceKey,
-    );
+export class ScopeInstance {
+  #group: InstanceGroup;
+
+  constructor(instanceKey: string, define: () => Graph) {
+    const group = new InstanceGroup(define, instanceKey);
     for (const signal of Object.values(group.template)) {
       if (
         !(signal instanceof SignalInstance) &&
         !(signal instanceof InstanceSignalHandle)
       ) {
         throw new TypeError(
-          "perInstance must synchronously return an object of Signal, Computed or nested perInstance signals.",
+          "A Scope's callback must synchronously return an object of Signal, Computed or nested Scope signals.",
         );
       }
     }
-    return Object.fromEntries(
-      Object.keys(group.template).map((
-        signalName,
-      ) => [signalName, new InstanceSignalHandle(group, signalName)]),
-    );
-  }) as unknown as SignalTools["perInstance"];
+    this.#group = group;
+    for (const name of Object.keys(group.template)) {
+      (this as Record<string, unknown>)[name] = new InstanceSignalHandle(
+        group,
+        name,
+      );
+    }
+  }
+
+  /** @internal The group of `scope`'s level. */
+  static groupOf(scope: ScopeInstance): InstanceGroup {
+    return scope.#group;
+  }
+}
+
+/**
+ * The `Scope` of the collection whose instance roots carry `instanceKey`
+ * (named levels carry `<instanceKey>-<name>`).
+ */
+export function scopeFor(instanceKey: string): SignalTools["Scope"] {
+  return class Scope extends ScopeInstance {
+    constructor(define: () => Graph) {
+      super(instanceKey, define);
+    }
+  } as unknown as SignalTools["Scope"];
+}
+
+/**
+ * What a factory (or, with `nested`, a `Scope`'s callback) returned, as it
+ * is exported: each `Scope` in it replaced by its signals, its level named
+ * after its key. A `Scope` returned directly is the unnamed level, which
+ * only the factory may return. Anything that is not an object is left for
+ * the caller to reject.
+ */
+export function flattenScopes(definitions: unknown, nested = false): Graph {
+  if (
+    !definitions || typeof definitions !== "object" ||
+    definitions instanceof Promise
+  ) {
+    return definitions as Graph;
+  }
+  if (definitions instanceof ScopeInstance) {
+    if (nested) {
+      throw new TypeError(
+        "A nested Scope must be returned under a key, e.g. { box: new Scope(() => ...) }, so its roots can be told apart from its parent's.",
+      );
+    }
+    ScopeInstance.groupOf(definitions).name();
+    return { ...definitions } as Graph;
+  }
+  const flat: Graph = {};
+  for (const [key, value] of Object.entries(definitions)) {
+    if (value instanceof ScopeInstance) ScopeInstance.groupOf(value).name(key);
+    const entries = value instanceof ScopeInstance
+      ? Object.entries(value)
+      : [[key, value]];
+    for (const [name, signal] of entries) {
+      if (Object.hasOwn(flat, name)) {
+        throw new TypeError(
+          `'${name}' is defined twice: each signal, including those of every Scope returned, needs its own name.`,
+        );
+      }
+      if (signal instanceof InstanceSignalHandle && !signal.group.named) {
+        throw new TypeError(
+          `'${name}' belongs to a Scope that is spread or copied: return the Scope itself, under a key ({ box: new Scope(...) }).`,
+        );
+      }
+      flat[name] = signal;
+    }
+  }
+  return flat;
 }
 
 /**
@@ -1087,7 +1259,7 @@ export function signalClasses(
         "Computed"
       ],
     signalsFrom: signalsFrom as SignalTools["signalsFrom"],
-    perInstance: perInstanceFor(instanceKey),
+    Scope: scopeFor(instanceKey),
     InstanceSignal: InstanceSignalHandle,
     shapeSignals,
   };

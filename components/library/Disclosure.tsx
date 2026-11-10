@@ -21,9 +21,9 @@
  */
 
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
-import { h } from "../../jsx-runtime.ts";
+import { h, type JSX } from "../../jsx-runtime.ts";
 import {
-  type InstancedComponent,
+  type ExposedSignals,
   type InstanceSignals,
   optimized,
   type Signal,
@@ -35,8 +35,8 @@ import type { SignalEvent } from "../../handlers/signals.ts";
 const tiny = optimized(import.meta.url);
 
 /** Whether the section is open, one per instance. */
-const disclosureSignals = new tiny.Signals(({ Signal, perInstance }) =>
-  perInstance(() => ({ open: new Signal<boolean>(false) }))
+const disclosureSignals = new tiny.Signals(({ Signal, Scope }) =>
+  new Scope(() => ({ open: new Signal<boolean>(false) }))
 );
 
 const disclosureHandlers = new tiny.Handlers(async () => {
@@ -101,7 +101,7 @@ const disclosureStyles = new tiny.Styles({
   `,
 });
 
-/** The signals the disclosure's parts expose. */
+/** The signals a disclosure exposes. */
 type DisclosureExposed = InstanceSignals<{ open: Signal<boolean> }>;
 
 /** What `Details` takes. */
@@ -124,48 +124,47 @@ type ToggleProps = { children?: unknown; label?: string };
 
 /**
  * `Details` is the section, its `summary` the always-visible line that opens
- * it. `Toggle` is a button opening and closing it from elsewhere. Both
- * expose `signal.open`, which opens the section when set true.
+ * it. `Toggle` is a button opening and closing it from elsewhere. The
+ * disclosure exposes `signal.open`, which opens the section when set true.
  */
 export const DisclosureSignalComponent: SignalComponent<{
-  Details: InstancedComponent<DisclosureExposed, DetailsProps>;
-  Toggle: InstancedComponent<DisclosureExposed, ToggleProps>;
+  signal: ExposedSignals<DisclosureExposed>;
+  Details: (props: DetailsProps) => JSX.Element;
+  Toggle: (props: ToggleProps) => JSX.Element;
 }> = new tiny.SignalComponent(
-  async ({ instanced }) => {
+  async () => {
     const { fn, signal, styled } = await tiny.imports(
       disclosureSignals,
       disclosureHandlers,
       disclosureStyles,
     );
     return {
-      Details: instanced((props: DetailsProps) => (
+      signal: [signal.open],
+      Details: (props: DetailsProps) => (
         <details
           open={props.open}
           name={props.name}
           data-remember={props.remember}
-          onConnect={[signal.open, fn.adoptDetails]}
+          onConnect={[signal.open.subscribe, fn.adoptDetails]}
           onSignal={fn.showDetails}
           onToggle={fn.detailsToggled}
         >
           <summary>{props.summary}</summary>
           {props.children}
         </details>
-      ), [signal.open]),
-      Toggle: instanced(
-        (props: ToggleProps) => (
-          <button
-            type="button"
-            class={styled.toggle}
-            aria-expanded="false"
-            aria-label={props.label}
-            onConnect={[signal.open, fn.showExpanded]}
-            onSignal={fn.showExpanded}
-            onClick={fn.toggleDetails}
-          >
-            {props.children ?? "Toggle"}
-          </button>
-        ),
-        [signal.open],
+      ),
+      Toggle: (props: ToggleProps) => (
+        <button
+          type="button"
+          class={styled.toggle}
+          aria-expanded="false"
+          aria-label={props.label}
+          onConnect={[signal.open.subscribe, fn.showExpanded]}
+          onSignal={fn.showExpanded}
+          onClick={fn.toggleDetails}
+        >
+          {props.children ?? "Toggle"}
+        </button>
       ),
     };
   },

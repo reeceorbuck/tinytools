@@ -34,7 +34,7 @@
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
 import { h, type JSX } from "../../jsx-runtime.ts";
 import {
-  type InstancedComponent,
+  type ExposedSignals,
   type InstanceSignals,
   optimized,
   type Signal,
@@ -50,8 +50,8 @@ const tiny = optimized(import.meta.url);
  * Per instance: the slide at the start of the track, how many there are,
  * whether it wraps around, and whether it is moving on by itself.
  */
-const carouselSignals = new tiny.Signals(({ Signal, Computed, perInstance }) =>
-  perInstance(() => {
+const carouselSignals = new tiny.Signals(({ Signal, Computed, Scope }) =>
+  new Scope(() => {
     const index = new Signal(0);
     const count = new Signal(0);
     const loop = new Signal<boolean>(false);
@@ -82,7 +82,7 @@ const carouselSignals = new tiny.Signals(({ Signal, Computed, perInstance }) =>
   })
 );
 
-/** The signals the carousel's parts expose. */
+/** The signals a carousel exposes. */
 type CarouselExposed = InstanceSignals<{
   index: Signal<number>;
   count: Signal<number>;
@@ -347,19 +347,21 @@ const carouselStyles = new tiny.Styles({
 
 /**
  * `Track` holds the `Slide`s; `Previous`, `Next`, `Dots`, `Status` and
- * `Play` sit anywhere around it. All expose `signal.index`, the slide at the
- * track's start, which scrolls there when set, and `signal.count`.
+ * `Play` sit anywhere around it. The carousel exposes `signal.index`, the
+ * slide at the track's start, which scrolls there when set, and
+ * `signal.count`.
  */
 export const CarouselSignalComponent: SignalComponent<{
-  Track: InstancedComponent<CarouselExposed, TrackProps>;
+  signal: ExposedSignals<CarouselExposed>;
+  Track: (props: TrackProps) => JSX.Element;
   Slide: (props: SlideProps) => JSX.Element;
-  Previous: InstancedComponent<CarouselExposed, StepButtonProps>;
-  Next: InstancedComponent<CarouselExposed, StepButtonProps>;
-  Dots: InstancedComponent<CarouselExposed, DotsProps>;
-  Status: InstancedComponent<CarouselExposed, Record<never, never>>;
-  Play: InstancedComponent<CarouselExposed, Record<never, never>>;
+  Previous: (props: StepButtonProps) => JSX.Element;
+  Next: (props: StepButtonProps) => JSX.Element;
+  Dots: (props: DotsProps) => JSX.Element;
+  Status: () => JSX.Element;
+  Play: () => JSX.Element;
 }> = new tiny.SignalComponent(
-  async ({ instanced }) => {
+  async () => {
     const { fn, signal, styled } = await tiny.imports(
       carouselSignals,
       carouselHandlers,
@@ -368,9 +370,9 @@ export const CarouselSignalComponent: SignalComponent<{
     );
     // Controls placed after the track connect once it has changed these
     // signals, so each catches up with `fireSelfSignal`.
-    const exposed = [signal.index, signal.count];
     return {
-      Track: instanced((props: TrackProps) => (
+      signal: [signal.index, signal.count],
+      Track: (props: TrackProps) => (
         <div
           role="region"
           aria-roledescription="carousel"
@@ -379,13 +381,17 @@ export const CarouselSignalComponent: SignalComponent<{
           tabindex="0"
           data-loop={props.loop ? "" : undefined}
           data-autoplay={props.autoplay ? String(props.autoplay) : undefined}
-          onConnect={[signal.index, signal.playing, fn.adoptTrack]}
+          onConnect={[
+            signal.index.subscribe,
+            signal.playing.subscribe,
+            fn.adoptTrack,
+          ]}
           onSignal={fn.showSlide}
           onScroll={fn.trackScrolled}
         >
           {props.children}
         </div>
-      ), exposed),
+      ),
       Slide: (props: SlideProps) => (
         <div
           role="group"
@@ -397,61 +403,62 @@ export const CarouselSignalComponent: SignalComponent<{
           {props.children}
         </div>
       ),
-      Previous: instanced((props: StepButtonProps) => (
+      Previous: (props: StepButtonProps) => (
         <button
           type="button"
           class={styled.button}
           aria-label="Previous slide"
           disabled={signal.atStart}
-          onConnect={[signal.atStart, fn.fireSelfSignal]}
+          onConnect={[signal.atStart.subscribe, fn.fireSelfSignal]}
           onClick={fn.previousSlide}
         >
           {props.children ?? "‹"}
         </button>
-      ), exposed),
-      Next: instanced((props: StepButtonProps) => (
+      ),
+      Next: (props: StepButtonProps) => (
         <button
           type="button"
           class={styled.button}
           aria-label="Next slide"
           disabled={signal.atEnd}
-          onConnect={[signal.atEnd, fn.fireSelfSignal]}
+          onConnect={[signal.atEnd.subscribe, fn.fireSelfSignal]}
           onClick={fn.nextSlide}
         >
           {props.children ?? "›"}
         </button>
-      ), exposed),
-      Dots: instanced((props: DotsProps) => (
+      ),
+      Dots: (props: DotsProps) => (
         <div
           role="group"
           class={styled.dots}
           aria-label={props.label ?? "Choose a slide"}
-          onConnect={[signal.count, signal.index, fn.showDots]}
+          onConnect={[
+            signal.count.subscribe,
+            signal.index.subscribe,
+            fn.showDots,
+          ]}
           onSignal={fn.showDots}
           onClick={fn.chooseDot}
         />
-      ), exposed),
-      Status: instanced(
-        () => (
-          <output
-            aria-live="polite"
-            onConnect={[signal.summary, fn.fireSelfSignal]}
-            onSignal={fn.setTextContent}
-          />
-        ),
-        exposed,
       ),
-      Play: instanced(() => (
+      Status: () => (
+        <output
+          aria-live="polite"
+          onConnect={[signal.summary.subscribe, fn.fireSelfSignal]}
+          onSignal={fn.setTextContent}
+        />
+      ),
+      Play: () => (
         <button
           type="button"
           class={styled.play}
-          onConnect={[signal.playLabel, fn.fireSelfSignal]}
+          onConnect={[signal.playLabel.subscribe, fn.fireSelfSignal]}
           onSignal={fn.setTextContent}
           onClick={fn.togglePlay}
         >
           Play
         </button>
-      ), exposed),
+      ),
     };
   },
 );

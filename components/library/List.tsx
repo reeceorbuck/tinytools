@@ -58,8 +58,8 @@ type PendingItem = { label: string; dismissable: boolean };
  * add parts append to it and the list moves them into items, so they meet
  * only through the signal, wherever each sits on the page.
  */
-const listSignals = new tiny.Signals(({ Signal, perInstance }) =>
-  perInstance(() => ({ pending: new Signal<PendingItem[]>([]) }))
+const listSignals = new tiny.Signals(({ Signal, Scope }) =>
+  new Scope(() => ({ pending: new Signal<PendingItem[]>([]) }))
 );
 
 const listStyles = new tiny.Styles({
@@ -438,7 +438,7 @@ export const ListSignalComponent: SignalComponent<{
         "data-item-class": styled.listItem,
         "data-dismiss-class": styled.dismissButton,
         "data-announcer-class": styled.announcer,
-        onConnect: [signal.pending, fn.refreshList],
+        onConnect: [signal.pending.subscribe, fn.refreshList],
         onSignal: fn.refreshList,
         onClick: fn.dismissItem,
         ...(reorderable ? sorting : {}),

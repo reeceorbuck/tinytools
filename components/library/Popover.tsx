@@ -50,8 +50,8 @@
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
 import { h, type JSX } from "../../jsx-runtime.ts";
 import {
+  type ExposedSignals,
   type HandlerProp,
-  type InstancedComponent,
   type InstanceSignals,
   optimized,
   type Signal,
@@ -66,8 +66,8 @@ const tiny = optimized(import.meta.url);
  * Per instance: whether the content is open, and its id, which the content
  * writes as it connects and the triggers take as their `popovertarget`.
  */
-const popoverSignals = new tiny.Signals(({ Signal, perInstance }) =>
-  perInstance(() => ({
+const popoverSignals = new tiny.Signals(({ Signal, Scope }) =>
+  new Scope(() => ({
     open: new Signal<boolean>(false),
     target: new Signal(""),
   }))
@@ -332,7 +332,7 @@ const popoverStyles = new tiny.Styles({
   `,
 });
 
-/** The signals `Trigger`, `Content` and `Close` expose. */
+/** The signals a popover exposes. */
 type PopoverExposed = InstanceSignals<{ open: Signal<boolean> }>;
 
 /** What `Trigger` takes. */
@@ -394,37 +394,39 @@ type ItemProps = {
 /**
  * `Trigger` opens and closes the `Content`, wherever each sits; `Close`
  * closes it from inside. A menu's `Item`s are links or buttons of the
- * caller's, and `Separator` divides them. `Trigger`, `Content` and `Close`
- * expose `signal.open`, which opens the content when set true.
+ * caller's, and `Separator` divides them. The popover exposes
+ * `signal.open`, which opens the content when set true.
  */
 export const PopoverSignalComponent: SignalComponent<{
-  Trigger: InstancedComponent<PopoverExposed, TriggerProps>;
-  Content: InstancedComponent<PopoverExposed, ContentProps>;
-  Close: InstancedComponent<PopoverExposed, CloseProps>;
+  signal: ExposedSignals<PopoverExposed>;
+  Trigger: (props: TriggerProps) => JSX.Element;
+  Content: (props: ContentProps) => JSX.Element;
+  Close: (props: CloseProps) => JSX.Element;
   Item: (props: ItemProps) => JSX.Element;
   Separator: JSX.Element;
 }> = new tiny.SignalComponent(
-  async ({ instanced }) => {
+  async () => {
     const { fn, signal, styled } = await tiny.imports(
       popoverSignals,
       popoverHandlers,
       popoverStyles,
     );
     return {
-      Trigger: instanced((props: TriggerProps) => (
+      signal: [signal.open],
+      Trigger: (props: TriggerProps) => (
         <button
           type="button"
           class={styled.mergeClasses(styled.scripted, props.class)}
           aria-haspopup={props.menu ? "menu" : undefined}
           aria-label={props.label}
           title={props.label}
-          onConnect={[signal.target, fn.linkTrigger]}
+          onConnect={[signal.target.subscribe, fn.linkTrigger]}
           onSignal={fn.linkTrigger}
         >
           {props.children ?? "Open"}
         </button>
-      ), [signal.open]),
-      Content: instanced((props: ContentProps) => (
+      ),
+      Content: (props: ContentProps) => (
         <div
           popover={props.holdsPickers ? "manual" : "auto"}
           id={props.id}
@@ -435,7 +437,7 @@ export const PopoverSignalComponent: SignalComponent<{
           data-match-trigger-width={props.matchTriggerWidth ? "" : undefined}
           data-center-when-narrow={props.centerWhenNarrow ? "" : undefined}
           data-tall={props.tall ? "" : undefined}
-          onConnect={[signal.open, fn.adoptContent]}
+          onConnect={[signal.open.subscribe, fn.adoptContent]}
           onSignal={fn.showContent}
           onBeforeToggle={fn.placeContent}
           onToggle={fn.contentToggled}
@@ -444,18 +446,15 @@ export const PopoverSignalComponent: SignalComponent<{
         >
           {props.children}
         </div>
-      ), [signal.open]),
-      Close: instanced(
-        (props: CloseProps) => (
-          <button
-            type="button"
-            aria-label={props.label}
-            onClick={fn.closePopover}
-          >
-            {props.children ?? "Close"}
-          </button>
-        ),
-        [signal.open],
+      ),
+      Close: (props: CloseProps) => (
+        <button
+          type="button"
+          aria-label={props.label}
+          onClick={fn.closePopover}
+        >
+          {props.children ?? "Close"}
+        </button>
       ),
       Item: (props: ItemProps) =>
         props.href

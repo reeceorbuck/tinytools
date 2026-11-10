@@ -2,7 +2,7 @@
  * The signal runtime as browser modules, one per feature, so a page loads
  * only the parts its collections use: `tt-signal` (`Signal`, `signalsFrom`
  * and dependency tracking) always, and `tt-computed`, `tt-trigger` and
- * `tt-instance` (`perInstance`) only for collections whose factory takes
+ * `tt-instance` (`Scope`) only for collections whose factory takes
  * them, and `tt-shape` only for those written as `tiny.Signals(tools, define)`. Each module is built from the runtime in `signals.ts` with
  * `toString()`, so the server runs exactly the code the browser gets.
  *
@@ -12,11 +12,13 @@
 import { compactSource, sourceHash } from "./lifecycleElement.ts";
 import {
   ComputedInstance,
+  flattenScopes,
   InstanceGroup,
   InstanceSignalHandle,
-  perInstanceFor,
   readControl,
   sameValue,
+  scopeFor,
+  ScopeInstance,
   shapeSignals,
   SignalInstance,
   signalsFrom,
@@ -76,7 +78,7 @@ const instanceModule = runtimeModule("instance", {
   imports: [[signalModule, ["SignalInstance", "untracked"]]],
   state: "let currentScope;",
   internal: [withScope, InstanceGroup],
-  exported: [InstanceSignalHandle, perInstanceFor],
+  exported: [InstanceSignalHandle, ScopeInstance, scopeFor, flattenScopes],
 });
 
 const shapeModule = runtimeModule("shape", { exported: [shapeSignals] });
@@ -108,7 +110,7 @@ const toolSources = {
   Computed: [computedModule, "ComputedInstance"],
   Trigger: [triggerModule, "TriggerInstance"],
   // Called with the collection's instance key (see `toolBinding`).
-  perInstance: [instanceModule, "perInstanceFor"],
+  Scope: [instanceModule, "scopeFor"],
 } as const satisfies Record<string, [RuntimeModule, string]>;
 
 type ToolName = keyof typeof toolSources;
@@ -144,12 +146,13 @@ function destructuredTools(
  * that does not destructure gets every tool as one object, `const <parameter>
  * = { ... }`; with no parameter at all (a factory the bundle calls rather
  * than inlines), `tools` is that object, to pass. Returns the code and the
- * runtime files it imports.
+ * runtime files it imports, and with `Scope` among the tools, `flatten`:
+ * what to call the factory's result with to lift out the scopes it returns.
  */
 export function signalToolsPrelude(
   parameter: string | undefined,
   instanceKey: string,
-): { code: string; files: string[]; tools?: string } {
+): { code: string; files: string[]; tools?: string; flatten?: string } {
   if (parameter !== undefined && !parameter.trim()) {
     return { code: "", files: [] };
   }
@@ -167,16 +170,20 @@ export function signalToolsPrelude(
   const declarations: string[] = [];
   for (const [tool, local] of tools) {
     const [module, exported] = toolSources[tool];
-    const binding = tool === "perInstance" ? `__tiny_${exported}` : local;
+    const binding = tool === "Scope" ? `__tiny_${exported}` : local;
     const specifier = exported === binding
       ? exported
       : `${exported} as ${binding}`;
     imports.set(module, [...imports.get(module) ?? [], specifier]);
-    if (tool === "perInstance") {
+    if (tool === "Scope") {
       declarations.push(
         `const ${local} = ${binding}(${JSON.stringify(instanceKey)});`,
       );
     }
+  }
+  const flatten = tools.has("Scope") ? "__tiny_flattenScopes" : undefined;
+  if (flatten) {
+    imports.get(instanceModule)!.push(`flattenScopes as ${flatten}`);
   }
   const object = destructured
     ? undefined
@@ -195,5 +202,6 @@ export function signalToolsPrelude(
     ].join("\n"),
     files: [...imports.keys()].map((module) => module.file),
     tools: parameter === undefined ? object : undefined,
+    flatten,
   };
 }

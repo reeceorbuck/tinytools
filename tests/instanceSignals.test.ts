@@ -1,10 +1,21 @@
 import { assertEquals, assertThrows } from "@std/assert";
 import { parseHTML } from "linkedom";
-import { signalClasses } from "../signals.ts";
+import {
+  type FlattenScopes,
+  flattenScopes,
+  signalClasses,
+} from "../signals.ts";
 import { Signals } from "../clientTools.ts";
 
 const key = "layers_test";
 const root = `tt-instance="${key}"`;
+/** `layerGraph` returns its scope under `layer`, so that level is named. */
+const layerKey = `${key}-layer`;
+const layers = `tt-instance="${layerKey}"`;
+
+/** What a factory returning `definitions` exports, as a collection does. */
+const exported = <Definitions>(definitions: Definitions) =>
+  flattenScopes(definitions) as unknown as FlattenScopes<Definitions>;
 
 /** Installs a linkedom document as the global one the signal runtime reads. */
 function installDocument(body: string) {
@@ -24,8 +35,8 @@ function uninstallDocument() {
 
 /** A layer collection: per-instance material/shade plus an aggregate. */
 function layerGraph() {
-  const { Signal, Computed, perInstance } = signalClasses(true, key);
-  const layer = perInstance(() => {
+  const { Signal, Computed, Scope } = signalClasses(true, key);
+  const layer = new Scope(() => {
     const material = new Signal<string>("bulk");
     const shade = new Signal<string>("A3");
     const description = new Computed(
@@ -38,7 +49,7 @@ function layerGraph() {
     () => layer.description.all.value.join("; "),
     [layer.description.all],
   );
-  return { ...layer, summary };
+  return exported({ layer, summary });
 }
 
 const change = (value: string) =>
@@ -51,8 +62,8 @@ Deno.test("per-instance signals resolve to the enclosing instance root", () => {
   // Roots of another collection around and alongside these are ignored.
   const byId = installDocument(`
     <div tt-instance="notes_test">
-      <fieldset id="one" ${root}><select id="a"></select></fieldset>
-      <fieldset id="two" tt-instance="notes_test ${key}">
+      <fieldset id="one" ${layers}><select id="a"></select></fieldset>
+      <fieldset id="two" tt-instance="notes_test ${layerKey}">
         <select id="b"></select>
       </fieldset>
       <select id="outside"></select>
@@ -70,7 +81,7 @@ Deno.test("per-instance signals resolve to the enclosing instance root", () => {
 
     assertEquals(material.forInstance(a).value, "flow");
     assertEquals(material.forInstance(b).value, "bulk");
-    // Computeds inside perInstance see only their own instance.
+    // Computeds inside a Scope see only their own instance.
     assertEquals(description.forInstance(a).value, "flow A3");
     assertEquals(description.forInstance(b).value, "bulk A3");
     // The root itself belongs to its instance.
@@ -98,20 +109,22 @@ Deno.test("tt-link shares an enclosing level between roots anywhere on the page"
     <p id="c" tt-instance="${key}-own" tt-link="${key}=g2"></p>
     <section ${root}><p id="d" tt-instance="${key}-own"></p></section>`);
   try {
-    const { Signal, Computed, perInstance } = signalClasses(true, key);
-    const { tint, count, label } = perInstance(() => {
-      const tint = new Signal("grey");
-      return {
-        tint,
-        ...perInstance("own", () => {
-          const count = new Signal(0);
-          return {
-            count,
-            label: new Computed(() => `${tint.value} ${count.value}`),
-          };
-        }),
-      };
-    });
+    const { Signal, Computed, Scope } = signalClasses(true, key);
+    const { tint, count, label } = exported(
+      new Scope(() => {
+        const tint = new Signal("grey");
+        return {
+          tint,
+          own: new Scope(() => {
+            const count = new Signal(0);
+            return {
+              count,
+              label: new Computed(() => `${tint.value} ${count.value}`),
+            };
+          }),
+        };
+      }),
+    );
     tint.forInstance(byId("a")).value = "red";
     // Linked roots share the enclosing level but keep their own level.
     assertEquals(tint.forInstance(byId("b")).value, "red");
@@ -134,8 +147,8 @@ Deno.test("tt-link alone makes separate elements one instance of a single level"
     <button id="up" tt-link="${key}=c1"></button>
     <button id="other" tt-link="${key}=c2"></button>`);
   try {
-    const { Signal, perInstance } = signalClasses(true, key);
-    const { count } = perInstance(() => ({ count: new Signal(0) }));
+    const { Signal, Scope } = signalClasses(true, key);
+    const { count } = exported(new Scope(() => ({ count: new Signal(0) })));
     count.forInstance(byId("up")).value = 3;
     assertEquals(count.forInstance(byId("display")).value, 3);
     assertEquals(count.forInstance(byId("other")).value, 0);
@@ -151,11 +164,13 @@ Deno.test("tt-link links an inner level by copy inside a linked outer level", ()
     <p id="button" ${link("g.0")}></p>
     <p id="other" ${link("g.1")}></p>`);
   try {
-    const { Signal, perInstance } = signalClasses(true, key);
-    const { tint, count } = perInstance(() => ({
-      tint: new Signal("grey"),
-      ...perInstance("own", () => ({ count: new Signal(0) })),
-    }));
+    const { Signal, Scope } = signalClasses(true, key);
+    const { tint, count } = exported(
+      new Scope(() => ({
+        tint: new Signal("grey"),
+        own: new Scope(() => ({ count: new Signal(0) })),
+      })),
+    );
     // One copy's parts share its own level.
     count.forInstance(byId("button")).value = 4;
     assertEquals(count.forInstance(byId("box")).value, 4);
@@ -171,8 +186,8 @@ Deno.test("tt-link links an inner level by copy inside a linked outer level", ()
 Deno.test("`.all` aggregates every resolved instance in document order", () => {
   const byId = installDocument(`
     <div id="list">
-      <fieldset id="one" ${root}><select id="a"></select></fieldset>
-      <fieldset id="two" ${root}><select id="b"></select></fieldset>
+      <fieldset id="one" ${layers}><select id="a"></select></fieldset>
+      <fieldset id="two" ${layers}><select id="b"></select></fieldset>
     </div>`);
   try {
     const { shade, material, summary } = layerGraph();
@@ -193,7 +208,7 @@ Deno.test("`.all` aggregates every resolved instance in document order", () => {
     // Later roots join in document order, wherever they are inserted.
     byId("list").insertAdjacentHTML(
       "afterbegin",
-      `<fieldset id="zero" ${root}><select id="z"></select></fieldset>`,
+      `<fieldset id="zero" ${layers}><select id="z"></select></fieldset>`,
     );
     material.forInstance(byId("z")).value = "flow";
     assertEquals(summary.value, "flow A3; bulk A3; bulk B1");
@@ -201,7 +216,7 @@ Deno.test("`.all` aggregates every resolved instance in document order", () => {
     // An upgraded root (one with an abortController) leaves when it aborts.
     const controller = new AbortController();
     const upgraded = byId("list").ownerDocument.createElement("fieldset");
-    upgraded.setAttribute("tt-instance", key);
+    upgraded.setAttribute("tt-instance", layerKey);
     upgraded.innerHTML = `<select id="u"></select>`;
     Object.assign(upgraded, { abortController: controller });
     byId("list").append(upgraded);
@@ -229,7 +244,7 @@ Deno.test("an aborted root re-inserted later resumes its instance", () => {
     const document = byId("list").ownerDocument;
     const upgrade = (id: string) => {
       const root = document.createElement("fieldset");
-      root.setAttribute("tt-instance", key);
+      root.setAttribute("tt-instance", layerKey);
       root.innerHTML = `<select id="${id}"></select>`;
       // As a lifecycle element: a new controller on every connection.
       return Object.assign(root, { abortController: new AbortController() });
@@ -268,8 +283,10 @@ Deno.test("an aborted root re-inserted later resumes its instance", () => {
 });
 
 Deno.test("per-instance signals resolve only inside an instance root", () => {
-  const { Signal, perInstance } = signalClasses(false);
-  const { material } = perInstance(() => ({ material: new Signal("bulk") }));
+  const { Signal, Scope } = signalClasses(false);
+  const { material } = exported(
+    new Scope(() => ({ material: new Signal("bulk") })),
+  );
   // Aggregates can be declared during server-side validation.
   void material.all;
   assertThrows(
@@ -282,16 +299,17 @@ Deno.test("per-instance signals resolve only inside an instance root", () => {
 Deno.test("Signals collections expose an instance root and evaluate instances", () => {
   const signals = new Signals(
     import.meta.url,
-    ({ Signal, Computed, perInstance }) => {
-      const layer = perInstance(() => ({ material: new Signal("bulk") }));
+    ({ Signal, Computed, Scope }) => {
+      const layer = new Scope(() => ({ material: new Signal("bulk") }));
       const count = new Computed(
         () => layer.material.all.value.length,
         [layer.material.all],
       );
-      return { ...layer, isolation: new Signal<string>("rdam"), count };
+      return { layer, isolation: new Signal<string>("rdam"), count };
     },
   );
   assertEquals(signals.instanceKey.startsWith("instanceSignals_test_"), true);
+  assertEquals(signals.scopes.layer.key, `${signals.instanceKey}-layer`);
 
   // A fresh instance's values, and no instances on the server.
   assertEquals(signals.evaluateUsingInitialValues(), {
@@ -312,27 +330,29 @@ Deno.test("Signals collections expose an instance root and evaluate instances", 
 
 /** A note with its own isolation and layers, as the restorative note uses. */
 function noteGraph() {
-  const { Signal, Computed, perInstance } = signalClasses(true, key);
-  return perInstance(() => {
-    const isolation = new Signal<string>("cheekguard");
-    const layer = perInstance("layer", () => {
-      const material = new Signal<string>("bulk");
-      // Inner instances can read their parent's signals.
-      const label = new Computed(
-        () => `${material.value} (${isolation.value})`,
-        [material, isolation],
+  const { Signal, Computed, Scope } = signalClasses(true, key);
+  return exported(
+    new Scope(() => {
+      const isolation = new Signal<string>("cheekguard");
+      const layer = new Scope(() => {
+        const material = new Signal<string>("bulk");
+        // Inner instances can read their parent's signals.
+        const label = new Computed(
+          () => `${material.value} (${isolation.value})`,
+          [material, isolation],
+        );
+        return { material, label };
+      });
+      const summary = new Computed(
+        () => layer.label.all.value.join("; "),
+        [layer.label.all],
       );
-      return { material, label };
-    });
-    const summary = new Computed(
-      () => layer.label.all.value.join("; "),
-      [layer.label.all],
-    );
-    return { isolation, ...layer, summary };
-  });
+      return { isolation, layer, summary };
+    }),
+  );
 }
 
-Deno.test("nested perInstance scopes each level and `.all` to its parent", () => {
+Deno.test("nested Scopes each scope a level and `.all` to its parent", () => {
   const layerRoot = `tt-instance="${key}-layer"`;
   const byId = installDocument(`
     <form id="noteA" ${root}>
@@ -393,65 +413,70 @@ Deno.test("nested perInstance scopes each level and `.all` to its parent", () =>
   }
 });
 
-Deno.test("a nested perInstance must be named", () => {
-  const { Signal, perInstance } = signalClasses(true, key);
+Deno.test("a nested Scope must be returned under a key", () => {
+  const { Signal, Scope } = signalClasses(true, key);
   assertThrows(
-    () =>
-      perInstance(() => ({
-        ...perInstance(() => ({ inner: new Signal(1) })),
-      })),
+    () => new Scope(() => new Scope(() => ({ inner: new Signal(1) }))),
     TypeError,
-    "needs a name",
+    "under a key",
   );
 });
 
-Deno.test("instanceKeyFor only accepts the collection's perInstance names", () => {
+Deno.test("a Scope's signals are exported only by returning the Scope", () => {
+  const { Signal, Scope } = signalClasses(true, key);
+  const box = new Scope(() => ({ count: new Signal(0) }));
+  assertThrows(() => exported({ ...box }), TypeError, "spread");
+  // Its level has no key until it is returned.
+  assertThrows(() => box.count.forInstance({} as Element), Error, "returned");
+  exported({ box });
+  assertThrows(() => exported({ again: box }), TypeError, "returned once");
+  assertThrows(
+    () =>
+      exported({
+        one: new Scope(() => ({ count: new Signal(0) })),
+        two: new Scope(() => ({ count: new Signal(0) })),
+      }),
+    TypeError,
+    "'count' is defined twice",
+  );
+});
+
+Deno.test("scopes only has the collection's named Scopes", () => {
   const notes = new Signals(
     import.meta.url,
-    ({ Signal, perInstance }) => {
-      const note = perInstance(() => {
-        const layer = perInstance("layer", () => ({
-          material: new Signal<string>("bulk"),
-        }));
-        const tooth = perInstance("tooth", () => ({
-          surface: new Signal<string>("O"),
-        }));
-        return { isolation: new Signal<string>("rdam"), ...layer, ...tooth };
-      });
-      return { ...note };
-    },
+    ({ Signal, Scope }) =>
+      new Scope(() => ({
+        isolation: new Signal<string>("rdam"),
+        layer: new Scope(() => ({ material: new Signal<string>("bulk") })),
+        tooth: new Scope(() => ({ surface: new Signal<string>("O") })),
+      })),
   );
-  assertEquals(
-    notes.instanceKeyFor("layer"),
-    `${notes.instanceKey}-layer`,
-  );
-  notes.instanceKeyFor("tooth");
-  // @ts-expect-error not a perInstance name in this collection
-  void (() => notes.instanceKeyFor("layers"));
+  assertEquals(notes.scopes.layer.key, `${notes.instanceKey}-layer`);
+  void notes.scopes.tooth.key;
+  // @ts-expect-error not a Scope of this collection
+  void (() => notes.scopes.layers);
 
   const flat = new Signals(
     import.meta.url,
-    ({ Signal, perInstance }) => ({
-      ...perInstance(() => ({ count: new Signal<number>(0) })),
-    }),
+    ({ Signal, Scope }) => new Scope(() => ({ count: new Signal<number>(0) })),
   );
-  // @ts-expect-error no named perInstance in this collection
-  void (() => flat.instanceKeyFor("count"));
+  // @ts-expect-error a Scope returned directly is unnamed
+  void (() => flat.scopes.count);
 });
 
 Deno.test("a root's seed starts its new instance from the rendered values", () => {
   const seed = (values: unknown) =>
-    `tt-seed='${JSON.stringify({ [key]: values })}'`;
+    `tt-seed='${JSON.stringify({ [layerKey]: values })}'`;
   const byId = installDocument(`
-    <fieldset ${root} ${seed({ material: "flow", shade: "B1" })}>
+    <fieldset ${layers} ${seed({ material: "flow", shade: "B1" })}>
       <select id="a"></select>
     </fieldset>
-    <fieldset ${root}><select id="b"></select></fieldset>
-    <fieldset ${root} ${seed({ description: "x", missing: 1 })}>
+    <fieldset ${layers}><select id="b"></select></fieldset>
+    <fieldset ${layers} ${seed({ description: "x", missing: 1 })}>
       <select id="c"></select>
     </fieldset>
-    <fieldset ${root} tt-seed='not json'><select id="d"></select></fieldset>
-    <fieldset ${root} tt-seed='{"other_key":{"shade":"C2"}}'>
+    <fieldset ${layers} tt-seed='not json'><select id="d"></select></fieldset>
+    <fieldset ${layers} tt-seed='{"other_key":{"shade":"C2"}}'>
       <select id="e"></select>
     </fieldset>`);
   const errors: unknown[][] = [];
@@ -488,8 +513,11 @@ Deno.test("a resumed instance keeps its values over its seed", () => {
   try {
     const { shade } = layerGraph();
     const root = byId("list").ownerDocument.createElement("fieldset");
-    root.setAttribute("tt-instance", key);
-    root.setAttribute("tt-seed", JSON.stringify({ [key]: { shade: "B1" } }));
+    root.setAttribute("tt-instance", layerKey);
+    root.setAttribute(
+      "tt-seed",
+      JSON.stringify({ [layerKey]: { shade: "B1" } }),
+    );
     root.innerHTML = `<select id="a"></select>`;
     Object.assign(root, { abortController: new AbortController() });
     byId("list").append(root);
@@ -508,61 +536,72 @@ Deno.test("a resumed instance keeps its values over its seed", () => {
   }
 });
 
-Deno.test("seed and seedFor render the tt-seed the runtime reads", () => {
+Deno.test("seed and scopes render the tt-seed the runtime reads", () => {
   const notes = new Signals(
     import.meta.url,
-    ({ Signal, Computed, perInstance }) => {
-      const note = perInstance(() => {
+    ({ Signal, Computed, Scope }) => {
+      const note = new Scope(() => {
         const isolation = new Signal<string>("rdam");
-        const layer = perInstance("layer", () => ({
-          material: new Signal<string>("bulk"),
-          count: new Signal<number>(1),
-        }));
         return {
           isolation,
-          ...layer,
+          layer: new Scope(() => ({
+            material: new Signal<string>("bulk"),
+            count: new Signal<number>(1),
+          })),
           label: new Computed(() => isolation.value),
         };
       });
-      return { ...note, page: new Signal<string>("") };
+      return { note, page: new Signal<string>("") };
     },
   );
+  const { note, layer } = notes.scopes;
   assertEquals(
-    notes.seed({ isolation: "isolite" }),
-    JSON.stringify({ [notes.instanceKey]: { isolation: "isolite" } }),
+    note.seed({ isolation: "isolite" }),
+    JSON.stringify({ [`${notes.instanceKey}-note`]: { isolation: "isolite" } }),
   );
   assertEquals(
-    notes.seedFor("layer", { material: "flow", count: 2 }),
-    JSON.stringify({
-      [notes.instanceKeyFor("layer")]: { material: "flow", count: 2 },
-    }),
+    layer.seed({ material: "flow", count: 2 }),
+    JSON.stringify({ [layer.key]: { material: "flow", count: 2 } }),
   );
   // @ts-expect-error computeds cannot be seeded
-  notes.seed({ label: "x" });
+  note.seed({ label: "x" });
   // @ts-expect-error page-wide signals are not per-instance
-  notes.seed({ page: "x" });
+  note.seed({ page: "x" });
   // @ts-expect-error layer signals are seeded on a layer root
-  notes.seed({ material: "flow" });
+  note.seed({ material: "flow" });
   // @ts-expect-error note signals are seeded on the note root
-  notes.seedFor("layer", { isolation: "x" });
+  layer.seed({ isolation: "x" });
   // @ts-expect-error the value must match the signal's type
-  notes.seedFor("layer", { count: "2" });
+  layer.seed({ count: "2" });
+  // @ts-expect-error only a Scope returned directly is seeded by `seed`
+  notes.seed({ isolation: "x" });
+
+  const flat = new Signals(
+    import.meta.url,
+    ({ Signal, Scope }) => new Scope(() => ({ count: new Signal<number>(0) })),
+  );
+  assertEquals(
+    flat.seed({ count: 2 }),
+    JSON.stringify({ [flat.instanceKey]: { count: 2 } }),
+  );
 
   // The rendered attribute seeds the matching level in the browser.
   const byId = installDocument(`
-    <form tt-instance="${notes.instanceKey}"
-      tt-seed='${notes.seed({ isolation: "isolite" })}'>
-      <fieldset tt-instance="${notes.instanceKeyFor("layer")}"
-        tt-seed='${notes.seedFor("layer", { material: "flow" })}'>
+    <form tt-instance="${note.key}"
+      tt-seed='${note.seed({ isolation: "isolite" })}'>
+      <fieldset tt-instance="${layer.key}"
+        tt-seed='${layer.seed({ material: "flow" })}'>
         <select id="a"></select>
       </fieldset>
     </form>`);
   try {
-    const { Signal, perInstance } = signalClasses(true, notes.instanceKey);
-    const graph = perInstance(() => ({
-      isolation: new Signal<string>("rdam"),
-      ...perInstance("layer", () => ({ material: new Signal<string>("bulk") })),
-    }));
+    const { Signal, Scope } = signalClasses(true, notes.instanceKey);
+    const graph = exported({
+      note: new Scope(() => ({
+        isolation: new Signal<string>("rdam"),
+        layer: new Scope(() => ({ material: new Signal<string>("bulk") })),
+      })),
+    });
     assertEquals(graph.isolation.forInstance(byId("a")).value, "isolite");
     assertEquals(graph.material.forInstance(byId("a")).value, "flow");
   } finally {
@@ -573,27 +612,26 @@ Deno.test("seed and seedFor render the tt-seed the runtime reads", () => {
 Deno.test("evaluateUsingInitialValues reports a seeded instance's values", () => {
   const notes = new Signals(
     import.meta.url,
-    ({ Signal, Computed, perInstance }) => {
+    ({ Signal, Computed, Scope }) => {
       const page = new Signal<string>("light");
-      const note = perInstance(() => {
+      const note = new Scope(() => {
         const material = new Signal<string>("bulk");
         const shade = new Signal<string>("A3");
-        const layer = perInstance("layer", () => ({
-          // Inner levels start fresh but read the seeded outer instance.
-          label: new Computed(() => `layer of ${material.value}`),
-        }));
         return {
           material,
           shade,
-          ...layer,
+          layer: new Scope(() => ({
+            // Inner levels start fresh but read the seeded outer instance.
+            label: new Computed(() => `layer of ${material.value}`),
+          })),
           description: new Computed(
             () => `${material.value} ${shade.value} (${page.value})`,
           ),
         };
       });
-      // A second unnamed group shares the instance key and the seed.
-      const tooth = perInstance(() => ({ surface: new Signal<string>("O") }));
-      return { page, ...note, ...tooth };
+      // A second level takes its own names from the same seed.
+      const tooth = new Scope(() => ({ surface: new Signal<string>("O") }));
+      return { page, note, tooth };
     },
   );
   assertEquals(

@@ -39,9 +39,9 @@
  */
 
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
-import { h } from "../../jsx-runtime.ts";
+import { h, type JSX } from "../../jsx-runtime.ts";
 import {
-  type InstancedComponent,
+  type ExposedSignals,
   type InstanceSignals,
   optimized,
   type Signal,
@@ -56,8 +56,8 @@ const tiny = optimized(import.meta.url);
  * Per instance: whether the tip or card is showing, and its id, which it
  * writes as it connects and its triggers find it by.
  */
-const tooltipSignals = new tiny.Signals(({ Signal, perInstance }) =>
-  perInstance(() => ({
+const tooltipSignals = new tiny.Signals(({ Signal, Scope }) =>
+  new Scope(() => ({
     open: new Signal<boolean>(false),
     target: new Signal(""),
   }))
@@ -299,7 +299,7 @@ type Delays = {
   children?: unknown;
 };
 
-/** The signals the tooltip's parts expose. */
+/** The signals a tooltip exposes. */
 type TooltipExposed = InstanceSignals<{ open: Signal<boolean> }>;
 
 /** The trigger's props: the element the content belongs to. */
@@ -310,25 +310,27 @@ type CardProps = Delays & { label?: string };
 
 /**
  * `Trigger` wraps the element the content belongs to; `Tip` is a short note
- * and `Card` richer content, one per instance. All three expose
+ * and `Card` richer content, one per instance. The tooltip exposes
  * `signal.open`, which shows the content when set true.
  */
 export const TooltipSignalComponent: SignalComponent<{
-  Trigger: InstancedComponent<TooltipExposed, TriggerProps>;
-  Tip: InstancedComponent<TooltipExposed, Delays>;
-  Card: InstancedComponent<TooltipExposed, CardProps>;
+  signal: ExposedSignals<TooltipExposed>;
+  Trigger: (props: TriggerProps) => JSX.Element;
+  Tip: (props: Delays) => JSX.Element;
+  Card: (props: CardProps) => JSX.Element;
 }> = new tiny.SignalComponent(
-  async ({ instanced }) => {
+  async () => {
     const { fn, signal, styled } = await tiny.imports(
       tooltipSignals,
       tooltipHandlers,
       tooltipStyles,
     );
     return {
-      Trigger: instanced((props: TriggerProps) => (
+      signal: [signal.open],
+      Trigger: (props: TriggerProps) => (
         <span
           class={styled.trigger}
-          onConnect={[signal.target, fn.adoptTrigger]}
+          onConnect={[signal.target.subscribe, fn.adoptTrigger]}
           onSignal={fn.linkTrigger}
           onPointerEnter={fn.enterTrigger}
           onPointerLeave={fn.leaveTrigger}
@@ -336,8 +338,8 @@ export const TooltipSignalComponent: SignalComponent<{
         >
           {props.children}
         </span>
-      ), [signal.open]),
-      Tip: instanced((props: Delays) => (
+      ),
+      Tip: (props: Delays) => (
         <div
           popover="manual"
           role="tooltip"
@@ -346,14 +348,14 @@ export const TooltipSignalComponent: SignalComponent<{
           data-side={props.side}
           data-open-delay={String(props.delay ?? 500)}
           data-close-delay={String(props.closeDelay ?? 0)}
-          onConnect={[signal.open, fn.adoptTip]}
+          onConnect={[signal.open.subscribe, fn.adoptTip]}
           onSignal={fn.showTip}
           onToggle={fn.tipToggled}
         >
           {props.children}
         </div>
-      ), [signal.open]),
-      Card: instanced((props: CardProps) => (
+      ),
+      Card: (props: CardProps) => (
         <div
           popover="manual"
           id={props.id}
@@ -362,7 +364,7 @@ export const TooltipSignalComponent: SignalComponent<{
           data-side={props.side}
           data-open-delay={String(props.delay ?? 600)}
           data-close-delay={String(props.closeDelay ?? 300)}
-          onConnect={[signal.open, fn.adoptTip]}
+          onConnect={[signal.open.subscribe, fn.adoptTip]}
           onSignal={fn.showTip}
           onToggle={fn.tipToggled}
           onPointerEnter={fn.enterCard}
@@ -370,7 +372,7 @@ export const TooltipSignalComponent: SignalComponent<{
         >
           {props.children}
         </div>
-      ), [signal.open]),
+      ),
     };
   },
 );

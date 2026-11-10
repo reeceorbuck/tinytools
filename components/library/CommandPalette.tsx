@@ -43,8 +43,8 @@
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
 import { h, type JSX } from "../../jsx-runtime.ts";
 import {
+  type ExposedSignals,
   type HandlerProp,
-  type InstancedComponent,
   type InstanceSignals,
   optimized,
   type Signal,
@@ -57,11 +57,11 @@ import type { LifecycleElement } from "../../lifecycleElement.ts";
 const tiny = optimized(import.meta.url);
 
 /** Whether the palette is open, one per instance. */
-const paletteSignals = new tiny.Signals(({ Signal, perInstance }) =>
-  perInstance(() => ({ open: new Signal<boolean>(false) }))
+const paletteSignals = new tiny.Signals(({ Signal, Scope }) =>
+  new Scope(() => ({ open: new Signal<boolean>(false) }))
 );
 
-/** The signals the palette's parts expose. */
+/** The signals a palette exposes. */
 type PaletteExposed = InstanceSignals<{ open: Signal<boolean> }>;
 
 /** Props for the palette's `Trigger`. */
@@ -331,23 +331,25 @@ const paletteStyles = new tiny.Styles({
 
 /**
  * `Palette` is the dialog holding `Group`s of `Item`s, and `Trigger` a
- * button opening it. Both expose `signal.open`, which opens the palette
+ * button opening it. The palette exposes `signal.open`, which opens it
  * when set true.
  */
 export const CommandPaletteSignalComponent: SignalComponent<{
-  Trigger: InstancedComponent<PaletteExposed, TriggerProps>;
-  Palette: InstancedComponent<PaletteExposed, PaletteProps>;
+  signal: ExposedSignals<PaletteExposed>;
+  Trigger: (props: TriggerProps) => JSX.Element;
+  Palette: (props: PaletteProps) => JSX.Element;
   Group: (props: GroupProps) => JSX.Element;
   Item: (props: ItemProps) => JSX.Element;
 }> = new tiny.SignalComponent(
-  async ({ instanced }) => {
+  async () => {
     const { fn, signal, styled } = await tiny.imports(
       paletteSignals,
       paletteHandlers,
       paletteStyles,
     );
     return {
-      Trigger: instanced((props: TriggerProps) => (
+      signal: [signal.open],
+      Trigger: (props: TriggerProps) => (
         <button
           type="button"
           class={styled.trigger}
@@ -357,15 +359,15 @@ export const CommandPaletteSignalComponent: SignalComponent<{
           <span>{props.children ?? "Search…"}</span>
           <kbd>Ctrl {(props.shortcut ?? "k").toUpperCase()}</kbd>
         </button>
-      ), [signal.open]),
-      Palette: instanced((props: PaletteProps) => (
+      ),
+      Palette: (props: PaletteProps) => (
         <dialog
           class={styled.palette}
           aria-label={props.label ?? "Command palette"}
           data-shortcut={props.shortcut === false
             ? undefined
             : (props.shortcut ?? "k").toLowerCase()}
-          onConnect={[signal.open, fn.adoptPalette]}
+          onConnect={[signal.open.subscribe, fn.adoptPalette]}
           onSignal={fn.showPalette}
           onClose={fn.paletteClosed}
           onInput={fn.filterCommands}
@@ -387,7 +389,7 @@ export const CommandPaletteSignalComponent: SignalComponent<{
             <p data-empty hidden>{props.empty ?? "No results."}</p>
           </div>
         </dialog>
-      ), [signal.open]),
+      ),
       Group: (props: GroupProps) => (
         <div role="group" aria-label={props.heading}>
           <div data-heading aria-hidden="true">{props.heading}</div>
