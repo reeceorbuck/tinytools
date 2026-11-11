@@ -3,8 +3,9 @@
  * only the parts its collections use: `tt-signal` (`Signal`, `signalsFrom`
  * and dependency tracking) always, and `tt-computed`, `tt-trigger` and
  * `tt-instance` (`Scope`) only for collections whose factory takes
- * them, and `tt-shape` only for those written as `tiny.Signals(tools, define)`. Each module is built from the runtime in `signals.ts` with
- * `toString()`, so the server runs exactly the code the browser gets.
+ * them, `tt-shape` only for those written as `tiny.Signals(tools, define)`,
+ * and `tt-persist` only for those that `persist` signals. Each module is
+ * built from the runtime in `signals.ts` with `toString()`, so the server runs exactly the code the browser gets.
  *
  * @module
  */
@@ -15,6 +16,7 @@ import {
   flattenScopes,
   InstanceGroup,
   InstanceSignalHandle,
+  persistSignals,
   sameValue,
   scopeFor,
   ScopeInstance,
@@ -82,12 +84,33 @@ const instanceModule = runtimeModule("instance", {
 
 const shapeModule = runtimeModule("shape", { exported: [shapeSignals] });
 
+/** Browser storage for the signals a collection declares in `persist`. */
+const persistModule = runtimeModule("persist", { exported: [persistSignals] });
+
+/**
+ * The bundle code storing `graph`'s signals as `persisted` says, called as
+ * `local` (a name free in the bundle), and the runtime file it imports.
+ */
+export function persistPrelude(
+  local: string,
+  graph: string,
+  persisted: Record<string, unknown>,
+): { code: string; file: string } {
+  return {
+    code:
+      `import { persistSignals as ${local} } from "./${persistModule.file}";\n` +
+      `${local}(${graph}, ${JSON.stringify(persisted)});`,
+    file: persistModule.file,
+  };
+}
+
 const modules = [
   signalModule,
   computedModule,
   triggerModule,
   instanceModule,
   shapeModule,
+  persistModule,
 ];
 
 /** The signal runtime modules' sources, by file name (`tt-signal_….js`). */

@@ -38,6 +38,7 @@ import {
   type InstanceSignal,
   InstanceSignalHandle,
   type InternalSignalTools,
+  type PersistedSignal,
   type ReadonlySignal,
   type Scope,
   type Signal,
@@ -49,6 +50,7 @@ import {
   type SignalInputs,
   type SignalKind,
   signalKind,
+  type SignalStorage,
   type SignalTools,
   type SignalValue,
   type SignalValues,
@@ -88,7 +90,7 @@ import {
   markResult,
 } from "./componentScope.ts";
 import { lifecycleRuntimePath } from "./lifecycleElement.ts";
-import { signalToolsPrelude } from "./signalModules.ts";
+import { persistPrelude, signalToolsPrelude } from "./signalModules.ts";
 import {
   checkDefinitionImports,
   importCallSite,
@@ -1320,6 +1322,7 @@ interface HandlersConstructor {
 type SignalsCollection<
   Definitions extends SignalDefinitions,
   Deferred extends boolean,
+  Persisted extends PropertyKey = never,
 > = ClientToolsClass<SignalAccessors<Definitions>, Empty, Empty> & {
   readonly _isSignals: true;
   readonly [signalDefinitions]?: Definitions;
@@ -1387,7 +1390,7 @@ type SignalsCollection<
    * the same computeds.
    */
   evaluateUsingInitialValues(
-    inputs?: SignalInputs<Definitions>,
+    inputs?: SignalInputs<Definitions, Persisted>,
     seed?: EvaluationSeed<Definitions>,
   ): Deferred extends true ? Promise<SignalValues<Definitions>>
     : SignalValues<Definitions>;
@@ -1403,9 +1406,11 @@ type SignalsCollection<
    * Anywhere else it is the collection itself.
    */
   withInputs(
-    inputs?: SignalInputs<Definitions>,
+    inputs?: SignalInputs<Definitions, Persisted>,
     seed?: EvaluationSeed<Definitions>,
-  ): SignalsCollection<Definitions, Deferred> & SeededWithInputs<Definitions>;
+  ):
+    & SignalsCollection<Definitions, Deferred, Persisted>
+    & SeededWithInputs<Definitions>;
 };
 
 /**
@@ -1489,6 +1494,31 @@ type ShapeDefinition<
   imported: ImportsOf<ToolList<TTools>> & ShapeTools,
 ) => Shape & ThisType<ShapeSignals<Shape>>;
 
+/**
+ * What may follow a `tiny.Signals` factory, definition or values.
+ * `persist` keeps writable top-level signals in browser storage, by name:
+ * `{ persist: { savedStops: { local: "app.savedStops" } } }`. It is for data
+ * only the browser has: the server renders a persisted signal's initial
+ * value and cannot be given another (`evaluateUsingInitialValues` and
+ * `withInputs` take no input for it), and an element that must show the
+ * restored value as soon as it connects fires itself
+ * (`onConnect={[fn.signals.subscribe(signal.savedStops), fn.fireSelfSignal]}`).
+ */
+export type SignalsOptions<Persisted extends PropertyKey = never> = {
+  readonly persist?: { readonly [Name in Persisted]: SignalStorage };
+};
+
+/** What `tiny.Signals` returns when `persist` names `Names`, which it cannot. */
+type PersistError<Names extends string> = {
+  readonly persistError:
+    `Only writable top-level signals can be persisted, not: ${Names}`;
+};
+
+/** The names `persist` may list: a collection's writable top-level signals. */
+type PersistableName<Definitions extends SignalDefinitions> =
+  & keyof SignalInputs<Definitions>
+  & string;
+
 interface SignalsConstructor {
   /**
    * An async definition that imports handlers and constants, then returns
@@ -1501,15 +1531,23 @@ interface SignalsConstructor {
    * the definition, so any other capture fails at definition time instead
    * of in the browser.
    */
-  new <Definitions extends SignalDefinitions>(
+  new <
+    Definitions extends SignalDefinitions,
+    const Persisted extends PersistableName<Exported<Definitions>> = never,
+  >(
     definition: (
       tools: SignalTools,
     ) => Promise<(tools: SignalTools) => Definitions>,
-  ): SignalsCollection<Exported<Definitions>, true>;
+    options?: SignalsOptions<Persisted>,
+  ): SignalsCollection<Exported<Definitions>, true, Persisted>;
   /** A factory that needs nothing from module scope. */
-  new <Definitions extends SignalDefinitions>(
+  new <
+    Definitions extends SignalDefinitions,
+    const Persisted extends PersistableName<Exported<Definitions>> = never,
+  >(
     factory: (tools: SignalTools) => Definitions,
-  ): SignalsCollection<Exported<Definitions>, false>;
+    options?: SignalsOptions<Persisted>,
+  ): SignalsCollection<Exported<Definitions>, false, Persisted>;
   /** @deprecated Create the collection from `optimized(import.meta.url)` and leave the URL out. */
   new <Definitions extends SignalDefinitions>(
     sourceFileUrl: string | URL,
@@ -1526,9 +1564,13 @@ interface SignalsConstructor {
    * One writable signal per initial value: `new tiny.Signals({ count: 0 })`.
    * Use a factory for `Computed`, `Trigger` or `Scope`.
    */
-  new <Values extends Record<string, SignalValue>>(
+  new <
+    Values extends Record<string, SignalValue>,
+    const Persisted extends PersistableName<ValueSignals<Values>> = never,
+  >(
     values: Values,
-  ): SignalsCollection<ValueSignals<Values>, false>;
+    options?: SignalsOptions<Persisted>,
+  ): SignalsCollection<ValueSignals<Values>, false, Persisted>;
   /** @deprecated Create the collection from `optimized(import.meta.url)` and leave the URL out. */
   new <Values extends Record<string, SignalValue>>(
     sourceFileUrl: string | URL,
@@ -1556,6 +1598,27 @@ interface SignalsConstructor {
     tools: TTools,
     define: ShapeDefinition<TTools, Shape>,
   ): SignalsCollection<Exported<ShapeSignals<Shape>>, true>;
+  /**
+   * As `(tools, define)`, with options. The options do not mention the
+   * shape, as that would stop `this` in its computeds being inferred, so a
+   * `persist` entry that is not a writable signal makes the result a
+   * `PersistError` instead (and the constructor throws).
+   */
+  new <
+    const TTools extends
+      | Importable
+      | readonly [ImportArgument, ...ImportArgument[]],
+    Shape extends SignalShape,
+    const Persisted extends string,
+  >(
+    tools: TTools,
+    define: ShapeDefinition<TTools, Shape>,
+    options: SignalsOptions<Persisted>,
+  ): [Persisted] extends [PersistableName<Exported<ShapeSignals<Shape>>>]
+    ? SignalsCollection<Exported<ShapeSignals<Shape>>, true, Persisted>
+    : PersistError<
+      Exclude<Persisted, PersistableName<Exported<ShapeSignals<Shape>>>>
+    >;
   /** @deprecated Create the collection from `optimized(import.meta.url)` and leave the URL out. */
   new <
     const TTools extends
@@ -2526,7 +2589,10 @@ function runSignalFactory(
  * Runs the factory server-side (values inert) to validate it and list its
  * signals, each with its kind.
  */
-function signalKinds(factory: SignalFactory): Map<string, SignalKind> {
+function signalKinds(
+  factory: SignalFactory,
+  perInstance?: Set<string>,
+): Map<string, SignalKind> {
   const tools = signalClasses(false);
   const definitions = runSignalFactory(factory, tools);
   if (
@@ -2541,11 +2607,86 @@ function signalKinds(factory: SignalFactory): Map<string, SignalKind> {
       "Signals factory must synchronously return an object of Signal or Computed instances, or a Scope.",
     );
   }
+  for (const [name, signal] of Object.entries(definitions)) {
+    if (signal instanceof tools.InstanceSignal) perInstance?.add(name);
+  }
   return new Map(
     Object.entries(definitions).map((
       [name, signal],
     ) => [name, signalKind(signal)]),
   );
+}
+
+/** Whether `value` is a plain object, as `tiny.Signals` options are. */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object") return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+/**
+ * The `persist` option as the bundle is told of it, by signal name, checked
+ * for its shape. Which signals it may name is checked once the factory has
+ * run (`checkPersisted`).
+ */
+function persistedSignals(
+  options: Record<string, unknown>,
+): Record<string, PersistedSignal> {
+  const unknown = Object.keys(options).filter((key) => key !== "persist");
+  if (unknown.length) {
+    throw new TypeError(
+      `Unknown tiny.Signals option${unknown.length > 1 ? "s" : ""}: ${
+        unknown.join(", ")
+      }.`,
+    );
+  }
+  const persist = options.persist ?? {};
+  if (!isPlainObject(persist)) {
+    throw new TypeError(
+      "tiny.Signals' persist option maps signal names to storage: { name: { local: key } }.",
+    );
+  }
+  return Object.fromEntries(
+    Object.entries(persist).map(([name, storage]) => {
+      const { local, session, sync, ...rest } = isPlainObject(storage)
+        ? storage
+        : {} as Record<string, unknown>;
+      const key = local ?? session;
+      if (
+        Object.keys(rest).length || (local === undefined) ===
+          (session === undefined) ||
+        typeof key !== "string" || !key ||
+        (sync !== undefined && (typeof sync !== "boolean" || session))
+      ) {
+        throw new TypeError(
+          `Cannot persist '${name}': give { local: key }, { local: key, sync: true } or { session: key }.`,
+        );
+      }
+      return [name, {
+        area: local === undefined ? "session" : "local",
+        key,
+        ...(sync ? { sync } : {}),
+      }];
+    }),
+  );
+}
+
+/** Throws unless every persisted signal is a writable top-level one. */
+function checkPersisted(
+  persisted: Record<string, PersistedSignal>,
+  kinds: ReadonlyMap<string, SignalKind>,
+  perInstance: ReadonlySet<string>,
+): void {
+  for (const name of Object.keys(persisted)) {
+    const problem = !kinds.has(name)
+      ? "it is not defined in this collection"
+      : perInstance.has(name)
+      ? "it is per-instance, and an instance has no stable identity to store it under"
+      : kinds.get(name) !== "writable"
+      ? "only writable signals can be persisted"
+      : undefined;
+    if (problem) throw new TypeError(`Cannot persist '${name}': ${problem}.`);
+  }
 }
 
 /**
@@ -2724,6 +2865,8 @@ class SignalsClass extends HandlersClass {
   #deferred: boolean;
 
   #upstream: SignalUpstream;
+  /** The signals kept in browser storage, which take no server input. */
+  #persisted: ReadonlySet<string>;
 
   /**
    * `(factory)` or `(import.meta.url, factory)`; either may be plain values.
@@ -2733,6 +2876,16 @@ class SignalsClass extends HandlersClass {
    */
   constructor(...args: unknown[]) {
     const upstream: SignalUpstream = { collections: [], current: {} };
+    // Options follow a factory or an object of values, never tools: those
+    // are collections, and a define after them is a function.
+    const last = args.at(-1);
+    const before = args.at(-2);
+    const options = args.length > 1 && isPlainObject(last) &&
+        (typeof before === "function" || isPlainObject(before))
+      ? last
+      : undefined;
+    if (options) args = args.slice(0, -1);
+    const persisted = options ? persistedSignals(options) : {};
     const sourced = args.length > 1 &&
       (args[0] === undefined || typeof args[0] === "string" ||
         args[0] instanceof URL);
@@ -2801,7 +2954,9 @@ class SignalsClass extends HandlersClass {
           }
           : run;
       }
-      const signals = signalKinds(compiled.factory!);
+      const perInstance = new Set<string>();
+      const signals = signalKinds(compiled.factory!, perInstance);
+      checkPersisted(persisted, signals, perInstance);
       kinds.clear();
       signals.forEach((kind, name) => kinds.set(name, kind));
       const names = [...signals.keys()];
@@ -2846,6 +3001,15 @@ class SignalsClass extends HandlersClass {
         `\nfor (const [name, signal] of Object.entries(${graph})) ` +
         `if (signal instanceof EventTarget) signal.name ??= name;`;
       prelude.files = tools.files;
+      if (Object.keys(persisted).length) {
+        const persist = persistPrelude(
+          free("persistSignals"),
+          graph,
+          persisted,
+        );
+        prelude.code += `\n${persist.code}`;
+        prelude.files = [...prelude.files, persist.file];
+      }
       prelude.graph = graph;
       // Each signal is a member of the bundle, so it can be referenced like
       // a handler; the bundle exports the signal itself (see `members`).
@@ -2862,6 +3026,7 @@ class SignalsClass extends HandlersClass {
       }));
     });
     this.#kinds = kinds;
+    this.#persisted = new Set(Object.keys(persisted));
     this.#prelude = prelude;
     owner.collection = this;
     this.#compiled = compiled;
@@ -3084,6 +3249,11 @@ class SignalsClass extends HandlersClass {
       if (graph[name] instanceof tools.InstanceSignal) {
         throw new TypeError(
           `Signal '${name}' is per-instance and cannot be set here.`,
+        );
+      }
+      if (this.#persisted.has(name)) {
+        throw new TypeError(
+          `Signal '${name}' is persisted in the browser, so the server cannot set it.`,
         );
       }
       // Assigning to a computed signal throws: only writable signals are inputs.

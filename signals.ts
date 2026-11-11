@@ -330,12 +330,46 @@ export type SignalAccessors<Definitions extends SignalDefinitions> = {
   ) => Definitions[Name];
 };
 
-/** The values `evaluateUsingInitialValues` accepts: any of the collection's writable signals. */
-export type SignalInputs<Definitions extends SignalDefinitions> = {
+/**
+ * The values `evaluateUsingInitialValues` accepts: any of the collection's
+ * writable signals, except the `Persisted` ones, which only the browser
+ * knows.
+ */
+export type SignalInputs<
+  Definitions extends SignalDefinitions,
+  Persisted extends PropertyKey = never,
+> = {
   [
-    Name in keyof Definitions as typeof writableSignal extends
-      keyof Definitions[Name] ? Name : never
+    Name in keyof Definitions as Name extends Persisted ? never
+      : typeof writableSignal extends keyof Definitions[Name] ? Name
+      : never
   ]?: Definitions[Name] extends ReadonlySignal<infer Value> ? Value : never;
+};
+
+/**
+ * Where a persisted signal keeps its value in the browser, under `key`:
+ * `{ local: "app.savedStops" }` in `localStorage`, `{ session: key }` in
+ * `sessionStorage`. The key is spelled out rather than derived because it
+ * outlives the code: renaming a signal or moving its file must not lose what
+ * browsers have stored. With `sync`, a change another tab stores is written
+ * to this tab's signal too.
+ */
+export type SignalStorage =
+  | {
+    readonly local: string;
+    readonly sync?: boolean;
+    readonly session?: never;
+  }
+  | { readonly session: string; readonly local?: never; readonly sync?: never };
+
+/**
+ * A persisted signal as the browser bundle is told of it (see
+ * `persistSignals`).
+ */
+export type PersistedSignal = {
+  readonly area: "local" | "session";
+  readonly key: string;
+  readonly sync?: boolean;
 };
 
 /** The value of every signal in a collection, as `evaluateUsingInitialValues` returns them. */
@@ -503,6 +537,87 @@ export function signalsFrom(
       [key, value],
     ) => [key, new SignalInstance(value)]),
   );
+}
+
+/**
+ * Keeps writable signals in browser storage: each starts from its stored
+ * value, when there is one of the same type as its initial value, and every
+ * change is stored, a change back to the initial value by removing the key.
+ * Runs once in a collection's bundle, after its signals are built and before
+ * anything subscribes, so subscribers that need the restored value at once
+ * fire themselves (`fn.fireSelfSignal`). Storage that throws (blocked, full,
+ * private mode) leaves the signal working as an unpersisted one.
+ */
+export function persistSignals(
+  signals: Record<string, unknown>,
+  persisted: Record<string, PersistedSignal>,
+): void {
+  const isValue = (value: unknown): boolean =>
+    value === null || typeof value === "string" ||
+    typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value)) ||
+    (Array.isArray(value) && value.every((item) => typeof item === "string"));
+  for (const [name, { area, key, sync }] of Object.entries(persisted)) {
+    const signal = signals[name] as SignalInstance<unknown>;
+    const initial = signal.value;
+    const initialText = JSON.stringify(initial);
+    // A stored value must have the initial value's type; `null` says nothing.
+    const fits = (value: unknown) =>
+      isValue(value) &&
+      (initial === null ||
+        (Array.isArray(initial)
+          ? Array.isArray(value)
+          : value !== null && !Array.isArray(value) &&
+            typeof value === typeof initial));
+    let storage: Storage;
+    try {
+      storage = area === "session" ? sessionStorage : localStorage;
+    } catch {
+      continue;
+    }
+    let restoring = false;
+    const restore = (text: string | null) => {
+      let value = initial;
+      if (text !== null) {
+        try {
+          value = JSON.parse(text);
+        } catch {
+          return;
+        }
+        if (!fits(value)) return;
+      }
+      restoring = true;
+      try {
+        signal.value = value;
+      } finally {
+        restoring = false;
+      }
+    };
+    try {
+      const stored = storage.getItem(key);
+      if (stored !== null) restore(stored);
+    } catch {
+      // Unreadable storage: start from the initial value.
+    }
+    signal.addEventListener("signal", () => {
+      if (restoring) return;
+      const text = JSON.stringify(signal.value);
+      try {
+        if (text === initialText) storage.removeItem(key);
+        else storage.setItem(key, text);
+      } catch {
+        // Full or blocked: the value is simply not kept.
+      }
+    });
+    if (sync) {
+      globalThis.addEventListener("storage", (event: StorageEvent) => {
+        if (event.storageArea !== storage) return;
+        // A `null` key means the whole storage was cleared.
+        if (event.key === key) restore(event.newValue);
+        else if (event.key === null) restore(null);
+      });
+    }
+  }
 }
 
 /**
