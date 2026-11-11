@@ -21,10 +21,17 @@
  *
  * A `Tip` is plain text, describing the trigger's first focusable element
  * to assistive technology (`aria-describedby`); it shows on hover or focus
- * and Escape hides it. A `Card` is for the pointer: it shows on hover and
+ * and Escape hides it. One that only repeats the trigger's own name, such as
+ * the title of an icon-only nav link, takes `describes={false}` so it isn't
+ * read twice. A `Card` is for the pointer: it shows on hover and
  * stays while the pointer moves onto it, so its links can be followed.
  * Whatever a card holds must be reachable some other way too, as the
  * trigger's link is.
+ *
+ * Either one takes the place of a `title` on the trigger's first focusable
+ * element, such as the one a popover's icon-only `Trigger` gets from its
+ * `label`: the title is removed, so the browser's own tooltip doesn't show
+ * beside it.
  *
  * Both are the browser's own `popover`, in the top layer above dialogs,
  * placed beside the trigger with CSS anchor positioning where the browser
@@ -72,19 +79,22 @@ type Content = HTMLElement & {
 /** Helpers the handlers share, called through `fn`. */
 const tooltipTools = new tiny.Handlers({
   /**
-   * Marks the trigger as the content's, and for a tip, has the trigger's
-   * first focusable element described by it.
+   * Marks the trigger as the content's, removes the title of its first
+   * focusable element, which the content replaces, and for a tip, has that
+   * element described by it.
    */
   link(trigger: HTMLElement, target: string): void {
     if (!target) return;
     trigger.dataset.for = target;
-    const content = document.getElementById(target);
-    if (content?.getAttribute("role") !== "tooltip") return;
     const focusable = "a[href], button, input, select, textarea, [tabindex]";
-    const described = trigger.matches(focusable)
+    const inner = trigger.matches(focusable)
       ? trigger
       : trigger.querySelector(focusable);
-    (described ?? trigger).setAttribute("aria-describedby", target);
+    const element = inner ?? trigger;
+    element.removeAttribute("title");
+    const content = document.getElementById(target);
+    if (content?.getAttribute("role") !== "tooltip") return;
+    element.setAttribute("aria-describedby", target);
   },
   /**
    * Shows the content beside `anchor`, or hides it, once its delay passes;
@@ -113,7 +123,8 @@ const tooltipTools = new tiny.Handlers({
   },
   /**
    * Places the content beside its trigger, where CSS anchor positioning is
-   * missing: on its preferred side if it fits, else the opposite one.
+   * missing: on its preferred side if it fits, else the opposite one, and
+   * centred along that side as far as the screen allows.
    */
   place(content: Content): void {
     if (CSS.supports("position-area: top")) return;
@@ -124,17 +135,38 @@ const tooltipTools = new tiny.Handlers({
     const edge = 8;
     const box = anchor.getBoundingClientRect();
     const { width, height } = content.getBoundingClientRect();
-    const above = box.top - gap - height;
-    const below = box.bottom + gap;
-    const top = content.dataset.side === "top"
-      ? (above >= edge ? above : below)
-      : (below + height <= innerHeight - edge ? below : above);
-    const left = Math.min(
-      Math.max(edge, box.left + box.width / 2 - width / 2),
-      innerWidth - edge - width,
-    );
+    const side = content.dataset.side;
+    const centred = (
+      start: number,
+      length: number,
+      size: number,
+      room: number,
+    ) =>
+      Math.min(
+        Math.max(edge, start + length / 2 - size / 2),
+        room - edge - size,
+      );
+    let top: number;
+    let left: number;
+    if (side === "left" || side === "right") {
+      const before = box.left - gap - width;
+      const after = box.right + gap;
+      left = side === "left"
+        ? (before >= edge ? before : after)
+        : (after + width <= innerWidth - edge ? after : before);
+      top = centred(box.top, box.height, height, innerHeight);
+    } else {
+      const above = box.top - gap - height;
+      const below = box.bottom + gap;
+      top = side === "top"
+        ? (above >= edge ? above : below)
+        : (below + height <= innerHeight - edge ? below : above);
+      left = centred(box.left, box.width, width, innerWidth);
+    }
     content.style.margin = "0";
-    content.style.inset = `${Math.max(edge, top)}px auto auto ${left}px`;
+    content.style.inset = `${Math.max(edge, top)}px auto auto ${
+      Math.max(edge, left)
+    }px`;
   },
 });
 
@@ -210,6 +242,10 @@ const tooltipHandlers = new tiny.Handlers(async () => {
 const tooltipStyles = new tiny.Styles({
   trigger: css`
     display: inline-block;
+
+    &[data-block] {
+      display: block;
+    }
   `,
   tip: css`
     max-width: min(18rem, calc(100vw - 1rem));
@@ -240,6 +276,14 @@ const tooltipStyles = new tiny.Styles({
 
       &[data-side="bottom"] {
         position-area: bottom;
+      }
+      &[data-side="right"] {
+        position-area: right;
+        position-try-fallbacks: flip-inline;
+      }
+      &[data-side="left"] {
+        position-area: left;
+        position-try-fallbacks: flip-inline;
       }
     }
     @media (prefers-reduced-motion: reduce) {
@@ -279,6 +323,14 @@ const tooltipStyles = new tiny.Styles({
       &[data-side="top"] {
         position-area: top;
       }
+      &[data-side="right"] {
+        position-area: right;
+        position-try-fallbacks: flip-inline;
+      }
+      &[data-side="left"] {
+        position-area: left;
+        position-try-fallbacks: flip-inline;
+      }
     }
     @media (prefers-reduced-motion: reduce) {
       transition: none;
@@ -293,7 +345,7 @@ type Delays = {
   /** Milliseconds before it hides; default 0 for a tip, 300 for a card. */
   closeDelay?: number;
   /** Which side of the trigger it shows on, if there is room. */
-  side?: "top" | "bottom";
+  side?: "top" | "bottom" | "left" | "right";
   /** Its id, for the page's own use. */
   id?: string;
   children?: unknown;
@@ -303,7 +355,20 @@ type Delays = {
 type TooltipExposed = InstanceSignals<{ open: Signal<boolean> }>;
 
 /** The trigger's props: the element the content belongs to. */
-type TriggerProps = { children?: unknown };
+type TriggerProps = {
+  /** Laid out as a block, for an element filling its row, such as a link. */
+  block?: boolean;
+  children?: unknown;
+};
+
+/** A tip's props. */
+type TipProps = Delays & {
+  /**
+   * Whether it describes the trigger to assistive technology; default true.
+   * `false` hides it from them, for a tip repeating the trigger's own name.
+   */
+  describes?: boolean;
+};
 
 /** A card's props. */
 type CardProps = Delays & { label?: string };
@@ -316,7 +381,7 @@ type CardProps = Delays & { label?: string };
 export const TooltipSignalComponent: SignalComponent<{
   signal: ExposedSignals<TooltipExposed>;
   Trigger: (props: TriggerProps) => JSX.Element;
-  Tip: (props: Delays) => JSX.Element;
+  Tip: (props: TipProps) => JSX.Element;
   Card: (props: CardProps) => JSX.Element;
 }> = new tiny.SignalComponent(
   async () => {
@@ -330,6 +395,7 @@ export const TooltipSignalComponent: SignalComponent<{
       Trigger: (props: TriggerProps) => (
         <span
           class={styled.trigger}
+          data-block={props.block ? "" : undefined}
           onConnect={[fn.signals.subscribe(signal.target), fn.adoptTrigger]}
           onSignal={fn.linkTrigger}
           onPointerEnter={fn.enterTrigger}
@@ -339,10 +405,12 @@ export const TooltipSignalComponent: SignalComponent<{
           {props.children}
         </span>
       ),
-      Tip: (props: Delays) => (
+      Tip: (props: TipProps) => (
         <div
           popover="manual"
-          role="tooltip"
+          // Without the role, the trigger isn't described by it (see `link`).
+          role={props.describes === false ? undefined : "tooltip"}
+          aria-hidden={props.describes === false ? "true" : undefined}
           id={props.id}
           class={styled.tip}
           data-side={props.side}

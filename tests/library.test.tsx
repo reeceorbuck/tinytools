@@ -602,6 +602,21 @@ Deno.test("the library tooltip's trigger and tip share one state", async () => {
   assertEquals(card.includes('role="tooltip"'), false);
   assertStringIncludes(card, 'data-open-delay="200" data-close-delay="300"');
   assertStringIncludes(card, 'tt-handler-pointerleave="');
+  // A tip naming an icon-only link sits beside it and isn't read twice.
+  const link = component.instance();
+  const blockTrigger = await render(
+    <link.Trigger block>
+      <a href="/bookings">Bookings</a>
+    </link.Trigger>,
+  );
+  const repeated = await render(
+    <link.Tip side="right" describes={false}>Bookings</link.Tip>,
+  );
+  assertStringIncludes(blockTrigger, 'data-block=""');
+  assertEquals(trigger.includes("data-block"), false);
+  assertStringIncludes(repeated, 'popover="manual" aria-hidden="true"');
+  assertEquals(repeated.includes('role="tooltip"'), false);
+  assertStringIncludes(repeated, 'data-side="right"');
 });
 
 Deno.test("the library steps show one step of a form at a time", async () => {

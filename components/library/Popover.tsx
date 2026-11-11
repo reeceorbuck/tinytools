@@ -42,7 +42,9 @@
  *
  * Colours come from custom properties a caller may set on the content or any
  * ancestor: `--popover-surface`, `--popover-border`, `--popover-text`,
- * `--popover-muted` and `--popover-accent`.
+ * `--popover-muted` and `--popover-accent`. `--popover-min-width` keeps a
+ * `matchTriggerWidth` content at least that wide, for a trigger that can
+ * shrink to an icon.
  *
  * @module
  */
@@ -265,7 +267,8 @@ const popoverStyles = new tiny.Styles({
       }
       &[data-match-trigger-width] {
         box-sizing: border-box;
-        min-width: 0;
+        /* A narrow trigger (an icon, say) can keep it readable. */
+        min-width: var(--popover-min-width, 0);
         max-width: none;
         width: anchor-size(width);
       }
@@ -354,7 +357,10 @@ type ContentProps = {
   menu?: boolean;
   /** Which side of the trigger it shows on; default `bottom`. */
   side?: "top" | "bottom" | "left" | "right";
-  /** As wide as the trigger, where anchor positioning is supported. */
+  /**
+   * As wide as the trigger, where anchor positioning is supported, and no
+   * narrower than `--popover-min-width` when that is set.
+   */
   matchTriggerWidth?: boolean;
   /**
    * Centred on the screen on a narrow display, or when its trigger is out of
