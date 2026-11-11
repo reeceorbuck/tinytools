@@ -215,7 +215,7 @@ Deno.test("fn references render the same across CSP modes and JSX runtimes", asy
     app.get("/", async (context) => {
       const { fn } = await tiny.imports(handlers);
       await Promise.resolve();
-      assertEquals(typeof fn.click, "object");
+      assertEquals(typeof fn.click, "function");
       const single =
         /^<button onclick="tiny\.runHandler\(this,event\)" tt-handler-click="events_test_\w+\.click"><\/button>$/;
       const multiple =

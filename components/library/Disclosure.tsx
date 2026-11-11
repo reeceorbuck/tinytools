@@ -145,7 +145,7 @@ export const DisclosureSignalComponent: SignalComponent<{
           open={props.open}
           name={props.name}
           data-remember={props.remember}
-          onConnect={[signal.open.subscribe, fn.adoptDetails]}
+          onConnect={[fn.signals.subscribe(signal.open), fn.adoptDetails]}
           onSignal={fn.showDetails}
           onToggle={fn.detailsToggled}
         >
@@ -159,7 +159,7 @@ export const DisclosureSignalComponent: SignalComponent<{
           class={styled.toggle}
           aria-expanded="false"
           aria-label={props.label}
-          onConnect={[signal.open.subscribe, fn.showExpanded]}
+          onConnect={[fn.signals.subscribe(signal.open), fn.showExpanded]}
           onSignal={fn.showExpanded}
           onClick={fn.toggleDetails}
         >

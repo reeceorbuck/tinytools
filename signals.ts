@@ -26,10 +26,13 @@ export interface ReadonlySignal<Value = SignalValue> {
    * event writes the signal.
    */
   name?: string;
-  /** Sends `target` later changes; it hears nothing until the next one. */
-  subscribe(target: EventTarget): void;
+  /**
+   * Runs `target`'s `onSignal` handlers on later changes; it hears nothing
+   * until the next one.
+   */
+  subscribe(target: Element): void;
   /** Ends a subscription made with `subscribe`. */
-  unsubscribe(target: EventTarget): void;
+  unsubscribe(target: Element): void;
 }
 
 /** Type-only marker telling writable signals apart from computed ones. */
@@ -48,9 +51,8 @@ declare const triggerSignal: unique symbol;
 
 /**
  * A signal that carries no value, only the fact that something happened:
- * subscribers run each time it fires. Bound as a handler to any event other
- * than `connect`/`load` (`onClick={signal.addRow}`) it fires once per event;
- * `fire()` fires it from a handler. Its `value` changes on every fire so
+ * subscribers run each time it fires. `fn.signals.fire(signal.addRow)` fires
+ * it once per event, and `fire()` from a handler. Its `value` changes on every fire so
  * dependents notice, but is otherwise meaningless.
  */
 export interface Trigger extends ReadonlySignal<unknown> {
@@ -66,8 +68,8 @@ declare const instanceLevel: unique symbol;
 /**
  * A signal defined inside a `Scope`: every instance root (an element whose
  * `tt-instance` attribute holds the level's key) gets its own copy.
- * Bound in JSX (`onChange={signal.name}`, `onConnect={signal.name.subscribe}`,
- * `onClick={signal.name.increment}`) it resolves to the instance enclosing the
+ * Bound in JSX (`onChange={fn.signals.update(signal.name)}`, `onConnect={fn.signals.subscribe(signal.name)}`,
+ * `onClick={fn.signals.add(signal.name)}`) it resolves to the instance enclosing the
  * element, so markup needs nothing extra.
  * `Level` is the key its `Scope` is returned under, or `never` for one the
  * factory returns directly.
@@ -105,31 +107,21 @@ export interface InstanceSignal<
 // deno-lint-ignore no-explicit-any
 type AnyInstanceSignal = InstanceSignal<any, any, any>;
 
-/** What a signal reference can do as a JSX handler: `signal.name.<action>`. */
-export type SignalAction =
-  | "subscribe"
-  | "update"
-  | "toggle"
-  | "increment"
-  | "fire";
-
 /**
- * The actions a signal of type `S` offers (see `signalActions`): `subscribe`
- * for every signal, `fire` for a trigger, `update` for a writable signal,
- * `toggle` too for a boolean one and `increment` for a number. A per-instance signal offers its instance's.
+ * What a signal of type `S` holds, as the `fn.signals` handlers check it:
+ * every signal `reads` its value, a writable one also `writes` it and a
+ * trigger `fires`. `fn.signals.add` takes signals that write a number,
+ * `toggle` ones that write a boolean. A per-instance signal holds what its
+ * instances hold.
  */
-export type SignalActionsOf<S> = S extends // deno-lint-ignore no-explicit-any
-InstanceSignal<any, infer Instance, any> ? SignalActionsOf<Instance>
-  : "subscribe" | SignalChangesOf<S>;
-
-/** The actions of `SignalActionsOf` that change the signal. */
-type SignalChangesOf<S> = typeof triggerSignal extends keyof S ? "fire"
-  : typeof writableSignal extends keyof S ?
-      | "update"
-      | (S extends Signal<infer Value> ? [Value] extends [boolean] ? "toggle"
-        : [Value] extends [number] ? "increment"
-        : never
-        : never)
+export type SignalHolding<S> = S extends // deno-lint-ignore no-explicit-any
+InstanceSignal<any, infer Instance, any> ? SignalHolding<Instance>
+  : typeof triggerSignal extends keyof S
+    ? { readonly reads: unknown; readonly fires: true }
+  : S extends ReadonlySignal<infer Value>
+    ? typeof writableSignal extends keyof S
+      ? { readonly reads: Value; readonly writes: Value }
+    : { readonly reads: Value }
   : never;
 
 /**
@@ -441,50 +433,12 @@ export function sameValue(a: unknown, b: unknown): boolean {
     a.every((item, index) => Object.is(item, b[index]));
 }
 
-/** The parts of a form control the runtime reads. */
-export type Control = {
-  type?: string;
-  name?: string;
-  value: string;
-  checked?: boolean;
-  multiple?: boolean;
-  selectedOptions?: ArrayLike<{ value: string }>;
-  form?: HTMLFormElement | null;
-};
-
-/**
- * @internal A control's value in the shape of the signal's current value: checkboxes
- * write `checked` to a boolean signal and otherwise the checked values of
- * their group (the inputs sharing their form and name), a multiple select its
- * selected values, and a numeric signal reads a number.
- */
-export function readControl(control: Control, current: unknown): unknown {
-  if (control.type === "checkbox") {
-    if (typeof current === "boolean") return !!control.checked;
-    const named = control.name
-      ? control.form?.elements.namedItem(control.name)
-      : null;
-    const group = typeof RadioNodeList !== "undefined" &&
-        named instanceof RadioNodeList
-      ? Array.from(named) as unknown as Control[]
-      : [control];
-    return group.filter((input) => input.checked).map((input) => input.value);
-  }
-  if (control.multiple && control.selectedOptions) {
-    return Array.from(control.selectedOptions, (option) => option.value);
-  }
-  if (typeof current === "number") {
-    return control.value === "" ? NaN : Number(control.value);
-  }
-  return control.value;
-}
-
 export class SignalInstance<Value = SignalValue> extends EventTarget
   implements Signal<Value> {
   name?: string;
   #value: Value;
   #subscriptions = new WeakMap<
-    EventTarget,
+    Element,
     { listener: EventListener; fire: EventListener }
   >();
 
@@ -509,21 +463,18 @@ export class SignalInstance<Value = SignalValue> extends EventTarget
   }
 
   /**
-   * Returns whether a new subscription was made. Subscribing sends nothing:
-   * the target hears of changes only. A `tt-fire-signals` event on the
-   * target (`signalTools.fireSelfSignal`) sends it the current value.
+   * Subscribing sends nothing: the element hears of changes only, until its
+   * `abortController` aborts. A `tt-fire-signals` event on it
+   * (`signalTools.fireSelfSignal`) sends it the current value. Subscribing
+   * again changes nothing. Computeds listen to their dependencies directly.
    */
-  subscribe(target: EventTarget): boolean {
-    if (this.#subscriptions.has(target)) return false;
+  subscribe(target: Element): void {
+    if (this.#subscriptions.has(target)) return;
     const abortSignal = (target as { abortController?: AbortController })
       .abortController?.signal;
-    if (abortSignal?.aborted) return false;
-    // Elements run their `onSignal` handlers; other targets (a computed's)
-    // hear the event itself.
+    if (abortSignal?.aborted) return;
     const listener = (event: Event) =>
-      typeof HTMLElement !== "undefined" && target instanceof HTMLElement
-        ? tiny.runHandler(target, event)
-        : target.dispatchEvent(this.createEvent());
+      tiny.runHandler(target as HTMLElement, event);
     const fire = () => listener(this.createEvent());
     this.#subscriptions.set(target, { listener, fire });
     this.addEventListener("signal", listener, { signal: abortSignal });
@@ -533,60 +484,14 @@ export class SignalInstance<Value = SignalValue> extends EventTarget
       () => this.#subscriptions.delete(target),
       { once: true },
     );
-    return true;
   }
 
-  unsubscribe(target: EventTarget): void {
+  unsubscribe(target: Element): void {
     const subscription = this.#subscriptions.get(target);
     if (!subscription) return;
     this.#subscriptions.delete(target);
     this.removeEventListener("signal", subscription.listener);
     target.removeEventListener("tt-fire-signals", subscription.fire);
-  }
-
-  /** Takes the value of `control`, and its name when it has one. */
-  read(control: Control): void {
-    this.value = readControl(control, this.#value) as Value;
-    if (control.name) this.name = control.name;
-  }
-
-  /** As a handler (`onInput={signal.size.update}`), reads the event's control. */
-  update(_target: unknown, event?: Event | null): void {
-    if (event) this.read(event.target as unknown as Control);
-  }
-
-  /** Flips a boolean signal (`onClick={signal.open.toggle}`). */
-  toggle(): void {
-    if (typeof this.#value !== "boolean") {
-      throw new TypeError(
-        `Only a boolean signal can be toggled: '${this.name}' holds a ${typeof this
-          .#value}.`,
-      );
-    }
-    this.value = !this.#value as Value;
-  }
-
-  /** Adds 1 to a numeric signal (`onClick={signal.count.increment}`). */
-  increment(): void {
-    if (typeof this.#value !== "number") {
-      throw new TypeError(
-        `Only a numeric signal can be incremented: '${this.name}' holds a ${typeof this
-          .#value}.`,
-      );
-    }
-    this.value = (this.#value + 1) as Value;
-  }
-
-  handleEvent(target: unknown, event?: Event | null): this {
-    if (event?.type === "input" || event?.type === "change") {
-      this.read(event.target as unknown as Control);
-    } else if (event) {
-      // Any other event (a click, say) needs an explicit action.
-      throw new TypeError(
-        `A signal does nothing on a ${event.type} event: use one of its actions (signal.${this.name}.subscribe, .increment, .toggle or .update).`,
-      );
-    }
-    return this;
   }
 }
 
@@ -659,26 +564,15 @@ export class TriggerInstance extends SignalInstance<number> implements Trigger {
   override set value(_value: number) {
     throw new TypeError("Triggers have no value to set: call `fire()`.");
   }
-
-  /** Every event fires it, except connect and load: those need `subscribe`. */
-  override handleEvent(_target: unknown, event?: Event | null): this {
-    if (event?.type === "connect" || event?.type === "load") {
-      throw new TypeError(
-        `A trigger does not subscribe on ${event.type}: use signal.${this.name}.subscribe.`,
-      );
-    } else if (event) {
-      this.fire();
-    }
-    return this;
-  }
 }
 
 export class ComputedInstance<Value> extends SignalInstance<Value>
   implements ReadonlySignal<Value> {
   #compute: (previous: Value | undefined) => Value;
-  #explicit: Set<ReadonlySignal<unknown>>;
-  #dependencies = new Set<ReadonlySignal<unknown>>();
-  #target = new EventTarget();
+  /** Signals are EventTargets, which a computed listens to directly. */
+  #explicit: readonly EventTarget[];
+  #dependencies = new Set<EventTarget>();
+  #refresh = () => this.refresh();
 
   /** With `initialValue`, `compute` waits for a change of `dependencies`. */
   constructor(
@@ -691,28 +585,24 @@ export class ComputedInstance<Value> extends SignalInstance<Value>
       : track(() => compute(undefined));
     super(initial.value);
     this.#compute = compute;
-    this.#explicit = new Set(dependencies);
-    this.#target.addEventListener("signal", () => this.refresh());
+    this.#explicit = dependencies as unknown as readonly EventTarget[];
     this.#follow(initial.reads);
   }
 
-  /** Subscribes to the signals the last run read, dropping the rest. */
-  #follow(reads: Set<SignalInstance<unknown>>): void {
-    const wanted = new Set<ReadonlySignal<unknown>>([
-      ...this.#explicit,
-      ...reads,
-    ]);
+  /** Listens to the signals the last run read, dropping the rest. */
+  #follow(reads: Set<EventTarget>): void {
+    const wanted = new Set([...this.#explicit, ...reads]);
     wanted.delete(this);
     for (const dependency of this.#dependencies) {
-      if (wanted.has(dependency)) continue;
-      dependency.unsubscribe(this.#target);
-      this.#dependencies.delete(dependency);
+      if (!wanted.has(dependency)) {
+        dependency.removeEventListener("signal", this.#refresh);
+      }
     }
+    // Adding a listener a dependency already has changes nothing.
     for (const dependency of wanted) {
-      if (this.#dependencies.has(dependency)) continue;
-      dependency.subscribe(this.#target);
-      this.#dependencies.add(dependency);
+      dependency.addEventListener("signal", this.#refresh);
     }
+    this.#dependencies = wanted;
   }
 
   /** Recomputes the value, notifying subscribers if it changed. */
@@ -898,12 +788,10 @@ export class InstanceGroup {
     for (const [name, signal] of Object.entries(graph)) {
       // Nested per-instance signals are aggregated by their own group.
       if (!(signal instanceof SignalInstance)) continue;
-      const target = new EventTarget();
-      target.addEventListener("signal", () => {
+      signal.addEventListener("signal", () => {
         const aggregate = this.#aggregates.get(name);
         if (aggregate) aggregate.value = this.#values(name);
       });
-      signal.subscribe(target);
     }
     return graph;
   }
@@ -1075,60 +963,26 @@ export class InstanceSignalHandle<Value = unknown>
     this.forInstance(target).unsubscribe(target);
   }
 
-  /**
-   * As a handler, acts on the instance enclosing the element. Read from a
-   * handler (no event) it returns itself so `.forInstance()` and `.all` are reachable.
-   */
-  handleEvent(target: unknown, event?: Event | null): unknown {
-    if (!event) return this;
-    return this.forInstance(target as Element).handleEvent(target, event);
-  }
-
-  /** `signal.name.update`, on the instance enclosing the element. */
-  update(target: unknown, event?: Event | null): void {
-    this.forInstance(target as Element).update(target, event);
-  }
-
-  /** `signal.name.toggle`, on the instance enclosing the element. */
-  toggle(target: unknown): void {
-    this.forInstance(target as Element).toggle();
-  }
-
-  /** `signal.name.increment`, on the instance enclosing the element. */
-  increment(target: unknown): void {
-    this.forInstance(target as Element).increment();
-  }
-
-  /** `signal.name.fire`, on the instance enclosing the element. */
-  fire(target: unknown): void {
-    (this.forInstance(target as Element) as unknown as TriggerInstance).fire();
-  }
-
   /** @internal The signal a fresh instance defines under this name. */
   get templateSignal(): SignalInstance<unknown> | InstanceSignalHandle {
     return this.#group.template[this.#name];
   }
 }
 
+/** What a signal is, for which `fn.signals` handlers take it. */
+export type SignalKind = "trigger" | "writable" | "computed";
+
 /**
- * @internal The actions a signal offers in JSX for its kind, as
- * `signal.name.<action>`: `subscribe` for every signal, `fire` for triggers,
- * `update` for writable signals, `toggle` too for boolean ones and
- * `increment` for numbers. Read from a factory's
- * server-side (inert) run, where computeds are not `SignalInstance` itself.
+ * @internal The kind of `signal` (a per-instance one's instances' kind).
+ * Read from a factory's server-side (inert) run, where computeds are not
+ * `SignalInstance` itself.
  */
-export function signalActions(signal: unknown): SignalAction[] {
+export function signalKind(signal: unknown): SignalKind {
   if (signal instanceof InstanceSignalHandle) {
-    return signalActions(signal.templateSignal);
+    return signalKind(signal.templateSignal);
   }
-  if (signal instanceof TriggerInstance) return ["subscribe", "fire"];
-  if (signal?.constructor !== SignalInstance) return ["subscribe"];
-  const value = (signal as SignalInstance<unknown>).value;
-  return typeof value === "boolean"
-    ? ["subscribe", "update", "toggle"]
-    : typeof value === "number"
-    ? ["subscribe", "update", "increment"]
-    : ["subscribe", "update"];
+  if (signal instanceof TriggerInstance) return "trigger";
+  return signal?.constructor === SignalInstance ? "writable" : "computed";
 }
 
 /**

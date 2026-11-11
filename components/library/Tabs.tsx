@@ -248,7 +248,7 @@ export const TabsSignalComponent: SignalComponent<{
           aria-orientation={props.vertical ? "vertical" : undefined}
           data-value={props.value}
           data-remember={props.remember}
-          onConnect={[signal.selected.subscribe, fn.adoptTabs]}
+          onConnect={[fn.signals.subscribe(signal.selected), fn.adoptTabs]}
           onSignal={fn.rememberTab}
           onKeyDown={fn.moveTab}
         >
@@ -271,7 +271,7 @@ export const TabsSignalComponent: SignalComponent<{
             aria-selected={String(selected)}
             tabindex={selected || value === undefined ? 0 : -1}
             disabled={props.disabled}
-            onConnect={[signal.selected.subscribe, fn.showTab]}
+            onConnect={[fn.signals.subscribe(signal.selected), fn.showTab]}
             onSignal={fn.showTab}
             onClick={fn.selectTab}
           >
@@ -287,7 +287,7 @@ export const TabsSignalComponent: SignalComponent<{
           aria-label={props.label}
           data-value={props.value}
           hidden={!props.selected}
-          onConnect={[signal.selected.subscribe, fn.showPanel]}
+          onConnect={[fn.signals.subscribe(signal.selected), fn.showPanel]}
           onSignal={fn.showPanel}
         >
           {props.children}

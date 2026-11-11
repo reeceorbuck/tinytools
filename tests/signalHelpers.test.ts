@@ -4,6 +4,7 @@ import { signalClasses } from "../signals.ts";
 import { Signals } from "../clientTools.ts";
 import { signalTools } from "../handlers/signals.ts";
 import { loadHandler } from "./helpers/loadHandler.ts";
+import { recordingSubscribers, update } from "./helpers/signalRuntime.ts";
 
 void signalTools;
 
@@ -28,67 +29,53 @@ Deno.test("setCssProperty writes the signal's named custom property", async () =
   assertEquals(properties.size, 1);
 });
 
-Deno.test("a signal does nothing on another event but increment adds 1", () => {
-  type Dispatching<Value> = {
-    value: Value;
-    subscribe(target: EventTarget): void;
-    handleEvent(target: unknown, event: Event): unknown;
-    increment(): void;
-  };
+Deno.test("fn.signals.multiply multiplies by the element's value, which it needs", async () => {
+  const multiply = await loadHandler("multiply");
   const { Signal } = signalClasses();
-  const requests = new Signal<number>(0) as unknown as Dispatching<number>;
-  let notifications = 0;
-  const listener = new EventTarget();
-  listener.addEventListener("signal", () => notifications++);
-  requests.subscribe(listener);
-  const click = { type: "click" } as Event;
+  const zoom = new Signal<number>(4);
+  let value: string | null = null;
+  const button = { localName: "button", getAttribute: () => value };
   assertThrows(
-    () => requests.handleEvent({}, click),
+    () => multiply.call(button, new Event("click"), zoom),
     TypeError,
-    "does nothing on a click event",
+    "fn.signals.multiply uses the element's value, but <button> has none",
   );
-  requests.increment();
-  requests.increment();
-  assertEquals([requests.value, notifications], [2, 2]);
-  const text = new Signal<string>("a") as unknown as Dispatching<string>;
-  assertThrows(() => text.increment(), TypeError, "numeric");
+  value = "0.5";
+  multiply.call(button, new Event("click"), zoom, zoom);
+  assertEquals(zoom.value, 1);
+  value = "big";
+  assertThrows(
+    () => multiply.call(button, new Event("click"), zoom),
+    TypeError,
+    "'big' is not a number",
+  );
+  // A control's live value is read.
+  multiply.call({ localName: "input", value: "3" }, new Event("input"), zoom);
+  assertEquals(zoom.value, 3);
 });
 
-Deno.test("a trigger fires on every event and on fire()", () => {
-  type Dispatching = {
-    value: unknown;
-    fire(): void;
-    subscribe(target: EventTarget): void;
-    handleEvent(target: unknown, event: Event): unknown;
-  };
+Deno.test("a trigger notifies on each fire() and has no value to set", () => {
   const { Trigger } = signalClasses();
-  const addRow = new Trigger() as unknown as Dispatching;
+  const addRow = new Trigger();
   let notifications = 0;
-  const listener = new EventTarget();
-  listener.addEventListener("signal", () => notifications++);
-  addRow.subscribe(listener);
-  addRow.handleEvent({}, { type: "click" } as Event);
-  // A change event fires it too, rather than reading the control's value.
-  addRow.handleEvent(
-    {},
-    { type: "change", target: { value: "x" } } as unknown as Event,
+  (addRow as unknown as EventTarget).addEventListener(
+    "signal",
+    () => notifications++,
   );
   addRow.fire();
-  assertEquals(notifications, 3);
-  assertThrows(() => (addRow.value = 1), TypeError, "fire()");
+  addRow.fire();
+  assertEquals(notifications, 2);
+  assertThrows(
+    () => ((addRow as { value: unknown }).value = 1),
+    TypeError,
+    "fire()",
+  );
 });
 
 Deno.test("signals take their name from the input that writes them", () => {
   const { Signal } = signalClasses();
-  const signal = new Signal<string | null>(null) as unknown as {
-    value: string | null;
-    name?: string;
-    handleEvent(target: unknown, event?: Event | null): unknown;
-  };
-  signal.handleEvent(null, {
-    type: "input",
-    target: { value: "typed", name: "field" },
-  } as unknown as Event);
+  const signal = new Signal<string | null>(null);
+  update({ value: "typed", name: "field" }, signal);
   assertEquals(signal.value, "typed");
   assertEquals(signal.name, "field");
 });
@@ -145,77 +132,50 @@ Deno.test("a signal without an initial value must allow null", () => {
   new Signal<string>();
 });
 
-Deno.test("a load subscription sends changes only, and fires on request", () => {
-  const { Signal } = signalClasses();
-  const signal = new Signal<number>(1);
-  const target = new EventTarget();
-  const seen: unknown[] = [];
-  target.addEventListener("signal", (event) => {
-    seen.push((event as Event & { signal: { value: unknown } }).signal.value);
-  });
-  const subscriber = signal as unknown as {
-    handleEvent(target: unknown, event: Event): unknown;
-  };
-  // A bare signal no longer subscribes: `subscribe` does.
-  assertThrows(
-    () => subscriber.handleEvent(target, new Event("load")),
-    TypeError,
-    "does nothing on a load event",
-  );
-  signal.subscribe(target);
-  assertEquals(seen, []);
-  signal.value = 2;
-  assertEquals(seen, [2]);
-  // Equal values still do not notify.
-  signal.value = 2;
-  assertEquals(seen, [2]);
-  // `fireSelfSignal` asks each subscribed signal for its current value.
-  target.dispatchEvent(new Event("tt-fire-signals"));
-  assertEquals(seen, [2, 2]);
-  signal.unsubscribe(target);
-  target.dispatchEvent(new Event("tt-fire-signals"));
-  signal.value = 3;
-  assertEquals(seen, [2, 2]);
+Deno.test("a subscription sends changes only, and fires on request", () => {
+  const subscribers = recordingSubscribers();
+  try {
+    const { Signal } = signalClasses();
+    const signal = new Signal<number>(1);
+    const { element, seen } = subscribers.subscriber();
+    signal.subscribe(element);
+    assertEquals(seen, []);
+    signal.value = 2;
+    assertEquals(seen, [2]);
+    // Equal values still do not notify.
+    signal.value = 2;
+    assertEquals(seen, [2]);
+    // `fireSelfSignal` asks each subscribed signal for its current value.
+    element.dispatchEvent(new Event("tt-fire-signals"));
+    assertEquals(seen, [2, 2]);
+    signal.unsubscribe(element);
+    element.dispatchEvent(new Event("tt-fire-signals"));
+    signal.value = 3;
+    assertEquals(seen, [2, 2]);
+  } finally {
+    subscribers.restore();
+  }
 });
 
 Deno.test("fireSelfSignal sends every subscribed signal once", () => {
-  const { Signal, Computed } = signalClasses();
-  const a = new Signal<string>("a");
-  const b = new Signal<number>(1);
-  const doubled = new Computed(() => b.value * 2);
-  const unrelated = new Signal<string>("x");
-  const target = new EventTarget();
-  const seen: unknown[] = [];
-  target.addEventListener("signal", (event) => {
-    seen.push((event as Event & { signal: { value: unknown } }).signal.value);
-  });
-  for (const signal of [a, doubled]) signal.subscribe(target);
-  // Subscribing twice is one subscription.
-  a.subscribe(target);
-  target.dispatchEvent(new Event("tt-fire-signals"));
-  assertEquals(seen, ["a", 2]);
-  unrelated.value = "y";
-  assertEquals(seen, ["a", 2]);
-});
-
-Deno.test("setValue writes any signal, only on a change", async () => {
-  const setValue = await loadHandler("setValue");
-  const { Signal } = signalClasses();
-  const count = new Signal<number>(2);
-  const writes: string[] = [];
-  const element = {
-    current: "",
-    get value() {
-      return this.current;
-    },
-    set value(value: string) {
-      writes.push(value);
-      this.current = value;
-    },
-  };
-  setValue.call(element, { signal: count });
-  setValue.call(element, { signal: count });
-  assertEquals(writes, ["2"]);
+  const subscribers = recordingSubscribers();
+  try {
+    const { Signal, Computed } = signalClasses();
+    const a = new Signal<string>("a");
+    const b = new Signal<number>(1);
+    const doubled = new Computed(() => b.value * 2);
+    const unrelated = new Signal<string>("x");
+    const { element, seen } = subscribers.subscriber();
+    for (const signal of [a, doubled]) signal.subscribe(element);
+    // Subscribing twice is one subscription.
+    a.subscribe(element);
+    element.dispatchEvent(new Event("tt-fire-signals"));
+    assertEquals(seen, ["a", 2]);
+    unrelated.value = "y";
+    assertEquals(seen, ["a", 2]);
+  } finally {
+    subscribers.restore();
+  }
 });
 
 /** An element with the given attributes and properties, recording writes. */
@@ -275,12 +235,12 @@ Deno.test("setBound writes each binding of the event's signal, only on a change"
   const global = globalThis as { handlers?: unknown };
   const previous = global.handlers;
   try {
-    // Run without an event, a signal's handler returns the signal.
+    // A signals bundle registers its signals.
     global.handlers = {
       bundle: {
-        status: () => status,
-        expanded: () => expanded,
-        done: () => done,
+        status,
+        expanded,
+        done,
         setBound: () => {
           throw new Error("tt-handler-signal is not a binding");
         },
@@ -322,7 +282,7 @@ Deno.test("setBound writes the value attribute of elements but input and textare
   const global = globalThis as { handlers?: unknown };
   const previous = global.handlers;
   try {
-    global.handlers = { bundle: { choice: () => choice } };
+    global.handlers = { bundle: { choice } };
     setBound.call(element, { signal: choice });
     setBound.call(element, { signal: choice });
     // Removed for null, so an option falls back to its text.
@@ -348,16 +308,66 @@ Deno.test("setBound resolves a per-instance signal for the element", async () =>
   try {
     global.handlers = {
       bundle: {
-        query: () => ({
+        query: {
           forInstance: (target: unknown) =>
             target === element ? instance : null,
-        }),
+        },
       },
     };
     setBound.call(element, { signal: other });
     setBound.call(element, { signal: instance });
     assertEquals(writes, ["value:milk"]);
   } finally {
+    global.handlers = previous;
+  }
+});
+
+Deno.test("setBound writes a select's value as its property", async () => {
+  const setBound = await loadHandler("setBound");
+  const { Signal } = signalClasses();
+  const site = new Signal<string>("Left");
+  const { element, writes } = boundElement(
+    { "tt-value-signal": "bundle.site" },
+    { value: "Right" },
+    "select",
+  );
+  const global = globalThis as { handlers?: unknown };
+  const previous = global.handlers;
+  try {
+    global.handlers = { bundle: { site } };
+    setBound.call(element, { signal: site });
+    setBound.call(element, { signal: site });
+    assertEquals(writes, ["value:Left"]);
+  } finally {
+    global.handlers = previous;
+  }
+});
+
+Deno.test("checkSelected warns when a select shows another option than its signal holds", async () => {
+  const checkSelected = await loadHandler("checkSelected");
+  const { Signal } = signalClasses();
+  const site = new Signal<string>("Left");
+  const { element } = boundElement(
+    { "tt-value-signal": "bundle.site" },
+    { value: "Left", name: "site" },
+    "select",
+  );
+  const global = globalThis as { handlers?: unknown };
+  const previous = global.handlers;
+  const warn = console.warn;
+  const warnings: unknown[] = [];
+  console.warn = (message: unknown) => warnings.push(message);
+  try {
+    global.handlers = { bundle: { site } };
+    checkSelected.call(element);
+    assertEquals(warnings, []);
+    element.value = "Right";
+    checkSelected.call(element);
+    assertEquals(warnings, [
+      `<select name="site"> shows "Right" but signal site holds "Left": mark the option matching the signal's initial value as selected.`,
+    ]);
+  } finally {
+    console.warn = warn;
     global.handlers = previous;
   }
 });

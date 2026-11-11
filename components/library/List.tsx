@@ -438,7 +438,7 @@ export const ListSignalComponent: SignalComponent<{
         "data-item-class": styled.listItem,
         "data-dismiss-class": styled.dismissButton,
         "data-announcer-class": styled.announcer,
-        onConnect: [signal.pending.subscribe, fn.refreshList],
+        onConnect: [fn.signals.subscribe(signal.pending), fn.refreshList],
         onSignal: fn.refreshList,
         onClick: fn.dismissItem,
         ...(reorderable ? sorting : {}),

@@ -132,7 +132,7 @@ export const changedHandlerKeys = new Set<string>();
 export const filesWithChangedHandlers = new Set<string>();
 
 /** Bump when emitted bundle code changes shape, so stale files are not reused. */
-const BUNDLE_FORMAT_VERSION = 2;
+const BUNDLE_FORMAT_VERSION = 3;
 
 /** Cache key under `cache.files[source].handlers` for bundle filenames. */
 const BUNDLE_CACHE_KEY = "#bundle";
@@ -197,6 +197,8 @@ export type HandlerBundleOptions = {
   styleFiles?: Iterable<string>;
   /** Runtime modules (`tt-*.js`) the prelude imports. */
   runtimeFiles?: Iterable<string>;
+  /** The prelude's graph, whose signals a Signals bundle exports. */
+  members?: string;
 };
 
 /**
@@ -217,6 +219,8 @@ export class HandlerBundle {
   readonly styleFiles: ReadonlySet<string>;
   /** Runtime modules the prelude imports, preloaded beside the bundle. */
   readonly runtimeFiles: ReadonlySet<string>;
+  /** The prelude's graph, whose signals a Signals bundle exports. */
+  readonly members?: string;
   #explicitDependencies?: Map<string, ClientFunctionImpl>;
   #filename: string | undefined;
   /** Last filename written to disk, starting from the persisted cache entry. */
@@ -230,6 +234,7 @@ export class HandlerBundle {
     this.prelude = options.prelude ?? "";
     this.styleFiles = new Set(options.styleFiles);
     this.runtimeFiles = new Set(options.runtimeFiles);
+    this.members = options.members;
     this.#explicitDependencies = options.dependencies &&
       new Map(options.dependencies);
     handlerBundles.add(this);
@@ -298,6 +303,7 @@ export class HandlerBundle {
       this.sourceFileUrl ?? "",
       this.stateful ? `stateful:${this.index}` : "",
       this.prelude,
+      this.members ?? "",
       ...[...this.functions].map(([name, impl]) =>
         `${name}=${impl.fn.toString()}`
       ),
@@ -377,6 +383,7 @@ export class HandlerBundle {
           dependencies,
           defaultExport,
           register: this.filename,
+          members: this.members,
         })
       )
     );

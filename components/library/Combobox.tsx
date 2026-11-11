@@ -439,9 +439,9 @@ export const ComboboxSignalComponent: SignalComponent<{
             data-source={props.source}
             data-invalid={props.invalid ?? "Choose one of the options."}
             onConnect={[
-              signal.value.subscribe,
-              signal.label.subscribe,
-              signal.open.subscribe,
+              fn.signals.subscribe(signal.value),
+              fn.signals.subscribe(signal.label),
+              fn.signals.subscribe(signal.open),
               fn.adoptCombobox,
             ]}
             onSignal={[fn.showChoice, fn.showList]}
@@ -486,7 +486,7 @@ export const ComboboxSignalComponent: SignalComponent<{
       },
       Value: () => (
         <output
-          onConnect={[signal.label.subscribe, fn.fireSelfSignal]}
+          onConnect={[fn.signals.subscribe(signal.label), fn.fireSelfSignal]}
           onSignal={fn.setTextContent}
         />
       ),

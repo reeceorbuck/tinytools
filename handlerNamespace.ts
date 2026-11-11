@@ -129,6 +129,13 @@ export type BundleSource = {
    * evaluates, so `runHandler` can call them synchronously during dispatch.
    */
   register?: string;
+  /**
+   * A Signals bundle's graph: the module-level binding, declared by the
+   * prelude, whose properties are the bundle's members. Each is exported as
+   * it is in place of its function's source, and the graph itself is
+   * registered.
+   */
+  members?: string;
 };
 
 /** The namespaces a dependency key may belong to, by its prefix. */
@@ -181,19 +188,33 @@ export async function compileHandlerBundle(
   const renamed = [...handlerBindings].filter(([name, binding]) =>
     name !== binding
   );
+  const { members } = bundle;
   // Emitted as separate pieces so esbuild never renames locals that happen
   // to share a name with another module-level binding.
   const pieces = [
     prelude,
-    ...[...functions].map(([name, source]) => {
+    ...(members ? [] : [...functions].map(([name, source]) => {
       const binding = handlerBindings.get(name)!;
       return name === binding
         ? exportedHandler(binding, source)
         : `const ${binding} = ${handlerExpression(source)};`;
-    }),
+    })),
   ].filter(Boolean);
+  const direct = [...handlerBindings].filter(([name, binding]) =>
+    name === binding
+  ).map(([name]) => name);
   // Generated export lines are emitted verbatim after the transformed pieces.
   const exportLines = [
+    // A Signals bundle exports its graph's signals themselves.
+    members && direct.length
+      ? `export const { ${direct.join(", ")} } = ${members};`
+      : "",
+    members && renamed.length
+      ? `const { ${
+        renamed.map(([name, binding]) => `${JSON.stringify(name)}: ${binding}`)
+          .join(", ")
+      } } = ${members};`
+      : "",
     renamed.length
       ? `export { ${
         renamed.map(([name, binding]) => `${binding} as ${exportName(name)}`)
@@ -286,7 +307,7 @@ export async function compileHandlerBundle(
   // Imports keep their exported names unless that would clash with another
   // binding or shadow an identifier the handler code uses directly.
   const sourceIdentifiers = identifiers(
-    [prelude, ...functions.values()].join("\n"),
+    [prelude, ...members ? [] : functions.values()].join("\n"),
   );
   const bindings = new Map<string, string>();
   for (const [key, { exportName: name }] of live) {
@@ -325,19 +346,23 @@ export async function compileHandlerBundle(
     live.filter(([key]) => namespaceOf(key) === kind).map(([key]) => {
       const name = nameOf(key);
       const binding = bindings.get(key)!;
-      // Signal accessors are exposed as the signal itself, resolved lazily so
-      // module evaluation order between bundles does not matter.
+      // Signals are read through getters, so module evaluation order
+      // between bundles that import each other does not matter.
       if (kind === "signal") {
         const property = /^[$A-Z_a-z][$\w]*$/.test(name)
           ? name
           : `[${JSON.stringify(name)}]`;
-        return `get ${property}() { return ${binding}(); }`;
+        return `get ${property}() { return ${binding}; }`;
       }
       return name === binding && name !== "__proto__"
         ? binding
         : `[${JSON.stringify(name)}]: ${binding}`;
     }).join(", ");
-  const registerLine = bundle.register
+  const registerLine = bundle.register && members
+    ? `(globalThis.handlers ??= {})[${
+      JSON.stringify(bundle.register)
+    }] = ${members};`
+    : bundle.register
     ? `(globalThis.handlers ??= {})[${JSON.stringify(bundle.register)}] = { ${
       [...handlerBindings].map(([name, binding]) =>
         name === binding && name !== "__proto__"

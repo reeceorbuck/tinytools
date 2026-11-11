@@ -197,8 +197,11 @@ export const SearchFilterSignalComponent: SignalComponent<{
           placeholder={props.placeholder ?? props.label ?? "Filter"}
           value={props.value ?? ""}
           autocomplete="off"
-          onConnect={[signal.query.subscribe, fn.adoptQuery]}
-          onInput={[signal.query.update, ...[props.onInput ?? []].flat()]}
+          onConnect={[fn.signals.subscribe(signal.query), fn.adoptQuery]}
+          onInput={[
+            fn.signals.update(signal.query),
+            ...[props.onInput ?? []].flat(),
+          ]}
         />
       ),
       Results: (props: ResultsProps) => {
@@ -206,7 +209,7 @@ export const SearchFilterSignalComponent: SignalComponent<{
         return (
           <Tag
             class={styled.results}
-            onConnect={[signal.query.subscribe, fn.applyFilter]}
+            onConnect={[fn.signals.subscribe(signal.query), fn.applyFilter]}
             onSignal={fn.applyFilter}
           >
             {props.children}
@@ -217,7 +220,7 @@ export const SearchFilterSignalComponent: SignalComponent<{
       NoMatches: (props: NoMatchesProps) => (
         <p
           hidden
-          onConnect={[signal.noMatches.subscribe, fn.showNoMatches]}
+          onConnect={[fn.signals.subscribe(signal.noMatches), fn.showNoMatches]}
           onSignal={fn.showNoMatches}
         >
           {props.children ?? "No matches."}

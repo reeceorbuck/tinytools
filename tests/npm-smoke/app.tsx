@@ -57,10 +57,12 @@ app.get("/", async (c) => {
 });
 
 app.get("/counter", async (c) => {
-  const { signal } = await tiny.imports(counter);
+  const { fn, signal } = await tiny.imports(counter);
   return c.render(
     <>
-      <button type="button" onClick={signal.count.increment}>Add one</button>
+      <button type="button" value={1} onClick={fn.signals.add(signal.count)}>
+        Add one
+      </button>
       <p>Clicked {signal.count} times.</p>
     </>,
   );

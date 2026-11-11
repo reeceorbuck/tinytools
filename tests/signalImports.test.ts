@@ -6,15 +6,18 @@ import {
   assertThrows,
 } from "@std/assert";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { createContext, useContext } from "hono/jsx";
 import { getEsbuild } from "../esbuildInit.ts";
 import {
   cache,
   Constants,
+  createNoContextToolUsageTracker,
   Handlers,
   imports,
   registeredClientTools,
   SignalComponent,
   Signals,
+  withNoContextToolUsageTracker,
 } from "../clientTools.ts";
 import { buildScriptFiles } from "../build.ts";
 import {
@@ -115,8 +118,8 @@ Deno.test({
       );
       assertEquals(code.includes("unused"), false);
       const module = await import(pathToFileURL(path).href);
-      assertEquals(module.shade().value, "B1");
-      assertEquals(module.label().value, "B1 3");
+      assertEquals(module.shade.value, "B1");
+      assertEquals(module.label.value, "B1 3");
     } finally {
       await Deno.remove(directory, { recursive: true }).catch(() => {});
       reset();
@@ -236,7 +239,7 @@ Deno.test({
     });
     try {
       await buildScriptFiles({ fresh: true, publicDir: directory });
-      const { component, signal } = await imports(BoxComponent, boxSignals);
+      const { component, signal, fn } = await imports(BoxComponent, boxSignals);
       const one = component.Box.instance();
       const two = component.Box.instance();
       assertEquals(one.name, "Box");
@@ -272,12 +275,14 @@ Deno.test({
       // An instance's reference links the element using it into the
       // instance, as its root is.
       assertStringIncludes(
-        clean(String(jsx("button", { onClick: one.signal.press }))),
-        `tt-handler-click="signalImports_test.press" tt-link="${oneLink}"`,
+        clean(
+          String(jsx("button", { onClick: fn.signals.fire(one.signal.press) })),
+        ),
+        `tt-handler-click="signals.fire(signalImports_test.press)" tt-link="${oneLink}"`,
       );
       // Precompiled attributes render the same.
       assertStringIncludes(
-        clean(String(jsxAttr("onClick", two.signal.press))),
+        clean(String(jsxAttr("onClick", fn.signals.fire(two.signal.press)))),
         `tt-link="${linkOf(String(await two({ label: "b" })))}"`,
       );
       // So does live text.
@@ -287,11 +292,18 @@ Deno.test({
       );
       // References from tiny.imports() still resolve by ancestry.
       assertEquals(
-        String(jsx("button", { onClick: signal.press })).includes("tt-link"),
+        String(jsx("button", { onClick: fn.signals.fire(signal.press) }))
+          .includes("tt-link"),
         false,
       );
       assertThrows(
-        () => jsx("button", { onClick: [one.signal.press, two.signal.press] }),
+        () =>
+          jsx("button", {
+            onClick: [
+              fn.signals.fire(one.signal.press),
+              fn.signals.fire(two.signal.press),
+            ],
+          }),
         TypeError,
         "one instance only",
       );
@@ -345,12 +357,16 @@ Deno.test({
       );
       // The outer level is the enclosing element's, for its references too.
       assertStringIncludes(
-        String(jsx("button", { onClick: inGroup.signal.recolor })),
+        String(
+          jsx("button", { onClick: fn.signals.fire(inGroup.signal.recolor) }),
+        ),
         `tt-link="${inGroupLink}"`,
       );
       // Without an instance, exposed signals resolve by ancestry.
       assertEquals(
-        String(jsx("button", { onClick: grouped.signal.recolor }))
+        String(
+          jsx("button", { onClick: fn.signals.fire(grouped.signal.recolor) }),
+        )
           .includes("tt-link"),
         false,
       );
@@ -424,7 +440,7 @@ Deno.test({
       assertEquals(pair.Box.instance().name, "Box");
       const other = pair.Other.instance();
       assertStringIncludes(
-        String(jsx("button", { onClick: other.signal.press })),
+        String(jsx("button", { onClick: fn.signals.fire(other.signal.press) })),
         `tt-link="${linkOf(String(await other({ label: "o" })))}"`,
       );
       // A copy's signals act on the copy, whose parts carry none of their own.
@@ -432,7 +448,7 @@ Deno.test({
       const copyLink = linkOf(String(await copy.Box({ label: "p" })));
       assertEquals(linkOf(String(await copy.Other({ label: "q" }))), copyLink);
       assertStringIncludes(
-        String(jsx("button", { onClick: copy.signal.press })),
+        String(jsx("button", { onClick: fn.signals.fire(copy.signal.press) })),
         `tt-link="${copyLink}"`,
       );
       // @ts-expect-error a copy's parts carry no signals
@@ -441,7 +457,7 @@ Deno.test({
       assertEquals(copy.signal.internal, undefined);
       // Without a copy, the component's signals resolve by ancestry.
       assertEquals(
-        String(jsx("button", { onClick: pair.signal.press }))
+        String(jsx("button", { onClick: fn.signals.fire(pair.signal.press) }))
           .includes("tt-link"),
         false,
       );
@@ -490,7 +506,9 @@ Deno.test({
         assertStringIncludes(html, ">i</output>");
       }
       assertStringIncludes(
-        String(jsx("button", { onClick: fromMarkup.signal.press })),
+        String(
+          jsx("button", { onClick: fn.signals.fire(fromMarkup.signal.press) }),
+        ),
         `tt-link="${linkOf(String(await fromMarkup.Plain({})))}"`,
       );
       await assertRejects(
@@ -543,8 +561,10 @@ Deno.test({
       assertEquals(
         // Bundle names carry content hashes.
         html.replace(/(\w+)_[0-9a-f]{5}\./g, "$1."),
-        `<p>${bound("signalImports_test.count$subscribe", 3)} doubled is ${
-          bound("signalImports_test.doubled$subscribe", 6)
+        `<p>${
+          bound("signals.subscribe(signalImports_test.count)", 3)
+        } doubled is ${
+          bound("signals.subscribe(signalImports_test.doubled)", 6)
         }</p>`,
       );
     } finally {
@@ -578,10 +598,10 @@ Deno.test({
       const unhashed = (html: unknown) =>
         String(html).replace(/(\w+)_[0-9a-f]{5}\./g, "$1.");
       const alone =
-        `value="tea" tt-value-signal="signalImports_test.query" tt-handler-connect="signalImports_test.query$subscribe" tt-handler-signal="signals.setBound"`;
+        `value="tea" tt-value-signal="signalImports_test.query" tt-handler-connect="signals.subscribe(signalImports_test.query)" tt-handler-signal="signals.setBound"`;
       assertEquals(
         unhashed(jsx("input", { value: signal.query })),
-        `<input value="tea" tt-value-signal="signalImports_test.query" tt-handler-connect="signalImports_test.query$subscribe" is="tt-input" tt-handler-signal="signals.setBound"/>`,
+        `<input value="tea" tt-value-signal="signalImports_test.query" tt-handler-connect="signals.subscribe(signalImports_test.query)" is="tt-input" tt-handler-signal="signals.setBound"/>`,
       );
       assertEquals(
         unhashed(jsxTemplate(
@@ -594,18 +614,18 @@ Deno.test({
       const merged = [
         'value="tea"',
         'tt-value-signal="signalImports_test.query"',
-        `tt-handler-connect="signalImports_test.query$subscribe signalImports_test.filter$subscribe signalImports_test.focus"`,
+        `tt-handler-connect="signals.subscribe(signalImports_test.query) signals.subscribe(signalImports_test.filter) signalImports_test.focus"`,
         `tt-handler-signal="signals.setBound signalImports_test.focus"`,
       ];
       const fromJsx = unhashed(jsx("input", {
-        onConnect: [signal.filter.subscribe, fn.focus],
+        onConnect: [fn.signals.subscribe(signal.filter), fn.focus],
         value: signal.query,
         onSignal: fn.focus,
       }));
       for (const part of merged) assertStringIncludes(fromJsx, part);
       const precompiled = unhashed(jsxTemplate(
         strings("<input ", " ", " ", "/>"),
-        jsxAttr("onConnect", [signal.filter.subscribe, fn.focus]),
+        jsxAttr("onConnect", [fn.signals.subscribe(signal.filter), fn.focus]),
         jsxAttr("value", signal.query),
         jsxAttr("onSignal", fn.focus),
       ));
@@ -629,28 +649,34 @@ Deno.test({
           'tt-value-signal="signalImports_test.query"',
         );
       }
-      // A select has no value attribute to render.
-      const valueTags =
-        "only <button>, <data>, <input>, <li>, <meter>, <option>, <progress> or <textarea> can";
-      assertThrows(
-        () => jsx("select", { value: signal.query }),
-        TypeError,
-        valueTags,
-      );
-      assertThrows(
-        () =>
-          jsxTemplate(
+      // A select renders no value, its options marking the initial one; on
+      // connect it checks the option shown against the signal, in either
+      // mode.
+      for (
+        const html of [
+          unhashed(jsx("select", { value: signal.query })),
+          unhashed(jsxTemplate(
             strings("<select ", "></select>"),
             jsxAttr("value", signal.query),
-          ),
-        TypeError,
-        valueTags,
-      );
+          )),
+        ]
+      ) {
+        assertEquals(/ value=/.test(html), false);
+        assertStringIncludes(
+          html,
+          'tt-value-signal="signalImports_test.query"',
+        );
+        assertStringIncludes(
+          html,
+          `tt-handler-connect="signals.subscribe(signalImports_test.query) signals.checkSelected"`,
+        );
+        assertStringIncludes(html, `tt-handler-signal="signals.setBound"`);
+      }
       // A textarea's initial value is its text; the element's own onConnect
       // (fn.fireSelfSignal, say) follows the binding's signal.
       const textareaParts = [
         'tt-value-signal="signalImports_test.query"',
-        `tt-handler-connect="signalImports_test.query$subscribe signalImports_test.focus"`,
+        `tt-handler-connect="signals.subscribe(signalImports_test.query) signalImports_test.focus"`,
         `tt-handler-signal="signals.setBound"`,
       ];
       const textarea = unhashed(jsx("textarea", {
@@ -743,7 +769,7 @@ Deno.test({
           'checked=""',
           'tt-value-signal="signalImports_test.query"',
           'tt-checked-signal="signalImports_test.query"',
-          `tt-handler-connect="signalImports_test.query$subscribe"`,
+          `tt-handler-connect="signals.subscribe(signalImports_test.query)"`,
           `tt-handler-signal="signals.setBound"`,
         ]
       ) assertStringIncludes(both, part);
@@ -756,7 +782,7 @@ Deno.test({
           selected: signal.query,
           children: "Tea",
         })),
-        `<option value="tea" selected="" tt-selected-signal="signalImports_test.query" tt-handler-connect="signalImports_test.query$subscribe" is="tt-option" tt-handler-signal="signals.setBound">Tea</option>`,
+        `<option value="tea" selected="" tt-selected-signal="signalImports_test.query" tt-handler-connect="signals.subscribe(signalImports_test.query)" is="tt-option" tt-handler-signal="signals.setBound">Tea</option>`,
       );
       assertStringIncludes(
         unhashed(jsx("option", { selected: signal.filter })),
@@ -841,7 +867,7 @@ Deno.test({
         'aria-expanded="0"',
         'tt-data-status-signal="signalImports_test.query"',
         'tt-aria-expanded-signal="signalImports_test.filter"',
-        `tt-handler-connect="signalImports_test.query$subscribe signalImports_test.filter$subscribe"`,
+        `tt-handler-connect="signals.subscribe(signalImports_test.query) signals.subscribe(signalImports_test.filter)"`,
         `tt-handler-signal="signals.setBound"`,
       ];
       const attributesFromJsx = unhashed(jsx("div", {
@@ -909,6 +935,301 @@ Deno.test({
       (await getEsbuild()).stop();
     }
   },
+});
+
+Deno.test({
+  name: "tiny.imports() gives each imported level's InstanceRoot as root",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  async fn() {
+    reset();
+    const directory = "./.test-build-output/signal-roots";
+    const picker = new Signals(
+      import.meta.url,
+      ({ Signal, Scope }) => ({
+        picker: new Scope(() => ({ patientId: new Signal<string>("") })),
+        query: new Signal<string>(""),
+      }),
+    );
+    const lines = new Signals(
+      import.meta.url,
+      ({ Signal, Scope }) =>
+        new Scope(() => ({ quantity: new Signal<number>(1) })),
+    );
+    const other = new Signals(
+      import.meta.url,
+      ({ Signal, Scope }) => ({
+        picker: new Scope(() => ({ id: new Signal<string>("") })),
+      }),
+    );
+    const tagOf = (html: unknown) =>
+      /^<[^>]*>/.exec(String(html))![0].replaceAll("&#34;", "&quot;");
+    try {
+      await buildScriptFiles({ fresh: true, publicDir: directory });
+      const { signalRoot: root } = await imports(
+        picker.withInputs(undefined, { patientId: "10972" }),
+        lines,
+      );
+      // A seeded import seeds its roots; an unseeded one only marks them.
+      const pickerRoot = tagOf(
+        root.picker({ children: jsx("patient-picker", {}) as never }),
+      );
+      assertStringIncludes(
+        pickerRoot,
+        `tt-instance="${picker.scopes.picker.key}"`,
+      );
+      assertStringIncludes(
+        pickerRoot,
+        `tt-seed="${
+          picker.scopes.picker.seed({ patientId: "10972" }).replaceAll(
+            '"',
+            "&quot;",
+          )
+        }"`,
+      );
+      assertEquals(
+        tagOf(root.self({ children: jsx("tr", {}) as never })),
+        `<tr is="tt-tr" tt-instance="${lines.instanceKey}">`,
+      );
+      // @ts-expect-error No imported collection has this level.
+      assertThrows(() => root.missing, TypeError, "no imported signal");
+      // A level two collections share is ambiguous.
+      const { signalRoot: both } = await imports(picker, other);
+      assertThrows(() => both.picker, TypeError, "is ambiguous");
+      // An unnamed Scope holding nothing writable still has its self root.
+      const pings = new Signals(
+        new URL("./pings.ts", import.meta.url).href,
+        ({ Trigger, Scope }) => new Scope(() => ({ ping: new Trigger() })),
+      );
+      const { signalRoot: pingRoot } = await imports(pings);
+      assertEquals(
+        tagOf(pingRoot.self({ children: jsx("p", {}) as never })),
+        `<p is="tt-p" tt-instance="${pings.instanceKey}">`,
+      );
+    } finally {
+      await Deno.remove(directory, { recursive: true }).catch(() => {});
+      reset();
+      (await getEsbuild()).stop();
+    }
+  },
+});
+
+Deno.test("seed() of a withInputs() collection seeds each level from its seed", async () => {
+  const picker = new Signals(
+    import.meta.url,
+    ({ Signal, Scope }) =>
+      new Scope(() => ({
+        query: new Signal<string>(""),
+        row: new Scope(() => ({ patientId: new Signal<string>("") })),
+      })),
+  );
+  const seeded = picker.withInputs(undefined, {
+    query: "smi",
+    patientId: "10972",
+  });
+  // Each level takes the values of its own signals.
+  assertEquals(seeded.seed(), picker.seed({ query: "smi" }));
+  assertEquals(
+    seeded.scopes.row.seed(),
+    picker.scopes.row.seed({ patientId: "10972" }),
+  );
+  assertEquals(seeded.scopes.row.key, picker.scopes.row.key);
+  // Values given still win.
+  assertEquals(
+    seeded.scopes.row.seed({ patientId: "1" }),
+    picker.scopes.row.seed({ patientId: "1" }),
+  );
+  // Without a seed, a level starts fresh.
+  assertEquals(
+    picker.withInputs().scopes.row.seed(),
+    picker.scopes.row.seed({}),
+  );
+  // @ts-expect-error The collection itself has no seed to fall back on.
+  picker.scopes.row.seed();
+
+  // InstanceRoot puts tt-instance and tt-seed on the one element it wraps,
+  // in both JSX modes, and the root stays the enclosing component's to mark.
+  const strings = (...parts: string[]) =>
+    Object.assign(parts, { raw: parts }) as unknown as TemplateStringsArray;
+  const rootOf = (html: unknown) => {
+    const tag = /^<[^>]*>/.exec(String(html))![0].replaceAll("&#34;", "&quot;");
+    return {
+      instance: / tt-instance="([^"]*)"/.exec(tag)?.[1],
+      seed: / tt-seed="([^"]*)"/.exec(tag)?.[1]?.replaceAll("&quot;", '"'),
+      component: / data-tc="([^"]*)"/.exec(tag)?.[1],
+    };
+  };
+  const wrapped = (
+    Root: unknown,
+    precompiled: boolean,
+  ) => {
+    const Card = () =>
+      jsx(Root as never, {
+        children: precompiled
+          ? jsxTemplate(strings('<section class="card">', "</section>"), "b")
+          : jsx("section", { class: "card", children: "b" }),
+      });
+    return String(jsx(Card, {}));
+  };
+  for (const precompiled of [false, true]) {
+    assertEquals(rootOf(wrapped(seeded.scopes.row.InstanceRoot, precompiled)), {
+      instance: picker.scopes.row.key,
+      seed: picker.scopes.row.seed({ patientId: "10972" }),
+      component: "Card",
+    });
+    assertEquals(rootOf(wrapped(seeded.InstanceRoot, precompiled)), {
+      instance: picker.instanceKey,
+      seed: picker.seed({ query: "smi" }),
+      component: "Card",
+    });
+    // Unseeded, it only marks the root.
+    assertEquals(rootOf(wrapped(picker.scopes.row.InstanceRoot, precompiled)), {
+      instance: picker.scopes.row.key,
+      seed: undefined,
+      component: "Card",
+    });
+  }
+  // A seed prop seeds it, and wins over a withInputs() seed.
+  assertEquals(
+    rootOf(jsx(seeded.InstanceRoot as never, {
+      seed: { query: "x" },
+      children: jsx("section", {}),
+    })).seed,
+    picker.seed({ query: "x" }),
+  );
+  // Precompiled markup with async content inside arrives as a promise.
+  assertEquals(
+    rootOf(
+      await jsx(picker.scopes.row.InstanceRoot as never, {
+        children: Promise.resolve(
+          jsxTemplate(strings('<section class="card">', "</section>"), "b"),
+        ),
+      }),
+    ).instance,
+    picker.scopes.row.key,
+  );
+  // It wraps one element, not several.
+  assertThrows(
+    () =>
+      jsx(picker.scopes.row.InstanceRoot as never, {
+        children: [jsx("p", {}), jsx("p", {})],
+      }),
+    TypeError,
+    "wraps exactly one element",
+  );
+  // Or a component returning one, whose own root it marks once Hono renders
+  // it, in both modes, inside the context its providers give.
+  const Context = createContext("default");
+  for (const precompiled of [false, true]) {
+    const Item = () =>
+      precompiled
+        ? jsxTemplate(
+          strings('<li class="item">', "</li>"),
+          useContext(Context),
+        )
+        : jsx("li", { class: "item", children: useContext(Context) });
+    const html = await jsx(Context.Provider as never, {
+      value: "provided",
+      children: jsx(picker.scopes.row.InstanceRoot as never, {
+        children: jsx(Item, {}),
+      }),
+    }).toString();
+    assertEquals(rootOf(html), {
+      instance: picker.scopes.row.key,
+      seed: undefined,
+      component: "Item",
+    });
+    assertStringIncludes(html, ">provided</li>");
+  }
+  // Nested, the wrappers root one element in every level they name: the keys
+  // listed in tt-instance, each level's seed under its key in one tt-seed,
+  // and a key written by hand kept.
+  const badge = new Signals(
+    new URL("./badge.ts", import.meta.url).href,
+    ({ Signal, Scope }) => new Scope(() => ({ tone: new Signal<string>("") })),
+  );
+  const seededBadge = badge.withInputs(undefined, { tone: "warm" });
+  for (const precompiled of [false, true]) {
+    const html = await jsx(seeded.InstanceRoot as never, {
+      children: jsx(seededBadge.InstanceRoot as never, {
+        children: jsx(picker.scopes.row.InstanceRoot as never, {
+          children: precompiled
+            ? jsxTemplate(
+              strings(
+                '<section tt-instance="by-hand" class="card">',
+                "</section>",
+              ),
+              "b",
+            )
+            : jsx("section", {
+              "tt-instance": "by-hand",
+              class: "card",
+              children: "b",
+            }),
+        }),
+      }),
+    }).toString();
+    const root = rootOf(html);
+    assertEquals(
+      root.instance,
+      `by-hand ${picker.scopes.row.key} ${badge.instanceKey} ${picker.instanceKey}`,
+    );
+    assertEquals(JSON.parse(root.seed!), {
+      [badge.instanceKey]: { tone: "warm" },
+      [picker.instanceKey]: { query: "smi" },
+    });
+    assertEquals(html.match(/ tt-instance=/g)?.length, 1);
+    assertEquals(html.match(/ tt-seed=/g)?.length, 1);
+    assertStringIncludes(html, 'class="card"');
+  }
+  // The root becomes a lifecycle element, so its instance is parked when it
+  // is removed: a custom tag is declared, a plain one becomes a customized
+  // built-in, and an is="..." without a hyphen is left alone.
+  const tracker = createNoContextToolUsageTracker();
+  const lifecycle = await withNoContextToolUsageTracker(tracker, async () =>
+    [
+      await jsx(picker.scopes.row.InstanceRoot as never, {
+        children: jsx("note-card", {}),
+      }).toString(),
+      await jsx(picker.scopes.row.InstanceRoot as never, {
+        children: jsxTemplate(strings("<fieldset>", "</fieldset>"), "x"),
+      }).toString(),
+      await jsx(picker.scopes.row.InstanceRoot as never, {
+        children: jsx("li", { is: "plain" }),
+      }).toString(),
+    ].map((html) => /^<[^>]*>/.exec(html)![0]));
+  assertEquals(lifecycle.map((tag) => / is="([^"]*)"/.exec(tag)?.[1]), [
+    undefined,
+    "tt-fieldset",
+    "plain",
+  ]);
+  assertEquals([...tracker.accessedLifecycleTags].sort(), [
+    "note-card",
+    "tt-fieldset:fieldset",
+  ]);
+  const Pair = () => jsx(Fragment, { children: [jsx("p", {}), jsx("p", {})] });
+  assertThrows(
+    () =>
+      String(
+        jsx(picker.scopes.row.InstanceRoot as never, {
+          children: jsx(Pair, {}),
+        }),
+      ),
+    TypeError,
+    "wraps <Pair>, which must return exactly one element",
+  );
+  // Without an unnamed Scope, only a named level has roots.
+  const named = new Signals(
+    import.meta.url,
+    ({ Signal, Scope }) => ({
+      row: new Scope(() => ({ id: new Signal<string>("") })),
+    }),
+  );
+  assertThrows(
+    () => jsx(named.InstanceRoot as never, { children: jsx("p", {}) }),
+    TypeError,
+    "use scopes.<name>.InstanceRoot",
+  );
 });
 
 Deno.test("a build writes signalTools only for an app that defines signals", async () => {

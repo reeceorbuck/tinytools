@@ -417,7 +417,7 @@ export const ToastSignalComponent: SignalComponent<{
         data-duration={props.duration}
         data-toast-class={styled.toast}
         data-close-class={styled.closeButton}
-        onConnect={[signal.queue.subscribe, fn.showToasts]}
+        onConnect={[fn.signals.subscribe(signal.queue), fn.showToasts]}
         onSignal={fn.showToasts}
         onClick={fn.closeToast}
         onPointerEnter={fn.pauseToasts}

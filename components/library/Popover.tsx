@@ -420,7 +420,7 @@ export const PopoverSignalComponent: SignalComponent<{
           aria-haspopup={props.menu ? "menu" : undefined}
           aria-label={props.label}
           title={props.label}
-          onConnect={[signal.target.subscribe, fn.linkTrigger]}
+          onConnect={[fn.signals.subscribe(signal.target), fn.linkTrigger]}
           onSignal={fn.linkTrigger}
         >
           {props.children ?? "Open"}
@@ -437,7 +437,7 @@ export const PopoverSignalComponent: SignalComponent<{
           data-match-trigger-width={props.matchTriggerWidth ? "" : undefined}
           data-center-when-narrow={props.centerWhenNarrow ? "" : undefined}
           data-tall={props.tall ? "" : undefined}
-          onConnect={[signal.open.subscribe, fn.adoptContent]}
+          onConnect={[fn.signals.subscribe(signal.open), fn.adoptContent]}
           onSignal={fn.showContent}
           onBeforeToggle={fn.placeContent}
           onToggle={fn.contentToggled}

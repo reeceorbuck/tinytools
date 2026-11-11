@@ -245,9 +245,9 @@ export const DatePickerSignalComponent: SignalComponent<{
           name={props.name}
           value={props.value ?? ""}
           data-skip-weekends={props.skipWeekends || undefined}
-          onConnect={[signal.date.subscribe, fn.adoptInput]}
+          onConnect={[fn.signals.subscribe(signal.date), fn.adoptInput]}
           onSignal={fn.showDate}
-          onInput={signal.date}
+          onInput={fn.signals.update(signal.date)}
           onChange={props.onChange}
         />
       ),

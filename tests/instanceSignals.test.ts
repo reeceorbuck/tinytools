@@ -6,6 +6,7 @@ import {
   signalClasses,
 } from "../signals.ts";
 import { Signals } from "../clientTools.ts";
+import { update } from "./helpers/signalRuntime.ts";
 
 const key = "layers_test";
 const root = `tt-instance="${key}"`;
@@ -73,11 +74,12 @@ Deno.test("per-instance signals resolve to the enclosing instance root", () => {
     const a = byId("a");
     const b = byId("b");
 
-    // Written through the handler path, as `onChange={signal.material}` does.
-    material.forInstance(a);
-    (material as unknown as {
-      handleEvent(target: unknown, event: Event): unknown;
-    }).handleEvent(a, change("flow"));
+    // Written as `onChange={fn.signals.update(signal.material)}` writes it:
+    // the control's value, into the instance enclosing it.
+    update(
+      (change("flow") as unknown as { target: unknown }).target,
+      material.forInstance(a),
+    );
 
     assertEquals(material.forInstance(a).value, "flow");
     assertEquals(material.forInstance(b).value, "bulk");
@@ -192,9 +194,10 @@ Deno.test("`.all` aggregates every resolved instance in document order", () => {
   try {
     const { shade, material, summary } = layerGraph();
     const updates: string[] = [];
-    const target = new EventTarget();
-    target.addEventListener("signal", () => updates.push(summary.value));
-    summary.subscribe(target);
+    (summary as unknown as EventTarget).addEventListener(
+      "signal",
+      () => updates.push(summary.value),
+    );
 
     // Nothing scans the document: a root counts once something inside it
     // resolves a signal, as its onLoad / onChange references do.

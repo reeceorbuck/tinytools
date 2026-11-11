@@ -279,7 +279,7 @@ export const DialogSignalComponent: SignalComponent<{
           data-modal={props.modeless ? undefined : ""}
           data-start-open={props.open ? "" : undefined}
           data-restore-on-close={props.restoreOnClose ? "" : undefined}
-          onConnect={[signal.open.subscribe, fn.adoptDialog]}
+          onConnect={[fn.signals.subscribe(signal.open), fn.adoptDialog]}
           onSignal={fn.showDialog}
           onToggle={fn.dialogToggled}
           onClose={fn.dialogClosed}

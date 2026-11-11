@@ -10,7 +10,7 @@
  * @module
  */
 
-import { Fragment, isValidElement } from "hono/jsx";
+import { Fragment, isValidElement, jsx } from "hono/jsx";
 import { raw } from "hono/html";
 import type { HtmlEscapedString } from "hono/utils/html";
 
@@ -28,6 +28,13 @@ const WRAPPED = Symbol.for("tinytools.wrappedComponent");
 const ELEMENT = Symbol.for("tinytools.elementNode");
 const TEMPLATE_ROOTS = Symbol.for("tinytools.templateRoots");
 const TEMPLATE_ROOT_SOURCES = Symbol.for("tinytools.templateRootSources");
+const INLINE = Symbol.for("tinytools.inlineComponent");
+/**
+ * Where a precompiled template's roots start once a component has marked
+ * them: no longer `TEMPLATE_ROOTS`, so outer components leave them alone,
+ * but still found by `markOnlyRoot`.
+ */
+const MARKED_ROOTS = Symbol.for("tinytools.markedTemplateRoots");
 
 /**
  * @internal Set on a rendered element (a node, or a precompiled template with
@@ -98,6 +105,12 @@ function collectChildNodes(children: unknown, into: Set<unknown>): void {
 
 /** Attributes a component wrapper puts on its root element(s). */
 type RootAttributes = Record<string, string>;
+
+/** Root attributes worked out from the element's tag and own attributes. */
+export type MergedAttributes = (
+  own: (name: string) => string | undefined,
+  tag: string,
+) => RootAttributes;
 
 /** Class lists joined, each class once. */
 function joinClasses(...lists: unknown[]): string {
@@ -177,6 +190,7 @@ type TemplateResult = HtmlEscapedString & {
    */
   [TEMPLATE_ROOT_SOURCES]?: unknown[];
   [NEEDS_PROXY]?: ProxyNeed;
+  [MARKED_ROOTS]?: number[];
 };
 
 type TemplatePlan = {
@@ -487,7 +501,9 @@ function markTemplateRoots(
   const sources = template[TEMPLATE_ROOT_SOURCES];
   let output = "";
   let from = 0;
+  const marked: number[] = [];
   template[TEMPLATE_ROOTS].forEach((at, index) => {
+    marked.push(output.length + at - from);
     // An element the caller passed in as children belongs to the caller.
     if (passedChildren.has(sources?.[index])) return;
     output += text.slice(from, at) + attribute;
@@ -506,9 +522,11 @@ function markTemplateRoots(
     }
   });
   // The new string carries no offsets, so outer components leave it alone.
-  const result = raw(output + text.slice(from), template.callbacks) as
-    & HtmlEscapedString
-    & { [NEEDS_PROXY]?: ProxyNeed };
+  const result = raw(
+    output + text.slice(from),
+    template.callbacks,
+  ) as TemplateResult;
+  result[MARKED_ROOTS] = marked;
   if (template[NEEDS_PROXY]) result[NEEDS_PROXY] = template[NEEDS_PROXY];
   return result;
 }
@@ -601,4 +619,121 @@ export function wrapComponent<T extends AnyFunction>(tag: T): T {
     wrappedComponents.set(tag, wrapped);
   }
   return wrapped as T;
+}
+
+/**
+ * @internal Flags a component the JSX runtime calls at once instead of
+ * leaving a node to render later, so the element it returns is its caller's
+ * root, which the caller's own component marks.
+ */
+export function inlineComponent<T extends AnyFunction>(component: T): T {
+  (component as unknown as Record<symbol, boolean>)[INLINE] = true;
+  return component;
+}
+
+/** @internal Whether `inlineComponent()` flagged this component. */
+export function isInlineComponent(component: unknown): boolean {
+  return !!(component as Record<symbol, boolean> | undefined)?.[INLINE];
+}
+
+/**
+ * @internal Puts `attributes` on the one element `children` is, a node or a
+ * precompiled template, which stays a root an enclosing component can mark.
+ * A component is rendered when Hono renders it, inside any context its
+ * providers give, and the element it returns is marked then. `wrapper`
+ * names the wrapping component for the error when `children` is not one
+ * element, and `from` the component that returned them, if one did.
+ * `attributes` may be a function of the element's own attributes, whose
+ * result replaces any of them it names.
+ */
+export function markOnlyRoot(
+  children: unknown,
+  attributes: RootAttributes | MergedAttributes,
+  wrapper: string,
+  from?: string,
+): unknown {
+  const resolve = (own: (name: string) => string | undefined, tag: string) =>
+    typeof attributes === "function" ? attributes(own, tag) : attributes;
+  // Precompiled markup with async content inside resolves later.
+  if (children instanceof Promise) {
+    return children.then((resolved) =>
+      markOnlyRoot(resolved, attributes, wrapper, from)
+    );
+  }
+  const only = Array.isArray(children) && children.length === 1
+    ? children[0]
+    : children;
+  if (
+    only && typeof only === "object" &&
+    (TEMPLATE_ROOTS in only || MARKED_ROOTS in only)
+  ) {
+    const template = only as TemplateResult;
+    // A component's own root is already marked; an element's is the
+    // caller's to mark still.
+    const roots = template[MARKED_ROOTS] ?? template[TEMPLATE_ROOTS];
+    const [at, ...others] = roots;
+    if (at !== undefined && !others.length) {
+      const text = String(template);
+      // The rest of the root's open tag, whose attributes the new ones
+      // replace.
+      let tag = /^(?:[^>"']|"[^"]*"|'[^']*')*/.exec(text.slice(at))![0];
+      const end = at + tag.length;
+      const resolved = resolve((name) => {
+        const value = new RegExp(` ${name}="([^"]*)"`).exec(tag)?.[1];
+        return value?.replace(
+          /&(?:#(\d+)|quot|amp|lt|gt);/g,
+          (entity, code) =>
+            code
+              ? String.fromCharCode(Number(code))
+              : { "&quot;": '"', "&amp;": "&", "&lt;": "<", "&gt;": ">" }[
+                entity
+              ]!,
+        );
+      }, /<([a-zA-Z][\w:-]*)$/.exec(text.slice(0, at))?.[1] ?? "");
+      const attribute = Object.entries(resolved).map(([name, value]) => {
+        tag = tag.replace(new RegExp(` ${name}="[^"]*"`), "");
+        return ` ${name}="${
+          value.replace(/[&"<>]/g, (ch) => `&#${ch.charCodeAt(0)};`)
+        }"`;
+      }).join("");
+      // Inserted after the root's offset, which stays where it was.
+      const result = raw(
+        text.slice(0, at) + attribute + tag + text.slice(end),
+        template.callbacks,
+      ) as TemplateResult;
+      if (template[MARKED_ROOTS]) result[MARKED_ROOTS] = [at];
+      else result[TEMPLATE_ROOTS] = [at];
+      if (template[TEMPLATE_ROOT_SOURCES]) {
+        result[TEMPLATE_ROOT_SOURCES] = template[TEMPLATE_ROOT_SOURCES];
+      }
+      if (template[NEEDS_PROXY]) result[NEEDS_PROXY] = template[NEEDS_PROXY];
+      return result;
+    }
+  } else if (isValidElement(only)) {
+    const node = only as unknown as JSXNode;
+    if (node.tag !== Fragment && isElementNode(node)) {
+      return cloneNode(node, {
+        ...node.props,
+        ...resolve(
+          (name) => node.props[name] as string | undefined,
+          intrinsicTagName(node) ?? "",
+        ),
+      });
+    }
+    if (typeof node.tag === "function" && node.tag !== Fragment) {
+      const component = node.tag as AnyFunction;
+      return jsx(() =>
+        markOnlyRoot(
+          component.call(null, node.props),
+          attributes,
+          wrapper,
+          component.name || "a component",
+        ), {});
+    }
+  }
+  throw new TypeError(
+    from
+      ? `<${wrapper}> wraps <${from}>, which must return exactly one element to be its root.`
+      : `<${wrapper}> wraps exactly one element, or a component returning one: <${wrapper}><section>…</section></${wrapper}>.`,
+  );
 }

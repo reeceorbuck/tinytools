@@ -270,7 +270,7 @@ export const SelectionSignalComponent: SignalComponent<{
           checked={props.checked}
           aria-label={props.label ? `Select ${props.label}` : "Select"}
           data-selection-item
-          onConnect={[signal.selected.subscribe, fn.joinSelection]}
+          onConnect={[fn.signals.subscribe(signal.selected), fn.joinSelection]}
           onDisconnect={fn.leaveSelection}
           onSignal={fn.showSelected}
           onClick={fn.toggleSelected}
@@ -282,8 +282,8 @@ export const SelectionSignalComponent: SignalComponent<{
           class={styled.checkbox}
           aria-label={props.label ?? "Select all"}
           onConnect={[
-            signal.selected.subscribe,
-            signal.values.subscribe,
+            fn.signals.subscribe(signal.selected),
+            fn.signals.subscribe(signal.values),
             fn.showAll,
           ]}
           onSignal={fn.showAll}
@@ -293,7 +293,7 @@ export const SelectionSignalComponent: SignalComponent<{
       Count: (
         <output
           aria-live="polite"
-          onConnect={[signal.summary.subscribe, fn.fireSelfSignal]}
+          onConnect={[fn.signals.subscribe(signal.summary), fn.fireSelfSignal]}
           onSignal={fn.setTextContent}
         />
       ),
@@ -303,7 +303,7 @@ export const SelectionSignalComponent: SignalComponent<{
           class={styled.bar}
           aria-label={props.label ?? "Selection actions"}
           hidden={signal.none}
-          onConnect={[signal.none.subscribe, fn.fireSelfSignal]}
+          onConnect={[fn.signals.subscribe(signal.none), fn.fireSelfSignal]}
         >
           {props.children}
         </div>
@@ -316,7 +316,7 @@ export const SelectionSignalComponent: SignalComponent<{
           form={props.form}
           formaction={props.formaction}
           disabled={signal.none}
-          onConnect={[signal.none.subscribe, fn.fireSelfSignal]}
+          onConnect={[fn.signals.subscribe(signal.none), fn.fireSelfSignal]}
         >
           {props.children}
         </button>

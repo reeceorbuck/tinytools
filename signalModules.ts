@@ -15,7 +15,6 @@ import {
   flattenScopes,
   InstanceGroup,
   InstanceSignalHandle,
-  readControl,
   sameValue,
   scopeFor,
   ScopeInstance,
@@ -60,7 +59,7 @@ function runtimeModule(
 
 const signalModule = runtimeModule("signal", {
   state: "let tracking = null;",
-  internal: [sameValue, readControl],
+  internal: [sameValue],
   exported: [track, untracked, SignalInstance, signalsFrom],
 });
 

@@ -149,18 +149,18 @@ Declare collections at module level, never inside a route.
 const counter = new tiny.Signals({ count: 0 });
 
 app.get("/counter", async (c) => {
-  const { signal } = await tiny.imports(counter);
+  const { fn, signal } = await tiny.imports(counter);
   return c.render(
     <>
-      <button type="button" onClick={signal.count.increment}>Add one</button>
+      <button type="button" value={1} onClick={fn.signals.add(signal.count)}>Add one</button>
       <p>Clicked {signal.count} times.</p>
     </>,
   );
 });
 ```
 
-`signal.count.increment` adds one on each click, and `{signal.count}` renders as live text.
-Signals also bind to inputs (`onInput={signal.query.update}`), attributes and
+`fn.signals.add(signal.count)` adds one on each click, and `{signal.count}` renders as live text.
+Signals also bind to inputs (`onInput={fn.signals.update(signal.query)}`), attributes and
 properties (`checked={signal.open}`), and derive computed values from each
 other.
 

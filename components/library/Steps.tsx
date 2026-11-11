@@ -412,8 +412,8 @@ export const StepsSignalComponent: SignalComponent<{
           data-title={props.title}
           data-current={props.current ? "" : undefined}
           onConnect={[
-            signal.steps.subscribe,
-            signal.current.subscribe,
+            fn.signals.subscribe(signal.steps),
+            fn.signals.subscribe(signal.current),
             fn.joinSteps,
           ]}
           onSignal={fn.showStep}
@@ -429,8 +429,8 @@ export const StepsSignalComponent: SignalComponent<{
           class={styled.progress}
           aria-label={props.label ?? "Progress"}
           onConnect={[
-            signal.steps.subscribe,
-            signal.current.subscribe,
+            fn.signals.subscribe(signal.steps),
+            fn.signals.subscribe(signal.current),
             fn.showProgress,
           ]}
           onSignal={fn.showProgress}
@@ -439,7 +439,7 @@ export const StepsSignalComponent: SignalComponent<{
       ),
       Status: () => (
         <output
-          onConnect={[signal.summary.subscribe, fn.fireSelfSignal]}
+          onConnect={[fn.signals.subscribe(signal.summary), fn.fireSelfSignal]}
           onSignal={fn.setTextContent}
         />
       ),
@@ -448,7 +448,7 @@ export const StepsSignalComponent: SignalComponent<{
           type="button"
           class={styled.scripted}
           disabled={signal.onFirst}
-          onConnect={[signal.onFirst.subscribe, fn.fireSelfSignal]}
+          onConnect={[fn.signals.subscribe(signal.onFirst), fn.fireSelfSignal]}
           onClick={fn.previousStep}
         >
           {props.children ?? "Back"}
@@ -459,7 +459,7 @@ export const StepsSignalComponent: SignalComponent<{
           type="button"
           class={styled.scripted}
           hidden={signal.onLast}
-          onConnect={[signal.onLast.subscribe, fn.fireSelfSignal]}
+          onConnect={[fn.signals.subscribe(signal.onLast), fn.fireSelfSignal]}
           onClick={fn.nextStep}
         >
           {props.children ?? "Next"}
@@ -474,7 +474,7 @@ export const StepsSignalComponent: SignalComponent<{
           form={props.form}
           formaction={props.formaction}
           hidden={signal.notLast}
-          onConnect={[signal.notLast.subscribe, fn.fireSelfSignal]}
+          onConnect={[fn.signals.subscribe(signal.notLast), fn.fireSelfSignal]}
           onClick={fn.checkSteps}
         >
           {props.children ?? "Submit"}

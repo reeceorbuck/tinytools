@@ -98,8 +98,8 @@ Deno.test({
       assertStringIncludes(code, "const constants = {");
       assertStringIncludes(code, '"moderate"');
       const module = await import(pathToFileURL(path).href);
-      assertEquals(module.shade().value, "B1");
-      assertEquals(module.label().value, "B1 moderate OD 3");
+      assertEquals(module.shade.value, "B1");
+      assertEquals(module.label.value, "B1 moderate OD 3");
     } finally {
       await Deno.remove(directory, { recursive: true }).catch(() => {});
       reset();

@@ -156,8 +156,8 @@ Deno.test("explicit imports use last collection precedence without mutating coll
     handlerOf(combined.fn.click) === handlerOf(original.fn.click),
     false,
   );
-  assertEquals(typeof combined.fn.unused, "object");
-  assertEquals(typeof combined.fn.submit, "object");
+  assertEquals(typeof combined.fn.unused, "function");
+  assertEquals(typeof combined.fn.submit, "function");
   assertEquals(typeof combined.styled.panel, "string");
   assertEquals(Reflect.get(original.fn, "submit"), undefined);
 });
@@ -174,7 +174,7 @@ Deno.test("imports retain style merging", async () => {
 
 Deno.test("imports outside requests expose tools but reject context access", async () => {
   const local = await tiny.imports(first);
-  assertEquals(typeof local.fn.click, "object");
+  assertEquals(typeof local.fn.click, "function");
   assertThrows(() => local.c, Error, "no active Hono request context");
   await assertRejects(
     () => tiny.imports(),

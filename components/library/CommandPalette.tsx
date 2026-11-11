@@ -367,7 +367,7 @@ export const CommandPaletteSignalComponent: SignalComponent<{
           data-shortcut={props.shortcut === false
             ? undefined
             : (props.shortcut ?? "k").toLowerCase()}
-          onConnect={[signal.open.subscribe, fn.adoptPalette]}
+          onConnect={[fn.signals.subscribe(signal.open), fn.adoptPalette]}
           onSignal={fn.showPalette}
           onClose={fn.paletteClosed}
           onInput={fn.filterCommands}

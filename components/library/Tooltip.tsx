@@ -330,7 +330,7 @@ export const TooltipSignalComponent: SignalComponent<{
       Trigger: (props: TriggerProps) => (
         <span
           class={styled.trigger}
-          onConnect={[signal.target.subscribe, fn.adoptTrigger]}
+          onConnect={[fn.signals.subscribe(signal.target), fn.adoptTrigger]}
           onSignal={fn.linkTrigger}
           onPointerEnter={fn.enterTrigger}
           onPointerLeave={fn.leaveTrigger}
@@ -348,7 +348,7 @@ export const TooltipSignalComponent: SignalComponent<{
           data-side={props.side}
           data-open-delay={String(props.delay ?? 500)}
           data-close-delay={String(props.closeDelay ?? 0)}
-          onConnect={[signal.open.subscribe, fn.adoptTip]}
+          onConnect={[fn.signals.subscribe(signal.open), fn.adoptTip]}
           onSignal={fn.showTip}
           onToggle={fn.tipToggled}
         >
@@ -364,7 +364,7 @@ export const TooltipSignalComponent: SignalComponent<{
           data-side={props.side}
           data-open-delay={String(props.delay ?? 600)}
           data-close-delay={String(props.closeDelay ?? 300)}
-          onConnect={[signal.open.subscribe, fn.adoptTip]}
+          onConnect={[fn.signals.subscribe(signal.open), fn.adoptTip]}
           onSignal={fn.showTip}
           onToggle={fn.tipToggled}
           onPointerEnter={fn.enterCard}

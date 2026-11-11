@@ -382,8 +382,8 @@ export const CarouselSignalComponent: SignalComponent<{
           data-loop={props.loop ? "" : undefined}
           data-autoplay={props.autoplay ? String(props.autoplay) : undefined}
           onConnect={[
-            signal.index.subscribe,
-            signal.playing.subscribe,
+            fn.signals.subscribe(signal.index),
+            fn.signals.subscribe(signal.playing),
             fn.adoptTrack,
           ]}
           onSignal={fn.showSlide}
@@ -409,7 +409,7 @@ export const CarouselSignalComponent: SignalComponent<{
           class={styled.button}
           aria-label="Previous slide"
           disabled={signal.atStart}
-          onConnect={[signal.atStart.subscribe, fn.fireSelfSignal]}
+          onConnect={[fn.signals.subscribe(signal.atStart), fn.fireSelfSignal]}
           onClick={fn.previousSlide}
         >
           {props.children ?? "‹"}
@@ -421,7 +421,7 @@ export const CarouselSignalComponent: SignalComponent<{
           class={styled.button}
           aria-label="Next slide"
           disabled={signal.atEnd}
-          onConnect={[signal.atEnd.subscribe, fn.fireSelfSignal]}
+          onConnect={[fn.signals.subscribe(signal.atEnd), fn.fireSelfSignal]}
           onClick={fn.nextSlide}
         >
           {props.children ?? "›"}
@@ -433,8 +433,8 @@ export const CarouselSignalComponent: SignalComponent<{
           class={styled.dots}
           aria-label={props.label ?? "Choose a slide"}
           onConnect={[
-            signal.count.subscribe,
-            signal.index.subscribe,
+            fn.signals.subscribe(signal.count),
+            fn.signals.subscribe(signal.index),
             fn.showDots,
           ]}
           onSignal={fn.showDots}
@@ -444,7 +444,7 @@ export const CarouselSignalComponent: SignalComponent<{
       Status: () => (
         <output
           aria-live="polite"
-          onConnect={[signal.summary.subscribe, fn.fireSelfSignal]}
+          onConnect={[fn.signals.subscribe(signal.summary), fn.fireSelfSignal]}
           onSignal={fn.setTextContent}
         />
       ),
@@ -452,7 +452,10 @@ export const CarouselSignalComponent: SignalComponent<{
         <button
           type="button"
           class={styled.play}
-          onConnect={[signal.playLabel.subscribe, fn.fireSelfSignal]}
+          onConnect={[
+            fn.signals.subscribe(signal.playLabel),
+            fn.fireSelfSignal,
+          ]}
           onSignal={fn.setTextContent}
           onClick={fn.togglePlay}
         >

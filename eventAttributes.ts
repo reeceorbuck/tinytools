@@ -1,9 +1,5 @@
 import type { JSX } from "./jsx-runtime.ts";
-import type {
-  InstanceSignal,
-  SignalAction,
-  SignalActionsOf,
-} from "./signals.ts";
+import type { InstanceSignal, SignalHolding, SignalKind } from "./signals.ts";
 
 /**
  * The inline attribute body every TinyTools event binding emits. It is shared by
@@ -28,8 +24,12 @@ const RUNTIME_EVENTS = new Set([
   "incomingdata",
 ]);
 
-/** A handler reference as `tt-handler-*` attributes carry it: `<bundle>.<name>`. */
-const handlerReferencePattern = /^\w+\.[$\w]+$/;
+/**
+ * A handler reference as `tt-handler-*` attributes carry it: `<bundle>.<name>`,
+ * followed by the signals it is given, `(<bundle>.<name>,...)`, if any.
+ */
+const handlerReferencePattern =
+  /^\w+\.[$\w]+(?:\(\w+\.[$\w]+(?:,\w+\.[$\w]+)*\))?$/;
 
 declare const handlerReferenceBrand: unique symbol;
 
@@ -62,7 +62,10 @@ export type HandlerProp<TFunction> = HandlerReference<string, TFunction>;
  * Type for a component prop that receives a signal reference from
  * `tiny.imports()`, such as `signal.query`, which the component binds as an
  * element property or attribute or subscribes with
- * `onConnect={props.query.subscribe}`.
+ * `onConnect={fn.signals.subscribe(props.query)}`. `Holding` is what the
+ * signal must hold (see `SignalHolding`): give
+ * `{ reads: Value; writes: Value }` for a prop the component writes, as
+ * `fn.signals.update(props.query)` does.
  *
  * @example
  * ```tsx
@@ -71,74 +74,152 @@ export type HandlerProp<TFunction> = HandlerReference<string, TFunction>;
  * }
  * ```
  */
-export type SignalProp<Value = unknown> =
+export type SignalProp<
+  Value = unknown,
+  Holding = { readonly reads: Value },
+> =
   & HandlerReference<string, unknown>
+  & SignalArgument<Holding>
   & {
     readonly initial: Value;
     /** See `RenderableSignal.withInitial`. */
-    withInitial(initial?: Value): SignalProp<Value>;
-    /** The signal's `subscribe` action, for `onConnect`. */
-    readonly subscribe: HandlerReference<string, (event: Event) => void>;
+    withInitial(initial?: Value): SignalProp<Value, Holding>;
   };
 
 /**
  * The `fn` of a `tiny.imports()`: each handler as a reference for JSX event
- * attributes, also callable directly with its own signature.
+ * attributes, also callable directly with its own signature, and
+ * `fn.signals`, the handlers that act on signals given to them. A handler
+ * whose parameters after `event` are signals can be given them while
+ * rendering (see `SignalArguments`).
  */
-export type HandlerReferences<TFunctions> = {
-  readonly [Name in keyof TFunctions]:
-    & HandlerReference<
-      Name & string,
-      TFunctions[Name]
-    >
-    & TFunctions[Name];
-};
+export type HandlerReferences<TFunctions> =
+  & {
+    readonly [Name in keyof TFunctions]:
+      & HandlerReference<
+        Name & string,
+        TFunctions[Name]
+      >
+      & TFunctions[Name]
+      & SignalArguments<Name & string, TFunctions[Name]>;
+  }
+  & { readonly signals: SignalMutators };
+
+/**
+ * A handler `(event, total: Signal<number>)` given its signals while
+ * rendering, `onClick={fn.recalculate(signal.total)}`: each must hold what
+ * its parameter's type holds (see `SignalHolding`), so a `Signal<number>`
+ * parameter takes a writable signal of a number and a `ReadonlySignal<number>`
+ * one a computed too. A per-instance signal is passed as the instance
+ * enclosing the element.
+ */
+export type SignalArguments<TName extends string, TFunction> = TFunction extends
+  (this: infer This, event: infer E, ...signals: infer Signals) => unknown
+  ? Signals extends [] ? unknown
+  : (
+    ...signals: {
+      [Index in keyof Signals]: SignalArgument<
+        SignalHolding<Signals[Index]>
+      >;
+    }
+  ) => HandlerReference<TName, (this: This, event: E) => void>
+  : unknown;
 
 /**
  * Signals are typed as the signal itself so handlers read `signal.name.value`
- * directly. The handler reference brand keeps them usable as JSX event
- * handlers, where they are resolved as references like `fn.*`.
+ * directly. The handler reference brand keeps them usable in JSX, where they
+ * are resolved as references like `fn.*`. A signal is not a handler of any
+ * event (its signature is `NotAHandler`): it is given to `fn.signals`.
  */
 export type SignalReferences<TSignals> = {
-  readonly [Name in keyof TSignals]:
-    & HandlerReference<Name & string, TSignals[Name]>
-    & SignalOrigin<Pick<TSignals, Name>>
-    // deno-lint-ignore no-explicit-any
-    & (TSignals[Name] extends (...args: any[]) => infer Signal
-      ? Signal & RenderableSignal<Signal> & SignalActions<Name & string, Signal>
-      : never);
+  readonly [Name in keyof TSignals]: TSignals[Name] extends
+    (...args: never[]) => infer Signal ?
+      & HandlerReference<Name & string, NotAHandler>
+      & SignalOrigin<Pick<TSignals, Name>>
+      & Signal
+      & RenderableSignal<Signal>
+      & SignalArgument<SignalHolding<Signal>>
+    : never;
 };
 
 /**
- * The actions a signal reference offers as a JSX handler, for its kind:
- * `onConnect={signal.total.subscribe}` runs the element's `onSignal` on
- * each later change, `onInput={signal.size.update}` takes the control's value,
- * `onClick={signal.open.toggle}` flips a boolean,
- * `onClick={signal.count.increment}` adds 1 to a number and
- * `onClick={signal.addRow.fire}` fires a trigger.
+ * The handler signature of a signal reference, so an event attribute given
+ * one (`onInput={signal.size}`) names what to use instead.
  */
-export type SignalActions<TName extends string, Signal> = {
-  readonly [Action in SignalActionsOf<Signal>]: HandlerReference<
-    `${TName}$${Action}`,
-    (event: Event) => void
-  >;
+export type NotAHandler =
+  "A signal is not a handler: give it to fn.signals, such as onInput={fn.signals.update(signal.name)} or onClick={fn.signals.fire(signal.name)}";
+
+declare const signalArgumentBrand: unique symbol;
+
+/**
+ * Type-only: what a signal reference holds (see `SignalHolding`), which
+ * decides the `fn.signals` handlers it can be given to.
+ */
+export type SignalArgument<Holding> = {
+  readonly [signalArgumentBrand]: Holding;
 };
 
-/** The handler name of `signal.name.<action>`, as its bundle exports it. */
-export function signalActionHandler(
-  name: string,
-  action: SignalAction,
-): string {
-  return `${name}$${action}`;
-}
+/** A `fn.signals` handler: takes one or more signals holding `Holding`. */
+type SignalMutator<Holding> = (
+  ...signals: [SignalArgument<Holding>, ...SignalArgument<Holding>[]]
+) => HandlerReference<string, (event: Event) => void>;
 
-/** What each action needs, for the error when a signal lacks it. */
-const signalActionKinds: Record<SignalAction, string> = {
-  subscribe: "a signal",
-  update: "a writable Signal",
-  toggle: "a Signal holding a boolean",
-  increment: "a Signal holding a number",
-  fire: "a Trigger",
+/**
+ * `fn.signals`: handlers that act on the signals they are given, available
+ * in every `tiny.imports()`. Each takes one or more signal references, and
+ * a per-instance signal acts on the instance enclosing the element.
+ */
+export type SignalMutators = {
+  /**
+   * Runs the element's `onSignal` on each later change of every signal:
+   * `onConnect={fn.signals.subscribe(signal.hue, signal.border)}`.
+   */
+  readonly subscribe: SignalMutator<{ readonly reads: unknown }>;
+  /** Writes the control's value: `onInput={fn.signals.update(signal.size)}`. */
+  readonly update: SignalMutator<{ readonly writes: unknown }>;
+  /** Flips a boolean signal: `onClick={fn.signals.toggle(signal.open)}`. */
+  readonly toggle: SignalMutator<{ readonly writes: boolean }>;
+  /**
+   * Adds the element's value to a numeric signal:
+   * `<button value={1} onClick={fn.signals.add(signal.count)}>`. A
+   * control's live value is read, and the `value` attribute of any other
+   * element, which it must have; a negative value subtracts.
+   */
+  readonly add: SignalMutator<{ readonly writes: number }>;
+  /**
+   * Multiplies a numeric signal by the element's value, read as `add` reads
+   * it: `<button value={2} onClick={fn.signals.multiply(signal.zoom)}>`.
+   * `value={0.5}` halves.
+   */
+  readonly multiply: SignalMutator<{ readonly writes: number }>;
+  /** Fires a trigger: `onClick={fn.signals.fire(signal.addRow)}`. */
+  readonly fire: SignalMutator<{ readonly fires: true }>;
+};
+
+/** The name of a `fn.signals` handler. */
+export type SignalMutatorName = keyof SignalMutators;
+
+/** The `fn.signals` handlers, by name. */
+const signalMutatorNames = [
+  "subscribe",
+  "update",
+  "toggle",
+  "add",
+  "multiply",
+  "fire",
+] as const satisfies readonly (keyof SignalMutators)[];
+
+/** What each `fn.signals` handler needs, for the error when a signal lacks it. */
+const signalMutatorKinds: Record<
+  keyof SignalMutators,
+  readonly SignalKind[]
+> = {
+  subscribe: ["trigger", "writable", "computed"],
+  update: ["writable"],
+  toggle: ["writable"],
+  add: ["writable"],
+  multiply: ["writable"],
+  fire: ["trigger"],
 };
 
 declare const signalOriginBrand: unique symbol;
@@ -209,8 +290,9 @@ export const signalProperties: {
       | "src"
   ]: { readonly tags?: readonly string[] };
 } = {
-  // A select has no `value` attribute, so its initial value cannot render. A
-  // textarea's is its text (see signalPropertyProps). An input's and a
+  // A select has no `value` attribute, so it renders none: its initial
+  // option is the one marked `selected` (see `checkSelected`). A textarea's
+  // is its text (see signalPropertyProps). An input's, a select's and a
   // textarea's are written as the live property; the others', whose property
   // is a number (meter, progress, li) or falls back to their text when the
   // attribute is gone (option), as attribute text.
@@ -223,6 +305,7 @@ export const signalProperties: {
       "meter",
       "option",
       "progress",
+      "select",
       "textarea",
     ],
   },
@@ -270,12 +353,12 @@ export function isSignalAttribute(name: unknown): name is SignalAttribute {
 /**
  * Whether `binding` on `tag` is written as attribute text, as `setBound`
  * writes it: `src`, `data-*`, `aria-*` and the `value` of any element but an
- * input or textarea.
+ * input, select or textarea.
  */
 function isTextBinding(binding: SignalBinding, tag?: string): boolean {
   return isSignalAttribute(binding) || binding === "src" ||
     (binding === "value" && tag !== undefined &&
-      !["input", "textarea"].includes(tag.toLowerCase()));
+      !["input", "select", "textarea"].includes(tag.toLowerCase()));
 }
 
 /** Whether `name` is a property or attribute a signal reference can be given as. */
@@ -286,10 +369,16 @@ export function isSignalBinding(name: unknown): name is SignalBinding {
 /** What `tiny.imports()` gives signal references to implement `RenderableSignal`. */
 export type SignalRendering = {
   initial(name: string): unknown;
-  /** Live text for the signal whose `subscribe` action is given, from `initial`. */
+  /** What the signal `name` is, for the handlers it can be given to. */
+  kind(name: string): SignalKind;
+  /** Live text for the signal `fn.signals.subscribe(signal)` subscribes, from `initial`. */
   text(subscribe: object, initial: unknown): JSX.Element;
   /** The handler an element given a signal as a property runs (`setBound`). */
   setter(): object;
+  /** The handler a select given a signal as its value runs on connect (`checkSelected`). */
+  selectCheck(): object;
+  /** `fn.signals`, whose `subscribe` live text and bindings subscribe with. */
+  mutators: SignalMutators;
 };
 
 /** The attribute naming the signal `binding` follows (`tt-value-signal`). */
@@ -311,17 +400,21 @@ type SignalPropertyBinding = {
   omitted: boolean;
   /** `<bundle>.<name>`, which the setter checks each signal event against. */
   signal: string;
-  /** The signal's `subscribe` action, bound to `onConnect`. */
+  /** `fn.signals.subscribe(signal)`, bound to `onConnect`. */
   onConnect: object;
+  /** For a select's value, `checkSelected`, bound to `onConnect` after it. */
+  check?: object;
   /** The setter, run by `onSignal`. */
   onSignal: object;
 };
 
-/** The events a bare signal that is not a trigger acts on. */
-const BARE_SIGNAL_EVENTS = new Set(["input", "change"]);
-
-/** The events a signal is subscribed on, with its `subscribe` action. */
-const SUBSCRIBE_EVENTS = new Set(["connect", "load"]);
+/** The `fn.signals` handler likely meant for a bare signal on `eventName`. */
+function suggestedMutator(eventName: string, kind: SignalKind): string {
+  if (eventName === "connect" || eventName === "load") {
+    return "fn.signals.subscribe";
+  }
+  return kind === "trigger" ? "fn.signals.fire" : "fn.signals.update";
+}
 
 const referenceDetails = new WeakMap<
   object,
@@ -331,10 +424,10 @@ const referenceDetails = new WeakMap<
     /** The `tt-link` of the component instance a reference from `instance.signal` acts on. */
     links?: string;
     /**
-     * A bare signal (not one of its actions): a trigger fires on any event
-     * but connect and load, the others only read input and change.
+     * A signal reference (not a handler given one), which is not a handler
+     * on its own.
      */
-    signal?: { trigger: boolean };
+    signal?: { kind: SignalKind };
   }
 >();
 
@@ -407,12 +500,14 @@ export function signalPropertyProps(
       ? `${owners.slice(0, -1).join(", ")} or ${owners.at(-1)}`
       : owners[0];
     throw new TypeError(
-      `<${tag}> cannot take a signal as its ${misplaced}; only ${list} can. Bind onConnect={signal.name.subscribe} and an onSignal handler of your own instead.`,
+      `<${tag}> cannot take a signal as its ${misplaced}; only ${list} can. Bind onConnect={fn.signals.subscribe(signal.name)} and an onSignal handler of your own instead.`,
     );
   }
   const expanded: Record<string, unknown> = { ...props };
   /** Each signal's reference, by `<bundle>.<name>`. */
   const connects = new Map<string, object>();
+  /** Checks run on connect, after the signals subscribe. */
+  const checks: object[] = [];
   /** The setter, which writes every binding of the element. */
   let setter: object | undefined;
   for (const name of bound) {
@@ -420,6 +515,9 @@ export function signalPropertyProps(
     if (binding.omitted) {
       // The element keeps its own markup (a textarea's children).
       delete expanded[name];
+    } else if (name === "value" && tag?.toLowerCase() === "select") {
+      // A select renders no value: its options mark the initial one.
+      delete expanded.value;
     } else if (name === "value" && tag?.toLowerCase() === "textarea") {
       // A textarea shows its children, not a `value` attribute.
       if (hasChildren(props.children)) {
@@ -438,11 +536,12 @@ export function signalPropertyProps(
     if (!connects.has(binding.signal)) {
       connects.set(binding.signal, binding.onConnect);
     }
+    if (binding.check) checks.push(binding.check);
     setter ??= binding.onSignal;
   }
   for (
     const [attribute, references] of [
-      ["onConnect", [...connects.values()]],
+      ["onConnect", [...connects.values(), ...checks]],
       ["onSignal", [setter!]],
     ] as const
   ) {
@@ -471,7 +570,8 @@ export function handlerReferenceAttributes(
   const multiple = Array.isArray(value) && !!eventName;
   const values = multiple ? value : [value];
   const references = values.map((reference) =>
-    typeof reference === "object" && reference !== null
+    (typeof reference === "object" || typeof reference === "function") &&
+      reference !== null
       ? referenceDetails.get(reference)
       : undefined
   );
@@ -490,17 +590,12 @@ export function handlerReferenceAttributes(
     if (!handlerReferencePattern.test(details.resolved)) {
       throw new TypeError(`Invalid handler reference: ${details.name}`);
     }
-    if (details.signal && SUBSCRIBE_EVENTS.has(eventName)) {
+    // A signal is never a handler on its own: `fn.signals` acts on it.
+    if (details.signal) {
       throw new TypeError(
-        `${attributeName}={signal.${details.name}} does not subscribe: use signal.${details.name}.subscribe.`,
-      );
-    }
-    if (
-      details.signal && !details.signal.trigger &&
-      !BARE_SIGNAL_EVENTS.has(eventName)
-    ) {
-      throw new TypeError(
-        `${attributeName}={signal.${details.name}} does nothing: use one of its actions, such as signal.${details.name}.increment, .toggle or .update.`,
+        `${attributeName}={signal.${details.name}} is not a handler: give the signal to one of fn.signals, such as ${
+          suggestedMutator(eventName, details.signal.kind)
+        }(signal.${details.name}).`,
       );
     }
     return details.resolved;
@@ -527,15 +622,107 @@ export function handlerReferenceAttributes(
   };
 }
 
+/**
+ * `fn.signals`: each handler, called with signal references, returns a
+ * reference to it given those signals, `<handlers>.add(<signals>.count)`,
+ * which `runHandler` resolves when the event runs. `resolve` names where
+ * each handler lives, when it is used, so a page loads only the bundles of
+ * the handlers it binds.
+ */
+export function createSignalMutatorReferences(
+  resolve: (mutator: SignalMutatorName) => string,
+): SignalMutators {
+  return Object.freeze(
+    Object.fromEntries(signalMutatorNames.map((mutator) => [
+      mutator,
+      (...signals: unknown[]) =>
+        givenSignals(
+          `signals.${mutator}`,
+          resolve(mutator),
+          signals,
+          signalMutatorKinds[mutator],
+        ),
+    ])),
+  ) as unknown as SignalMutators;
+}
+
+/**
+ * A reference to the handler `resolved` (`fn.<name>`) given `signals`,
+ * `<bundle>.<handler>(<bundle>.<signal>,...)`, which `runHandler` resolves
+ * when the event runs. `kinds`, when given, are the kinds of signal the
+ * handler takes.
+ */
+function givenSignals(
+  name: string,
+  resolved: string,
+  signals: readonly unknown[],
+  kinds?: readonly SignalKind[],
+): object {
+  if (!signals.length) {
+    throw new TypeError(`fn.${name}() needs at least one signal.`);
+  }
+  const given = signals.map((signal) => {
+    const details = typeof signal === "object" && signal !== null
+      ? referenceDetails.get(signal)
+      : undefined;
+    if (!details?.signal) {
+      throw new TypeError(
+        `fn.${name} takes signal references from tiny.imports(), such as signal.count.`,
+      );
+    }
+    if (kinds && !kinds.includes(details.signal.kind)) {
+      throw new TypeError(
+        `fn.${name} cannot take signal.${details.name}, which is ${
+          details.signal.kind === "trigger"
+            ? "a trigger"
+            : `a ${details.signal.kind} signal`
+        }.`,
+      );
+    }
+    return details;
+  });
+  const links = new Set(given.flatMap((details) => details.links ?? []));
+  if (links.size > 1) {
+    throw new TypeError(
+      `fn.${name} is given signals of several instances (${
+        [...links].join(", ")
+      }); one reference can act on one instance only.`,
+    );
+  }
+  const reference = Object.freeze({});
+  referenceDetails.set(reference, {
+    name,
+    resolved: `${resolved}(${
+      given.map((details) => details.resolved).join(",")
+    })`,
+    links: [...links][0],
+  });
+  return reference;
+}
+
 export function createHandlerReferences<TFunctions>(
   resolveHandler: (name: string) => unknown,
+  /** What `fn.signals` holds, as `tiny.imports()` resolves it. */
+  mutators?: SignalMutators,
 ): HandlerReferences<TFunctions> {
   return new Proxy({}, {
     get(_target, name) {
       if (typeof name !== "string") return undefined;
       const resolved = resolveHandler(name);
+      if (name === "signals") {
+        if (typeof resolved === "string") {
+          throw new TypeError(
+            "A handler cannot be named 'signals': fn.signals holds the handlers that act on signals. Rename it.",
+          );
+        }
+        return mutators;
+      }
       if (typeof resolved !== "string") return undefined;
-      const reference = Object.freeze({});
+      // Called with signals (`fn.recalculate(signal.total)`), it is the
+      // handler given them.
+      const reference = Object.freeze((...signals: unknown[]) =>
+        givenSignals(name, resolved, signals)
+      );
       referenceDetails.set(reference, { name, resolved });
       return reference;
     },
@@ -566,21 +753,7 @@ export function createSignalReferences<TSignals>(
           `Signal '${name}' is only a handler reference while rendering. Read signal values in client handlers.`,
         );
       };
-      /** `signal.name.<action>`: a reference to the action's own handler. */
-      const action = (verb: SignalAction) => {
-        const handler = signalActionHandler(name, verb);
-        const resolved = resolveHandler(handler);
-        if (typeof resolved !== "string") {
-          throw new TypeError(
-            `signal.${name}.${verb} is only available on ${
-              signalActionKinds[verb]
-            }.`,
-          );
-        }
-        const reference = Object.freeze({});
-        referenceDetails.set(reference, { name: handler, resolved, links });
-        return reference;
-      };
+      const kind = rendering?.kind(name) ?? "writable";
       /**
        * A reference rendering `initialOf()` as the value it starts with, or,
        * when `omitted`, no initial value at all.
@@ -591,17 +764,13 @@ export function createSignalReferences<TSignals>(
       ): object => {
         const reference: object = Object.freeze(Object.defineProperties({}, {
           value: { get: unavailable, set: unavailable },
-          subscribe: { get: () => action("subscribe") },
+          subscribe: { get: unavailable },
           unsubscribe: { get: unavailable },
           initial: { get: initialOf },
           withInitial: {
             value: (initial?: unknown) =>
               createReference(() => initial, initial === undefined),
           },
-          update: { get: () => action("update") },
-          toggle: { get: () => action("toggle") },
-          increment: { get: () => action("increment") },
-          fire: { get: () => action("fire") },
           // A template literal (`${signal.x}`) would stringify the reference.
           [Symbol.toPrimitive]: {
             value: () => {
@@ -611,14 +780,15 @@ export function createSignalReferences<TSignals>(
             },
           },
         }));
-        signalTexts.set(
-          reference,
-          () =>
-            renderingFor("as a JSX child").text(
-              action("subscribe"),
-              omitted ? "" : initialOf(),
-            ),
-        );
+        const subscribe = (rendering: SignalRendering) =>
+          rendering.mutators.subscribe(reference as never) as object;
+        signalTexts.set(reference, () => {
+          const rendering = renderingFor("as a JSX child");
+          return rendering.text(
+            subscribe(rendering),
+            omitted ? "" : initialOf(),
+          );
+        });
         signalBindings.set(reference, (binding, tag) => {
           const rendering = renderingFor(`as ${binding}`);
           const initial = initialOf();
@@ -635,7 +805,10 @@ export function createSignalReferences<TSignals>(
               : Boolean(initial),
             omitted,
             signal,
-            onConnect: action("subscribe"),
+            onConnect: subscribe(rendering),
+            ...(binding === "value" && tag?.toLowerCase() === "select"
+              ? { check: rendering.selectCheck() }
+              : {}),
             onSignal: rendering.setter(),
           };
         });
@@ -643,11 +816,7 @@ export function createSignalReferences<TSignals>(
           name,
           resolved,
           links,
-          signal: {
-            trigger:
-              typeof resolveHandler(signalActionHandler(name, "fire")) ===
-                "string",
-          },
+          signal: { kind },
         });
         return reference;
       };

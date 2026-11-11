@@ -60,6 +60,7 @@ export {
   type ImportedTools,
   imports,
   type Instance,
+  type InstanceRootComponent,
   type Part,
   type RenderedTemplate,
   SignalComponent,
@@ -95,6 +96,7 @@ export {
   type HandlerProp,
   type HandlerReference,
   type HandlerReferences,
+  type SignalMutators,
   type SignalProp,
 } from "./eventAttributes.ts";
 export {

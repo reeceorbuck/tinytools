@@ -66,8 +66,9 @@ const counterStyles = new tiny.Styles({
 
 /**
  * `CounterDisplay` shows the count and `Increment` changes it by `by`. The
- * counter exposes `signal.count`: `onClick={counter.signal.count.increment}`
- * outside the component adds 1.
+ * counter exposes `signal.count`: a button with `value={1}` and
+ * `onClick={fn.signals.add(counter.signal.count)}` outside the component
+ * adds 1.
  */
 export const CounterSignalComponent: SignalComponent<{
   signal: ExposedSignals<CounterExposed>;

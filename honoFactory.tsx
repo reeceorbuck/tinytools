@@ -448,38 +448,64 @@ class TinyHono<E extends Env = BlankEnv> extends HonoBase<E> {
  * `NavigateEvent.intercept()` and the like). A bundle that has not loaded yet
  * is imported, and its handler runs once it has. Handlers run in the order
  * listed: once one waits for its bundle, the ones after it wait too.
+ *
+ * A reference may name signals for its handler, `<bundle>.<handler>(<bundle>.<signal>,...)`
+ * (`fn.signals.add(signal.count)`, `fn.recalculate(signal.total)`): each is
+ * its bundle's member of that name, a per-instance one resolved to the
+ * instance enclosing the element, and passed after the event. Every bundle
+ * a reference names loads before its handler runs.
  */
 export function runHandler(
   el: HTMLElement | typeof globalThis,
   e: Event,
 ) {
-  type Bundle = Record<string, (this: unknown, event: Event) => unknown>;
+  type Bundle = Record<string, (this: unknown, ...args: unknown[]) => unknown>;
   const registered = (name: string): Bundle | undefined =>
     (globalThis as { handlers?: Record<string, Bundle> }).handlers?.[name];
   // Set once a handler has to wait for its bundle; later handlers in the
   // list queue behind it, so they run in the attribute's order.
   let pending: Promise<unknown> | undefined;
-  // Each reference is `<bundle>.<handler>`.
+  // Bundles imported here, in case one does not register itself.
+  const imported: Record<string, Bundle> = {};
+  const bundleOf = (name: string) => registered(name) ?? imported[name];
   for (
     const reference of ((el === globalThis ? document.body : el as HTMLElement)
       .getAttribute("tt-handler-" + e.type) ?? "").split(" ")
   ) {
-    const [name, handler] = reference.split(".");
-    if (!name || !handler) continue;
+    const [, name, handler, list] =
+      /^(\w+)\.([$\w]+)(?:\((.*)\))?$/.exec(reference) ?? [];
+    if (!name) continue;
+    const args = list ? list.split(",").map((arg) => arg.split(".")) : [];
+    const names = [...new Set([name, ...args.map(([bundle]) => bundle)])];
     // Returns nothing, so a queued handler never waits on an async one.
-    const run = (bundle: Bundle) => {
-      if (typeof bundle[handler] === "function") bundle[handler].call(el, e);
-      else console.error(`Handler ${reference} not found in its bundle.`);
+    const run = () => {
+      const bundle = bundleOf(name);
+      if (typeof bundle?.[handler] === "function") {
+        bundle[handler].call(
+          el,
+          e,
+          ...args.map(([from, name]) => {
+            const signal = bundleOf(from)[name] as unknown as {
+              forInstance?(element: unknown): unknown;
+            };
+            return signal.forInstance ? signal.forInstance(el) : signal;
+          }),
+        );
+      } else console.error(`Handler ${reference} not found in its bundle.`);
     };
-    const bundle = registered(name);
-    if (bundle && !pending) run(bundle);
+    if (!pending && names.every(registered)) run();
     else {
-      // Re-checked at run time: an earlier link may have loaded this bundle.
+      // Re-checked at run time: an earlier link may have loaded the bundle.
       // Held in a variable so `deno publish` does not rewrite the URL as a
       // package-relative path.
-      const url = `/handlers/${name}.js`;
-      const load = () => registered(name) ?? import(url);
-      pending = (pending ? pending.then(load) : Promise.resolve(load()))
+      const load = (bundle: string): Promise<unknown> => {
+        const url = `/handlers/${bundle}.js`;
+        return bundleOf(bundle)
+          ? Promise.resolve()
+          : import(url).then((module) => imported[bundle] = module);
+      };
+      const ready = () => Promise.all(names.map(load));
+      pending = (pending ? pending.then(ready) : ready())
         .then(run)
         .catch((error) => console.error(`Handler ${reference} failed:`, error));
     }

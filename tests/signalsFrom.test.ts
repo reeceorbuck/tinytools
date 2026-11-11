@@ -84,7 +84,7 @@ Deno.test({
       const path = `${Deno.cwd()}/${directory}/handlers/${filename}.js`;
       assertStringIncludes(await Deno.readTextFile(path), "signalsFrom");
       const module = await import(pathToFileURL(path).href);
-      assertEquals(module.label().value, "B1 3");
+      assertEquals(module.label.value, "B1 3");
     } finally {
       await Deno.remove(directory, { recursive: true }).catch(() => {});
       reset();

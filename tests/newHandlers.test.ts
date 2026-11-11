@@ -24,7 +24,19 @@ import {
   resetImportRegistries,
 } from "../clientFunctions.ts";
 import type { JSX } from "../jsx-runtime.ts";
+import type { Signal } from "../signals.ts";
 import { handlerReferenceAttributes } from "../eventAttributes.ts";
+import { runHandler } from "../honoFactory.tsx";
+import {
+  recordingSubscribers,
+  signalMutators,
+} from "./helpers/signalRuntime.ts";
+import { signalActionTools, signalSyncTools } from "../handlers/signals.ts";
+
+/** The bundle a `fn.signals` handler lives in, as its references name it. */
+const mutatorBundle = (mutator: string): string =>
+  (signalSyncTools._handlerFilenames.get(mutator) ??
+    signalActionTools._handlerFilenames.get(mutator))!;
 
 /** Compile a single-handler bundle; `dependencies` maps key -> [path, export]. */
 function compileOne(
@@ -79,7 +91,7 @@ Deno.test({
       );
       assertStringIncludes(
         result.code,
-        "const signal = { get count() { return count2(); } }",
+        "const signal = { get count() { return count2; } }",
       );
       assertStringIncludes(result.code, "export function consumer()");
       const grouped = await compileOne(
@@ -203,11 +215,13 @@ Deno.test({
       );
       // Factory locals keep their names even though they match exports.
       assertStringIncludes(signalCode, "const count = new Signal(1)");
-      assertStringIncludes(signalCode, "export function count(event)");
+      // The signals themselves are exported and registered.
       assertStringIncludes(
         signalCode,
-        "signals.count.handleEvent(this, event)",
+        "export const { count, empty, doubled, text } = signals;",
       );
+      assertStringIncludes(signalCode, `] = signals;`);
+      assertEquals(signalCode.includes("export function"), false);
       assertEquals(signalCode.includes("stored"), false);
       const module = await load(consumer._handlerFilenames.get("read")!);
       const [count, doubled, empty] = module.read();
@@ -220,17 +234,14 @@ Deno.test({
         ["count", "doubled", "empty"],
       );
       assertEquals(module.read()[0], count);
-      const target = new EventTarget();
       const values: number[] = [];
-      target.addEventListener(
+      doubled.addEventListener(
         "signal",
-        (event) =>
+        (event: Event) =>
           values.push(
             (event as Event & { signal: { value: number } }).signal.value,
           ),
       );
-      doubled.subscribe(target);
-      doubled.subscribe(target);
       count.value = 2;
       count.value = 2;
       assertEquals(doubled.value, 4);
@@ -243,39 +254,42 @@ Deno.test({
         "read-only",
       );
       const other = await load(second._handlerFilenames.get("count")!);
-      assertEquals(other.count().value, 1);
-      assertNotEquals(other.count(), count);
+      assertEquals(other.count.value, 1);
+      assertNotEquals(other.count, count);
       const textModule = await load(first._handlerFilenames.get("text")!);
       const input = Object.assign(new EventTarget(), {
         value: "typed",
         dataset: {},
       });
+      // As `onInput={fn.signals.update(signal.text)}` runs it.
+      const { update } = signalMutators();
       input.addEventListener(
         "input",
-        (event) => textModule.text.call(input, event),
+        (event) => update.call(input, event, textModule.text),
       );
       input.dispatchEvent(new Event("input"));
-      assertEquals(textModule.text().value, "typed");
-      const subscriber = Object.assign(new EventTarget(), {
-        abortController: new AbortController(),
-      });
-      let notifications = 0;
-      subscriber.addEventListener("signal", () => notifications++);
-      // Subscribing on load registers once and sends nothing until a change.
-      textModule.text$subscribe.call(subscriber, new Event("load"));
-      textModule.text$subscribe.call(subscriber, new Event("load"));
-      assertEquals(notifications, 0);
-      textModule.text().value = "first";
-      assertEquals(notifications, 1);
-      subscriber.abortController.abort();
-      textModule.text().value = "second";
-      subscriber.dispatchEvent(new Event("tt-fire-signals"));
-      assertEquals(notifications, 1);
-      subscriber.abortController = new AbortController();
-      textModule.text$subscribe.call(subscriber, new Event("load"));
-      assertEquals(notifications, 1);
-      textModule.text().value = "third";
-      assertEquals(notifications, 2);
+      assertEquals(textModule.text.value, "typed");
+      const subscribers = recordingSubscribers();
+      try {
+        const { element: subscriber, seen } = subscribers.subscriber();
+        // Subscribing registers once and sends nothing until a change.
+        textModule.text.subscribe(subscriber);
+        textModule.text.subscribe(subscriber);
+        assertEquals(seen.length, 0);
+        textModule.text.value = "first";
+        assertEquals(seen.length, 1);
+        subscriber.abortController.abort();
+        textModule.text.value = "second";
+        subscriber.dispatchEvent(new Event("tt-fire-signals"));
+        assertEquals(seen.length, 1);
+        subscriber.abortController = new AbortController();
+        textModule.text.subscribe(subscriber);
+        assertEquals(seen.length, 1);
+        textModule.text.value = "third";
+        assertEquals(seen, ["first", "third"]);
+      } finally {
+        subscribers.restore();
+      }
       const references = await imports(first);
       assertEquals(typeof references.signal.count, "object");
       assertThrows(
@@ -284,11 +298,22 @@ Deno.test({
         "only a handler reference while rendering",
       );
       assertEquals((references.fn as Record<string, unknown>).count, undefined);
+      // A signal is not a handler on its own: `fn.signals.update` writes it.
+      assertThrows(
+        () => handlerReferenceAttributes("onInput", references.signal.text),
+        TypeError,
+        "onInput={signal.text} is not a handler",
+      );
       assertEquals(
-        handlerReferenceAttributes("onInput", references.signal.text),
+        handlerReferenceAttributes(
+          "onInput",
+          references.fn.signals.update(references.signal.text),
+        ),
         {
           oninput: "tiny.runHandler(this,event)",
-          "tt-handler-input": `${first._handlerFilenames.get("text")}.text`,
+          "tt-handler-input": `${mutatorBundle("update")}.update(${
+            first._handlerFilenames.get("text")
+          }.text)`,
         },
       );
       const checkTypes = () => {
@@ -367,7 +392,7 @@ Deno.test({
         plainBundle.code,
         "const signals = __tiny_flattenScopes((() =>",
       );
-      assertEquals(plainBundle.module.total().value, 2);
+      assertEquals(plainBundle.module.total.value, 2);
       const expressionBundle = await load(expression);
       assertStringIncludes(
         expressionBundle.code,
@@ -377,13 +402,13 @@ Deno.test({
         expressionBundle.code,
         "const signals = (function()",
       );
-      assertEquals(expressionBundle.module.label().value, "text");
+      assertEquals(expressionBundle.module.label.value, "text");
       const clashingBundle = await load(clashing);
       assertStringIncludes(
         clashingBundle.code,
         "const signals = __tiny_flattenScopes(defineSignals({ Signal: __tiny_Signal,",
       );
-      assertEquals(clashingBundle.module.Signal().value, 3);
+      assertEquals(clashingBundle.module.Signal.value, 3);
     } finally {
       await Deno.remove(directory, { recursive: true }).catch(() => {});
       reset();
@@ -424,18 +449,20 @@ Deno.test({
       const filename = [...layers._handlerFilenames.values()][0];
       const path = `${Deno.cwd()}/${directory}/handlers/${filename}.js`;
       const module = await import(pathToFileURL(path).href);
-      const a = window.document.getElementById("a");
-      // `onChange={signal.material}` on an element inside the first root.
-      module.material.call(a, {
-        type: "change",
-        target: { value: "flow", dataset: {}, name: "" },
-      });
-      assertEquals(module.materials().value, "flow");
+      const a = window.document.getElementById("a")!;
+      // `onChange={fn.signals.update(signal.material)}` on an element inside
+      // the first root, given its instance as `runHandler` gives it.
+      signalMutators().update.call(
+        a,
+        { type: "change", target: { value: "flow", dataset: {}, name: "" } },
+        module.material.forInstance(a),
+      );
+      assertEquals(module.materials.value, "flow");
       // The second root counts once something inside it resolves a signal.
-      module.material().forInstance(window.document.getElementById("b"));
-      assertEquals(module.materials().value, "flow, bulk");
+      module.material.forInstance(window.document.getElementById("b"));
+      assertEquals(module.materials.value, "flow, bulk");
       // Read from a handler, the accessor is the per-instance handle.
-      assertEquals(module.material().forInstance(a).value, "flow");
+      assertEquals(module.material.forInstance(a).value, "flow");
     } finally {
       const globals = globalThis as Record<string, unknown>;
       delete globals.document;
@@ -449,7 +476,7 @@ Deno.test({
 
 Deno.test({
   name:
-    "Signal references offer update, toggle, increment and fire for their kind",
+    "fn.signals handlers act on the signals they are given, by what each holds",
   sanitizeOps: false,
   sanitizeResources: false,
   async fn() {
@@ -472,6 +499,14 @@ Deno.test({
         names: function () {
           return Object.keys(signal);
         },
+        flip: function (
+          _event: Event,
+          own: Signal<boolean>,
+          shared: Signal<boolean>,
+        ) {
+          own.value = !own.value;
+          shared.value = !shared.value;
+        },
       };
     });
     const { parseHTML } = await import("linkedom");
@@ -483,51 +518,65 @@ Deno.test({
       await buildScriptFiles({ fresh: true, publicDir: directory });
       const filename = actions._handlerFilenames.get("size")!;
       const path = `${Deno.cwd()}/${directory}/handlers/${filename}.js`;
-      const code = await Deno.readTextFile(path);
       const module = await import(pathToFileURL(path).href);
-      // Each kind exports only the actions it offers.
+      // Signals are the only exports: their handlers are `fn.signals`.
       assertEquals(
-        Object.keys(module).filter((name) => name.includes("$")).sort(),
-        [
-          "doubled$subscribe",
-          "italic$subscribe",
-          "italic$toggle",
-          "italic$update",
-          "open$subscribe",
-          "open$toggle",
-          "open$update",
-          "reset$fire",
-          "reset$subscribe",
-          "size$increment",
-          "size$subscribe",
-          "size$update",
-        ],
+        Object.keys(module).filter((name) => name.includes("$")),
+        [],
       );
-      assertStringIncludes(code, "signals.size.update(this, event)");
-      const element = new EventTarget();
-      module.size$update.call(element, {
-        type: "input",
-        target: { value: "120", dataset: {}, name: "size" },
-      });
-      assertEquals(module.size().value, 120);
-      module.size$increment.call(element, new Event("click"));
-      assertEquals(module.size().value, 121);
+      const mutators = signalMutators();
+      const element = window.document.createElement("button");
+      mutators.update.call(
+        element,
+        { type: "input", target: { value: "120", dataset: {}, name: "size" } },
+        module.size,
+      );
+      assertEquals(module.size.value, 120);
+      // `add` adds the element's value, which it needs.
+      assertThrows(
+        () => mutators.add.call(element, new Event("click"), module.size),
+        TypeError,
+        "fn.signals.add uses the element's value, but <button> has none",
+      );
+      element.setAttribute("value", "1");
+      mutators.add.call(element, new Event("click"), module.size);
+      assertEquals(module.size.value, 121);
+      element.setAttribute("value", "-5");
+      mutators.add.call(element, new Event("click"), module.size);
+      assertEquals(module.size.value, 116);
+      element.setAttribute("value", "five");
+      assertThrows(
+        () => mutators.add.call(element, new Event("click"), module.size),
+        TypeError,
+        "'five' is not a number",
+      );
+      element.removeAttribute("value");
       // A toggle flips the value whatever the event.
-      module.italic$toggle.call(element, new Event("click"));
-      assertEquals(module.italic().value, true);
-      module.italic$update.call(element, {
-        type: "change",
-        target: { type: "checkbox", checked: false, value: "on", dataset: {} },
-      });
-      assertEquals(module.italic().value, false);
-      const fired = module.reset().value;
-      module.reset$fire.call(element, new Event("click"));
-      assertEquals(module.reset().value, fired + 1);
-      // Per-instance actions act on the instance enclosing the element.
-      const a = window.document.getElementById("a");
-      module.open$toggle.call(a, new Event("click"));
-      assertEquals(module.open().forInstance(a).value, true);
-      // Handlers see the signals, not their action handlers.
+      mutators.toggle.call(element, new Event("click"), module.italic);
+      assertEquals(module.italic.value, true);
+      const fired = module.reset.value;
+      mutators.fire.call(element, new Event("click"), module.reset);
+      assertEquals(module.reset.value, fired + 1);
+      // A per-instance signal is passed as the instance enclosing the element.
+      const a = window.document.getElementById("a")!;
+      mutators.toggle.call(a, new Event("click"), module.open.forInstance(a));
+      assertEquals(module.open.forInstance(a).value, true);
+      // `runHandler` reads each signal from its bundle and passes it on.
+      const handlers = (globalThis as unknown as {
+        handlers: Record<string, unknown>;
+      }).handlers;
+      handlers[filename] ??= module;
+      handlers[mutatorBundle("toggle")] ??= { toggle: mutators.toggle };
+      a.setAttribute(
+        "tt-handler-click",
+        `${
+          mutatorBundle("toggle")
+        }.toggle(${filename}.open,${filename}.italic)`,
+      );
+      runHandler(a, new Event("click"));
+      assertEquals(module.open.forInstance(a).value, false);
+      assertEquals(module.italic.value, false);
+      // Handlers see the signals.
       const consumerPath = `${Deno.cwd()}/${directory}/handlers/${
         consumer._handlerFilenames.get("names")
       }.js`;
@@ -535,87 +584,151 @@ Deno.test({
         (await import(pathToFileURL(consumerPath).href)).names().sort(),
         ["doubled", "italic", "open", "reset", "size"],
       );
-      const { signal } = await imports(actions);
+      const { fn, signal } = await imports(actions);
+      // A handler of your own takes signals the same way, each passed as
+      // the signal it is (a per-instance one, the element's instance).
+      const consumerFile = consumer._handlerFilenames.get("flip")!;
+      handlers[consumerFile] ??= await import(pathToFileURL(consumerPath).href);
+      const { fn: own } = await imports(consumer);
+      const flip = handlerReferenceAttributes(
+        "onClick",
+        own.flip(signal.open, signal.italic),
+      )?.["tt-handler-click"];
       assertEquals(
-        handlerReferenceAttributes("onInput", signal.size.update),
+        flip,
+        `${consumerFile}.flip(${filename}.open,${filename}.italic)`,
+      );
+      a.setAttribute("tt-handler-click", flip!);
+      runHandler(a, new Event("click"));
+      assertEquals(module.open.forInstance(a).value, true);
+      assertEquals(module.italic.value, true);
+      assertThrows(
+        // @ts-expect-error A value is not a signal.
+        () => own.flip(5, signal.italic),
+        TypeError,
+        "fn.flip takes signal references from tiny.imports()",
+      );
+      assertEquals(
+        handlerReferenceAttributes("onInput", fn.signals.update(signal.size)),
         {
           oninput: "tiny.runHandler(this,event)",
-          "tt-handler-input": `${filename}.size$update`,
+          "tt-handler-input": `${
+            mutatorBundle("update")
+          }.update(${filename}.size)`,
         },
       );
       assertEquals(
-        handlerReferenceAttributes("onClick", signal.reset.fire)?.[
-          "tt-handler-click"
-        ],
-        `${filename}.reset$fire`,
+        handlerReferenceAttributes(
+          "onClick",
+          fn.signals.add(signal.size, signal.size),
+        )?.["tt-handler-click"],
+        `${mutatorBundle("add")}.add(${filename}.size,${filename}.size)`,
       );
-      // A bare signal does nothing on a click, so it is refused; a
-      // trigger fires on any event but connect, which needs `subscribe`.
+      // `subscribe` and `update` share a bundle; the rest have their own,
+      // which only pages binding one of them load.
+      assertEquals(
+        mutatorBundle("subscribe"),
+        signalSyncTools._handlerFilenames.get("update"),
+      );
+      assertNotEquals(mutatorBundle("add"), mutatorBundle("update"));
+      assertEquals(
+        handlerReferenceAttributes(
+          "onClick",
+          fn.signals.multiply(signal.size),
+        )?.["tt-handler-click"],
+        `${mutatorBundle("multiply")}.multiply(${filename}.size)`,
+      );
+      // No bare signal is a handler, a trigger included: each error names
+      // the `fn.signals` handler likely meant.
       assertThrows(
         () => handlerReferenceAttributes("onClick", signal.size),
         TypeError,
-        "onClick={signal.size} does nothing: use one of its actions",
+        "onClick={signal.size} is not a handler",
       );
-      assertEquals(
-        handlerReferenceAttributes("onClick", signal.reset)?.[
-          "tt-handler-click"
-        ],
-        `${filename}.reset`,
+      assertThrows(
+        () => handlerReferenceAttributes("onClick", signal.reset),
+        TypeError,
+        "onClick={signal.reset} is not a handler: give the signal to one of fn.signals, such as fn.signals.fire(signal.reset)",
       );
       assertThrows(
         () => handlerReferenceAttributes("onConnect", signal.reset),
         TypeError,
-        "onConnect={signal.reset} does not subscribe: use signal.reset.subscribe",
+        "such as fn.signals.subscribe(signal.reset)",
       );
       assertEquals(
-        handlerReferenceAttributes("onConnect", signal.doubled.subscribe)?.[
-          "tt-handler-connect"
-        ],
-        `${filename}.doubled$subscribe`,
-      );
-      assertEquals(
-        handlerReferenceAttributes("onInput", signal.size)?.[
-          "tt-handler-input"
-        ],
-        `${filename}.size`,
+        handlerReferenceAttributes(
+          "onConnect",
+          fn.signals.subscribe(signal.doubled),
+        )?.["tt-handler-connect"],
+        `${mutatorBundle("subscribe")}.subscribe(${filename}.doubled)`,
       );
       assertThrows(
-        // @ts-expect-error A boolean cannot be incremented.
-        () => signal.italic.increment,
+        () => handlerReferenceAttributes("onInput", signal.size),
         TypeError,
-        "signal.italic.increment is only available on a Signal holding a number",
-      );
-      assertThrows(
-        // @ts-expect-error A number cannot be toggled.
-        () => signal.size.toggle,
-        TypeError,
-        "signal.size.toggle is only available on a Signal holding a boolean",
+        "onInput={signal.size} is not a handler",
       );
       assertThrows(
         // @ts-expect-error A computed is read-only.
-        () => signal.doubled.update,
+        () => fn.signals.update(signal.doubled),
         TypeError,
-        "signal.doubled.update is only available on a writable Signal",
+        "fn.signals.update cannot take signal.doubled, which is a computed signal",
+      );
+      assertThrows(
+        // @ts-expect-error Only triggers fire.
+        () => fn.signals.fire(signal.size),
+        TypeError,
+        "fn.signals.fire cannot take signal.size, which is a writable signal",
+      );
+      assertThrows(
+        // @ts-expect-error At least one signal.
+        () => fn.signals.toggle(),
+        TypeError,
+        "needs at least one signal",
       );
       const checkTypes = () => {
         const handlers: [
           JSX.IntrinsicElements["input"],
           JSX.IntrinsicElements["button"],
         ] = [
-          { onInput: signal.size.update, onChange: signal.italic.update },
+          {
+            onInput: fn.signals.update(signal.size),
+            onChange: fn.signals.update(signal.italic),
+          },
           {
             onClick: [
-              signal.italic.toggle,
-              signal.open.toggle,
-              signal.size.increment,
-              signal.reset.fire,
+              fn.signals.toggle(signal.italic, signal.open),
+              fn.signals.add(signal.size),
+              fn.signals.multiply(signal.size),
+              fn.signals.fire(signal.reset),
             ],
+            onConnect: fn.signals.subscribe(signal.doubled, signal.reset),
           },
         ];
+        // @ts-expect-error A boolean cannot be added to.
+        fn.signals.add(signal.italic);
+        // @ts-expect-error A boolean cannot be multiplied.
+        fn.signals.multiply(signal.italic);
+        const bare: JSX.IntrinsicElements["input"] = {
+          // @ts-expect-error A signal is not a handler on its own.
+          onInput: signal.size,
+          // @ts-expect-error Nor is a trigger.
+          onClick: signal.reset,
+          // @ts-expect-error Nor on a lifecycle event.
+          onConnect: signal.reset,
+        };
+        void bare;
+        // @ts-expect-error A number cannot be toggled.
+        fn.signals.toggle(signal.size);
         // @ts-expect-error A trigger has no value to update.
-        signal.reset.update;
-        // @ts-expect-error Only triggers fire.
-        signal.italic.fire;
+        fn.signals.update(signal.reset);
+        // @ts-expect-error A number is not a boolean.
+        own.flip(signal.size, signal.italic);
+        // @ts-expect-error Both signals are needed.
+        own.flip(signal.open);
+        const flipped: JSX.IntrinsicElements["button"] = {
+          onClick: own.flip(signal.open, signal.italic),
+        };
+        void flipped;
         return handlers;
       };
       void checkTypes;
@@ -1215,9 +1328,9 @@ Deno.test({
       // @ts-expect-error submit handlers cannot be used as button click handlers
       const incorrect: NonNullable<JSX.IntrinsicElements["button"]["onClick"]> =
         fn.submit;
-      assertEquals(typeof click, "object");
-      assertEquals(typeof submit, "object");
-      assertEquals(typeof incorrect, "object");
+      assertEquals(typeof click, "function");
+      assertEquals(typeof submit, "function");
+      assertEquals(typeof incorrect, "function");
       assertEquals(collection._handlerFilenames.size, 2);
     } finally {
       mutableCache.trustCache = previousTrust;

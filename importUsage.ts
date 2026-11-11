@@ -24,11 +24,12 @@ export type ImportedCollection = {
   /** Every name it provides. */
   names: readonly string[];
   /**
-   * The `tiny.imports()` result it is read through (`fn`, `signal`,
-   * `template` or `constants`), if any: shipped source passing that along
-   * whole (`helper(constants)`) may read any name, so counts as using it.
+   * The `tiny.imports()` results it is read through (`fn`, `signal`,
+   * `template` or `constants`; several for a list): shipped source passing
+   * one along whole (`helper(constants)`) may read any name, so counts as
+   * using it.
    */
-  accessor?: string;
+  accessors: readonly string[];
 };
 
 /** A call site and the collections it imports that nothing has read. */
@@ -125,9 +126,9 @@ export function checkDefinitionImports(
   for (const { site, collections } of imports) {
     const record = siteRecord(site, collections, true);
     const unused: string[] = [];
-    for (const { key, label, names, accessor } of collections) {
+    for (const { key, label, names, accessors } of collections) {
       const used = names.some((name) => readsProperty(source, name)) ||
-        (!!accessor && passesWhole(source, accessor));
+        accessors.some((accessor) => passesWhole(source, accessor));
       record.collections.get(key)!.used ||= used;
       if (!used) unused.push(label);
     }

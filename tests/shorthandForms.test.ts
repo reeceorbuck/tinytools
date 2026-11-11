@@ -262,13 +262,13 @@ Deno.test({
       const doubledModule = await load(
         doubled._handlerFilenames.get("doubled"),
       );
-      assertEquals(parityModule.isEven().value, true);
-      counterModule.count().value = 5;
-      assertEquals(parityModule.isEven().value, false);
-      assertEquals(doubledModule.doubled().value, 10);
-      assertEquals(doubledModule.evenText().value, "odd");
-      parityModule.label().value = "changed";
-      assertEquals(parityModule.label().value, "changed");
+      assertEquals(parityModule.isEven.value, true);
+      counterModule.count.value = 5;
+      assertEquals(parityModule.isEven.value, false);
+      assertEquals(doubledModule.doubled.value, 10);
+      assertEquals(doubledModule.evenText.value, "odd");
+      parityModule.label.value = "changed";
+      assertEquals(parityModule.label.value, "changed");
     } finally {
       await Deno.remove(directory, { recursive: true }).catch(() => {});
       reset();
@@ -343,9 +343,9 @@ Deno.test({
           }.js`,
         ).href
       );
-      assertEquals(module.summary().value, "everything");
-      module.areas().value = ["a", "b"];
-      assertEquals(module.summary().value, "Area A, b");
+      assertEquals(module.summary.value, "everything");
+      module.areas.value = ["a", "b"];
+      assertEquals(module.summary.value, "Area A, b");
     } finally {
       await Deno.remove(directory, { recursive: true }).catch(() => {});
       reset();

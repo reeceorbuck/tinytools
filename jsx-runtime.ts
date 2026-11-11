@@ -36,6 +36,7 @@ import {
   signalPropertyProps,
 } from "./eventAttributes.ts";
 import {
+  isInlineComponent,
   markElementNode,
   type ProxyNeed,
   type ValueSlot,
@@ -249,6 +250,12 @@ export const jsx: typeof honoJsx = (
     props = { ...props, children: signalChild(props.children) };
   }
   if (typeof tag === "function") {
+    // Rendered at once, so the element it returns is the caller's root.
+    if (isInlineComponent(tag)) {
+      return (tag as (props: unknown) => ReturnType<typeof honoJsx>)(
+        props ?? {},
+      );
+    }
     return honoJsx(wrapComponent(tag as (props: never) => unknown), props, key);
   }
   if (props && "children" in props) {
@@ -356,6 +363,7 @@ export const jsxAttr = (
 import type { JSX as HonoJSX } from "hono/jsx/jsx-runtime";
 import type { IncomingDataEvent } from "./handlers/processIncomingData.ts";
 import type { SortedEvent } from "./handlers/dragSortTools.ts";
+import type { SignalEvent } from "./handlers/signals.ts";
 
 // ============================================================================
 // Event Handler Types with Descriptive Error Messages
@@ -381,6 +389,13 @@ type ClientEventHandler<E extends Event> =
 interface GlobalOverrides {
   // Common events
   onCommand?: ClientEventHandler<CommandEvent>;
+
+  /** Each time a lifecycle element enters the document. */
+  onConnect?: ClientEventHandler<Event>;
+  /** Each time a lifecycle element leaves the document. */
+  onDisconnect?: ClientEventHandler<Event>;
+  /** When a signal the element subscribes to changes. */
+  onSignal?: ClientEventHandler<SignalEvent>;
 
   /**
    * Fired once by `ActivateParsedHandler` when the element and its content
@@ -531,6 +546,7 @@ type SignalPropertyTags = {
       | "meter"
       | "option"
       | "progress"
+      | "select"
       | "textarea"
     : Property extends "checked" ? "input"
     : Property extends "selected" ? "option"

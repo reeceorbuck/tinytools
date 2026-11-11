@@ -1,6 +1,7 @@
 import { assertEquals } from "@std/assert";
 import { signalClasses } from "../signals.ts";
 import { signalRuntimeSources } from "../signalModules.ts";
+import { update } from "./helpers/signalRuntime.ts";
 
 Deno.test("computed signals follow the signals they read", () => {
   const { Signal, Computed } = signalClasses(true);
@@ -68,31 +69,23 @@ Deno.test("array values compare by item and are read from control groups", () =>
   const { Signal } = signalClasses(true);
   const surfaces = new Signal<string[]>(["M"]);
   let notified = 0;
-  const target = new EventTarget();
-  target.addEventListener("signal", () => notified++);
-  surfaces.subscribe(target);
+  const listener = () => notified++;
+  (surfaces as unknown as EventTarget).addEventListener("signal", listener);
   surfaces.value = ["M"];
   assertEquals(notified, 0);
   surfaces.value = ["M", "O"];
   assertEquals(notified, 1);
 
-  surfaces.unsubscribe(target);
+  (surfaces as unknown as EventTarget).removeEventListener("signal", listener);
   surfaces.value = [];
   assertEquals(notified, 1);
 
   // A numeric signal reads numbers, a boolean signal a checkbox's state.
-  type Handling = { handleEvent(target: unknown, event: Event): unknown };
   const depth = new Signal<number>(1);
-  (depth as unknown as Handling).handleEvent(null, {
-    type: "input",
-    target: { value: "3", dataset: {} },
-  } as unknown as Event);
+  update({ value: "3", dataset: {} }, depth);
   assertEquals(depth.value, 3);
   const flag = new Signal<boolean>(false);
-  (flag as unknown as Handling).handleEvent(null, {
-    type: "change",
-    target: { type: "checkbox", checked: true, value: "on", dataset: {} },
-  } as unknown as Event);
+  update({ type: "checkbox", checked: true, value: "on", dataset: {} }, flag);
   assertEquals(flag.value, true);
 });
 
