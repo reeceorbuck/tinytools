@@ -30,17 +30,13 @@ import { raw } from "hono/html";
 import type { HtmlEscapedString } from "hono/utils/html";
 import {
   type EvaluationSeed,
-  type FlattenScopes,
-  flattenScopes,
-  type InstanceGroup,
-  type InstanceLevels,
+  hearRootReads,
+  inRoot,
   type InstanceSeed,
-  type InstanceSignal,
-  InstanceSignalHandle,
   type InternalSignalTools,
   type PersistedSignal,
   type ReadonlySignal,
-  type Scope,
+  rootSignals,
   type Signal,
   type SignalAccessors,
   signalClasses,
@@ -90,7 +86,12 @@ import {
   markResult,
 } from "./componentScope.ts";
 import { lifecycleRuntimePath } from "./lifecycleElement.ts";
-import { persistPrelude, signalToolsPrelude } from "./signalModules.ts";
+import {
+  instanceRuntime,
+  persistPrelude,
+  rootablePrelude,
+  signalToolsPrelude,
+} from "./signalModules.ts";
 import {
   checkDefinitionImports,
   importCallSite,
@@ -1016,14 +1017,15 @@ export type ImportedTools<
    */
   readonly component: TComponents & ComponentLinker<TComponents>;
   /**
-   * An `InstanceRoot` for each `Scope` level of the imported signal
-   * collections, by the key it is returned under:
-   * `<signalRoot.picker><patient-picker>…</patient-picker></signalRoot.picker>`.
-   * `signalRoot.self` roots a collection's unnamed `Scope`. A collection imported
-   * `withInputs()` seeds its roots from its seed. A level name two imported
-   * collections share throws when used.
+   * Makes the one element it wraps a root of the one signal collection this
+   * call imports: inside it, the collection's signals are that root's own
+   * copy. `<SignalRoot><patient-picker>…</patient-picker></SignalRoot>`.
+   * A copy that also uses page-wide collections is a component of its own,
+   * whose `tiny.imports()` holds just the collection it roots. A collection
+   * imported `withInputs()` seeds the root from its seed, and a `seed` prop
+   * seeds it directly.
    */
-  readonly signalRoot: TRoots;
+  readonly SignalRoot: TRoots;
   readonly styled: ActivateScopedStyles<TStyles>;
   readonly c: Context;
 };
@@ -1036,32 +1038,30 @@ type ExtractSignals<T> = T extends { readonly _isSignals: true }
   ? T extends ClientToolsClass<infer Functions, any, any> ? Functions : Empty
   : Empty;
 
-/**
- * The `InstanceRoot` of each `Scope` level of a `tiny.Signals` import, by
- * level name, and of its unnamed `Scope` as `self`; nothing for other tools.
- */
+/** The root of a `tiny.Signals` import; nothing for other tools. */
 type ExtractRoots<T> = T extends {
   readonly _isSignals: true;
-  readonly [signalDefinitions]?: infer Definitions;
   readonly InstanceRoot: InstanceRootComponent<infer Seed>;
-  readonly scopes: infer Scopes;
-} ?
-    & {
-      readonly [Level in keyof Scopes]: Scopes[Level] extends
-        { readonly InstanceRoot: infer Root } ? Root : never;
-    }
-    & (true extends HasUnnamedLevel<Definitions>
-      ? { readonly self: InstanceRootComponent<Seed> }
-      : Empty)
-  : Empty;
+} ? InstanceRootComponent<Seed>
+  : never;
 
-/** `true` for a collection whose factory returns a `Scope` on its own. */
-type HasUnnamedLevel<Definitions> = {
-  [Name in keyof Definitions]: Definitions[Name] extends // deno-lint-ignore no-explicit-any
-  InstanceSignal<any, any, infer Level> ? [Level] extends [never] ? true
-    : never
-    : never;
-}[keyof Definitions];
+/** `true` when `T` is a union of more than one member. */
+type IsUnion<T, U = T> = T extends unknown ? [U] extends [T] ? false : true
+  : never;
+
+/**
+ * What `SignalRoot` is for a call whose collections' roots are `Roots`: the
+ * one collection's, or, for none or several, a type that can't be rendered.
+ */
+type RootOf<Roots> = [Roots] extends [never] ? NoSignalRoot
+  : true extends IsUnion<Roots> ? NoSignalRoot
+  : Roots;
+
+/** `SignalRoot` of a call that imports no signal collection, or several. */
+type NoSignalRoot = {
+  readonly "SignalRoot roots the one signal collection its tiny.imports() holds: give each copy a component of its own importing just that one":
+    never;
+};
 
 /** Type-only: the definitions of a `tiny.Signals` collection. */
 declare const signalDefinitions: unique symbol;
@@ -1106,7 +1106,7 @@ type ImportsOf<TTools extends readonly ImportArgument[]> = ImportedTools<
   UnionToIntersection<ExtractConstants<Members<TTools[number]>>>,
   UnionToIntersection<ExtractTemplates<Members<TTools[number]>>>,
   UnionToIntersection<ExtractComponents<Members<TTools[number]>>>,
-  UnionToIntersection<ExtractRoots<Members<TTools[number]>>>
+  RootOf<ExtractRoots<Members<TTools[number]>>>
 >;
 
 /** The tools given to `tiny.Handlers(tools, factory)`, as a list. */
@@ -1327,22 +1327,20 @@ type SignalsCollection<
   readonly _isSignals: true;
   readonly [signalDefinitions]?: Definitions;
   /**
-   * Marks an instance root for the signals of the `Scope` this
-   * collection's factory returns directly:
-   * `<fieldset tt-instance={collection.instanceKey}>`. Per-instance signals
-   * bound anywhere inside it resolve to that instance. One element can root
-   * several collections by listing their keys separated by spaces.
+   * Marks a root of the collection, which gets its own copy of the
+   * collection's signals: `<fieldset tt-instance={collection.instanceKey}>`.
+   * Its signals bound anywhere inside it resolve to that copy. One element
+   * can root several collections by listing their keys separated by spaces.
    */
   readonly instanceKey: string;
   /**
-   * A `tt-seed` value that starts a root's new instance from `values`
-   * instead of the factory's initial values, so it begins as the server
-   * rendered it:
+   * A `tt-seed` value that starts a root's new copy from `values` instead of
+   * the factory's initial values, so it begins as the server rendered it:
    * `<fieldset tt-instance={c.instanceKey} tt-seed={c.seed({ shade: "B1" })}>`.
-   * Only writable signals of the unnamed `Scope` are accepted, so without
-   * one nothing is. An instance resumed on the same element keeps its own
-   * values. A root of several collections holds each one's seed under its
-   * key in its one `tt-seed`, as nested `InstanceRoot`s write it.
+   * Only writable signals are accepted. A copy resumed on the same element
+   * keeps its own values. A root of several collections holds each one's
+   * seed under its key in its one `tt-seed`, as nested `InstanceRoot`s write
+   * it.
    */
   seed(
     values: [keyof InstanceSeed<Definitions>] extends [never] ? never
@@ -1350,33 +1348,17 @@ type SignalsCollection<
   ): string;
   /**
    * Makes the one element it wraps, or the one a wrapped component returns,
-   * a root of the unnamed `Scope`, with `tt-instance` and, given `seed`
-   * values, `tt-seed`:
+   * a root of the collection, with `tt-instance` and, given `seed` values,
+   * `tt-seed`:
    * `<c.InstanceRoot seed={{ shade: "B1" }}><fieldset>…</fieldset></c.InstanceRoot>`.
-   * A `withInputs()` collection seeds it from its own seed. Throws when the
-   * collection returns no unnamed `Scope`: root a named level with
-   * `scopes.<name>.InstanceRoot`.
+   * A `withInputs()` collection seeds it from its own seed.
+   * `SignalRoot` is the same for the one collection a `tiny.imports()`
+   * call imports.
    */
   readonly InstanceRoot: InstanceRootComponent<
     [keyof InstanceSeed<Definitions>] extends [never] ? never
       : InstanceSeed<Definitions>
   >;
-  /**
-   * `key` and `seed` for each `Scope` returned under a key, by that key:
-   * `<li tt-instance={c.scopes.box.key} tt-seed={c.scopes.box.seed({ ... })}>`.
-   */
-  readonly scopes: {
-    readonly [Level in InstanceLevels<Definitions> & string]: {
-      /** The root marker for the level's signals. */
-      readonly key: string;
-      /** As the collection's `seed`, for a root of this level. */
-      seed(values: InstanceSeed<Definitions, Level>): string;
-      /** As the collection's `InstanceRoot`, for a root of this level. */
-      readonly InstanceRoot: InstanceRootComponent<
-        InstanceSeed<Definitions, Level>
-      >;
-    };
-  };
   /**
    * Runs the factory on the server with `inputs` written to its writable
    * signals and returns every signal's value, so initial markup can be
@@ -1384,10 +1366,9 @@ type SignalsCollection<
    * fresh graph; nothing is shared between calls. A collection with an async
    * definition resolves it first, so the result is a promise.
    *
-   * Per-instance signals report a fresh instance's values, or with `seed`
-   * (the object given to `seed()` or `scopes.<name>.seed()`) those of an
-   * instance started from it, so a seeded root renders its first text from
-   * the same computeds.
+   * With `seed` (the object given to `seed()`), the values are those of a
+   * root's copy started from it, so a seeded root renders its first text
+   * from the same computeds.
    */
   evaluateUsingInitialValues(
     inputs?: SignalInputs<Definitions, Persisted>,
@@ -1400,10 +1381,10 @@ type SignalsCollection<
    * `tiny.imports(wageSignals.withInputs({ netProduction }))`. The imported
    * signals' `.initial` and live text placed as a child then start from
    * those values. It changes nothing in the browser: a seeded root still
-   * needs its `tt-seed`, which its `seed()` and `scopes.<name>.seed()` give
-   * from `seed` when called with no values:
-   * `<li tt-instance={box.scopes.item.key} tt-seed={box.scopes.item.seed()}>`.
-   * Anywhere else it is the collection itself.
+   * needs its `tt-seed`, which its `InstanceRoot` (or `SignalRoot`)
+   * writes, and its `seed()` gives from `seed` when called with no values:
+   * `<li tt-instance={box.instanceKey} tt-seed={box.seed()}>`. Anywhere else
+   * it is the collection itself.
    */
   withInputs(
     inputs?: SignalInputs<Definitions, Persisted>,
@@ -1411,22 +1392,30 @@ type SignalsCollection<
   ):
     & SignalsCollection<Definitions, Deferred, Persisted>
     & SeededWithInputs<Definitions>;
+  /**
+   * This collection, for a `tiny.SignalComponent` factory's `tiny.imports()`,
+   * rooted in each instance of the component: every copy
+   * `component.instance()` makes gets its own copy of its signals.
+   * Collections imported without it stay page-wide:
+   * `tiny.imports(pageSignals, groupSignals.withRoot(), boxSignals.withRoot())`.
+   * One that another marked collection reads by value (`signal.recolor` as a
+   * dependency) is instead the level around it, which the copies one
+   * `component.instance(n)` makes share.
+   *
+   * Anywhere else it throws: root a collection in markup from a component of
+   * its own whose `tiny.imports()` holds just that collection, wrapping the
+   * markup in `<SignalRoot>`.
+   */
+  withRoot(): SignalsCollection<Definitions, Deferred, Persisted>;
 };
 
 /**
- * What `withInputs()` adds to a collection: `seed()` and each
- * `scopes.<name>.seed()` take no values, and then seed a root from the seed
- * `withInputs()` was given, each with the values of its own level.
+ * What `withInputs()` adds to a collection: `seed()` takes no values, and
+ * then seeds a root from the seed `withInputs()` was given.
  */
-type SeededWithInputs<Definitions extends SignalDefinitions> = {
-  /** The `tt-seed` of a root of the unnamed `Scope`, from `withInputs()`'s seed. */
+type SeededWithInputs<_Definitions extends SignalDefinitions> = {
+  /** The `tt-seed` of a root, from `withInputs()`'s seed. */
   seed(): string;
-  readonly scopes: {
-    readonly [Level in InstanceLevels<Definitions> & string]: {
-      /** The `tt-seed` of a root of this level, from `withInputs()`'s seed. */
-      seed(): string;
-    };
-  };
 };
 
 /**
@@ -1468,20 +1457,12 @@ type ShapeSignals<Shape extends SignalShape> = {
     : never;
 };
 
-/**
- * The builders `define` receives in `tiny.Signals(tools, define)`, with a
- * `Scope` whose callback returns a shape, as `define` does.
- */
-type ShapeTools = Omit<SignalTools, "Scope"> & {
-  /** Signals every instance root gets its own copy of; see `SignalTools`. */
-  Scope: new <Shape extends SignalShape>(
-    define: () => Shape & ThisType<ShapeSignals<Shape>>,
-  ) => Scope<ShapeSignals<Shape>>;
-};
+/** The builders `define` receives in `tiny.Signals(tools, define)`. */
+type ShapeTools = SignalTools;
 
 /** A factory's definitions as the collection exports them. */
-type Exported<Definitions> = FlattenScopes<Definitions> extends
-  infer Flat extends SignalDefinitions ? Flat : never;
+type Exported<Definitions> = Definitions extends SignalDefinitions ? Definitions
+  : never;
 
 /**
  * `define` in `tiny.Signals(tools, define)`: given what `tools` import and
@@ -1491,13 +1472,15 @@ type ShapeDefinition<
   TTools extends Importable | readonly ImportArgument[],
   Shape extends SignalShape,
 > = (
-  imported: ImportsOf<ToolList<TTools>> & ShapeTools,
+  imported: DefinitionImports<ImportsOf<ToolList<TTools>>> & ShapeTools,
 ) => Shape & ThisType<ShapeSignals<Shape>>;
 
 /**
  * What may follow a `tiny.Signals` factory, definition or values.
- * `persist` keeps writable top-level signals in browser storage, by name:
- * `{ persist: { savedStops: { local: "app.savedStops" } } }`. It is for data
+ * `persist` keeps writable signals in browser storage, by name:
+ * `{ persist: { savedStops: { local: "app.savedStops" } } }`. Only the page's
+ * copy is kept: a root's copy starts from the initial value or its seed. It
+ * is for data
  * only the browser has: the server renders a persisted signal's initial
  * value and cannot be given another (`evaluateUsingInitialValues` and
  * `withInputs` take no input for it), and an element that must show the
@@ -1508,13 +1491,37 @@ export type SignalsOptions<Persisted extends PropertyKey = never> = {
   readonly persist?: { readonly [Name in Persisted]: SignalStorage };
 };
 
+/**
+ * Inside a definition, another collection's signal. Read by value (or listed
+ * as a dependency) from inside an instance of the definition's collection,
+ * it is that of the instance around it: a root of its collection enclosing
+ * this one's, or else the page's. `.all` holds the values of its roots'
+ * copies inside this instance's root.
+ */
+type InDefinition<S> = S extends ReadonlySignal<infer Value> ? S & {
+    readonly all: ReadonlySignal<Value[]>;
+    readonly initialValue: Value;
+  }
+  : S;
+
+/** What a definition imports, its signals as `InDefinition` gives them. */
+type DefinitionImports<Imported> = Imported extends
+  { readonly signal: infer References } ?
+    & Omit<Imported, "signal">
+    & {
+      readonly signal: {
+        readonly [Name in keyof References]: InDefinition<References[Name]>;
+      };
+    }
+  : Imported;
+
 /** What `tiny.Signals` returns when `persist` names `Names`, which it cannot. */
 type PersistError<Names extends string> = {
   readonly persistError:
-    `Only writable top-level signals can be persisted, not: ${Names}`;
+    `Only writable signals can be persisted, not: ${Names}`;
 };
 
-/** The names `persist` may list: a collection's writable top-level signals. */
+/** The names `persist` may list: a collection's writable signals. */
 type PersistableName<Definitions extends SignalDefinitions> =
   & keyof SignalInputs<Definitions>
   & string;
@@ -1562,7 +1569,7 @@ interface SignalsConstructor {
   ): SignalsCollection<Exported<Definitions>, false>;
   /**
    * One writable signal per initial value: `new tiny.Signals({ count: 0 })`.
-   * Use a factory for `Computed`, `Trigger` or `Scope`.
+   * Use a factory for `Computed` or `Trigger`.
    */
   new <
     Values extends Record<string, SignalValue>,
@@ -1582,12 +1589,13 @@ interface SignalsConstructor {
    * => ({ isEven: () => signal.count.value % 2 === 0 }))`. Each function
    * returned becomes a `Computed`, each initial value a writable signal, and
    * a signal already built is kept, so `define` may also take `Signal`,
-   * `Computed`, `Trigger`, `Scope` and `signalsFrom` and return
-   * `new Scope(() => ({ ... }))`. A computed written as a method
+   * `Computed`, `Trigger` and `signalsFrom`. A computed written as a method
    * reads the collection's own signals as `this`:
    * `{ areas: [], summary() { return this.areas.value.join(", "); } }`.
    * As in a handler, destructure `signal`, `fn` and `constants` by those
-   * names. Per-instance signals of another collection cannot be read.
+   * names. Read from inside a root of this collection, another collection's
+   * signal is its copy in the root around it, or else the page's, and
+   * `signal.x.all` holds the values of its roots inside this one.
    */
   new <
     const TTools extends
@@ -1609,7 +1617,7 @@ interface SignalsConstructor {
       | Importable
       | readonly [ImportArgument, ...ImportArgument[]],
     Shape extends SignalShape,
-    const Persisted extends string,
+    const Persisted extends string = never,
   >(
     tools: TTools,
     define: ShapeDefinition<TTools, Shape>,
@@ -1754,6 +1762,11 @@ export class ClientToolsClass<
     return [];
   }
 
+  /** Runtime modules the bundle imports only when it needs them. */
+  protected get bundleLazyRuntimeFiles(): Iterable<string> {
+    return [];
+  }
+
   /** The prelude's graph, whose signals a Signals bundle exports. */
   protected get bundleMembers(): string | undefined {
     return undefined;
@@ -1888,6 +1901,7 @@ export class ClientToolsClass<
         prelude: this.bundlePrelude,
         styleFiles: this.bundleStyleFiles,
         runtimeFiles: this.bundleRuntimeFiles,
+        lazyFiles: this.bundleLazyRuntimeFiles,
         members: this.bundleMembers,
       });
       const instance = this._bundle.add(fnName, fn);
@@ -2383,7 +2397,7 @@ const AsyncFunction = (async () => {}).constructor;
 
 /**
  * Builds a handler from source text. Handlers ship to the browser as source,
- * so per-instance values (like a signal name) must be spliced in rather than
+ * so values that differ per handler (like a signal name) must be spliced in rather than
  * captured by a closure. Free variables resolve in the emitted bundle module.
  */
 function handlerFromSource(source: string): AnyFunction {
@@ -2502,17 +2516,16 @@ function valuesFactory(values: Record<string, SignalValue>): SignalFactory {
 }
 
 /** The builders a `tiny.Signals(tools, define)` definition may take. */
-const SHAPE_BUILDERS = ["Trigger", "Scope", "signalsFrom"];
+const SHAPE_BUILDERS = ["Trigger", "signalsFrom"];
 
 /**
  * The factory for `new tiny.Signals(tools, ({ signal }) => ({ ... }))`: the
  * definition's source called with what it imports and the signal builders,
  * each function it returns becoming a `Computed` (`this` is the collection's
  * own signals) and each initial value a writable `Signal`; anything already
- * built (a `Signal`, `Computed`, `Trigger` or `Scope`) is kept. The
- * `Scope` it receives builds each instance's shape the same way.
- * Its source is what ships, so `signal`, `fn` and `constants` resolve as in
- * a handler, and only the builders it names are imported in the browser.
+ * built (a `Signal`, `Computed` or `Trigger`) is kept. Its source is what
+ * ships, so `signal`, `fn` and `constants` resolve as in a handler, and only
+ * the builders it names are imported in the browser.
  */
 function importedShapeFactory(
   define: AnyFunction,
@@ -2523,21 +2536,9 @@ function importedShapeFactory(
     new RegExp(`\\b${name}\\b`).test(source)
   );
   const tools = ["Signal", "Computed", "shapeSignals", ...builders];
-  const given = [...imported, "Signal", "Computed", ...builders].map((name) =>
-    // Each instance's shape is built as the collection's is.
-    name === "Scope" ? "Scope: ShapedScope" : name
-  );
+  const given = [...imported, "Signal", "Computed", ...builders];
   try {
     return new Function(`return ({ ${tools.join(", ")} }) => {
-  ${
-      builders.includes("Scope")
-        ? `const ShapedScope = class extends Scope {
-    constructor(define) {
-      super(() => shapeSignals(define(), Signal, Computed));
-    }
-  };`
-        : ""
-    }
   return shapeSignals((${source})({ ${given.join(", ")} }), Signal, Computed);
 };`)() as SignalFactory;
   } catch (error) {
@@ -2549,19 +2550,14 @@ function importedShapeFactory(
   }
 }
 
-/** The bundle expression `result`, a factory's, with its scopes lifted out. */
-function flattened(tools: { flatten?: string }, result: string): string {
-  return tools.flatten ? `${tools.flatten}(${result})` : result;
-}
-
 /** Calls a compiled factory, explaining a module-scope capture. */
 function runSignalFactory(
   factory: SignalFactory,
   tools: SignalTools,
 ): SignalDefinitions {
   try {
-    const definitions = flattenScopes(factory(tools)) as SignalDefinitions;
-    // Signals are EventTargets; per-instance handles name theirs per group.
+    const definitions = factory(tools) as SignalDefinitions;
+    // Signals are EventTargets.
     for (const [name, signal] of Object.entries(definitions ?? {})) {
       if (signal instanceof EventTarget) {
         (signal as ReadonlySignal<unknown>).name ??= name;
@@ -2589,26 +2585,17 @@ function runSignalFactory(
  * Runs the factory server-side (values inert) to validate it and list its
  * signals, each with its kind.
  */
-function signalKinds(
-  factory: SignalFactory,
-  perInstance?: Set<string>,
-): Map<string, SignalKind> {
+function signalKinds(factory: SignalFactory): Map<string, SignalKind> {
   const tools = signalClasses(false);
   const definitions = runSignalFactory(factory, tools);
   if (
     !definitions || typeof definitions !== "object" ||
     definitions instanceof Promise ||
-    Object.values(definitions).some((value) =>
-      !(value instanceof tools.Signal) &&
-      !(value instanceof tools.InstanceSignal)
-    )
+    Object.values(definitions).some((value) => !(value instanceof tools.Signal))
   ) {
     throw new TypeError(
-      "Signals factory must synchronously return an object of Signal or Computed instances, or a Scope.",
+      "Signals factory must synchronously return an object of Signal or Computed instances.",
     );
-  }
-  for (const [name, signal] of Object.entries(definitions)) {
-    if (signal instanceof tools.InstanceSignal) perInstance?.add(name);
   }
   return new Map(
     Object.entries(definitions).map((
@@ -2671,17 +2658,14 @@ function persistedSignals(
   );
 }
 
-/** Throws unless every persisted signal is a writable top-level one. */
+/** Throws unless every persisted signal is a writable one. */
 function checkPersisted(
   persisted: Record<string, PersistedSignal>,
   kinds: ReadonlyMap<string, SignalKind>,
-  perInstance: ReadonlySet<string>,
 ): void {
   for (const name of Object.keys(persisted)) {
     const problem = !kinds.has(name)
       ? "it is not defined in this collection"
-      : perInstance.has(name)
-      ? "it is per-instance, and an instance has no stable identity to store it under"
       : kinds.get(name) !== "writable"
       ? "only writable signals can be persisted"
       : undefined;
@@ -2735,6 +2719,12 @@ function importingDefinition(
   const list = (Array.isArray(tools) ? tools : [tools]) as ImportArgument[];
   const imported = new Set<string>();
   for (const tool of list.flatMap(membersOf)) {
+    if (rootedImports.has(tool as object)) {
+      throw new TypeError(
+        "A tiny.Signals collection imports another as it is: new tiny.Signals(groupSignals, ...). " +
+          rootOutsideImports,
+      );
+    }
     const collection = signalInputs.get(tool as AnyClientToolsInstance)
       ?.collection ?? tool;
     if (collection instanceof SignalsClass) {
@@ -2764,20 +2754,15 @@ function importingDefinition(
 
 /**
  * The `signal` a factory reading other collections sees on the server: the
- * signals of their graphs for the current run.
+ * signals of their graphs for the current run. Each resolves where it is
+ * read (see `currentRoot` in signals.ts): inside a root's copy as the copy
+ * of the root around it, which on the server is the page's, and its `.all`
+ * empty, as the server resolves no roots.
  */
 function upstreamSignals(upstream: SignalUpstream): object {
   return new Proxy(Object.create(null), {
     get(_, name) {
-      const signal = upstream.current[name as string];
-      if (signal instanceof InstanceSignalHandle) {
-        throw new TypeError(
-          `signal.${
-            String(name)
-          } is per-instance: another collection cannot read it.`,
-        );
-      }
-      return signal;
+      return upstream.current[name as string];
     },
   });
 }
@@ -2785,26 +2770,65 @@ function upstreamSignals(upstream: SignalUpstream): object {
 /** What each `collection.withInputs()` stands for, for `tiny.imports()`. */
 const signalInputs = new WeakMap<object, SignalEvaluation>();
 
+/**
+ * What each `collection.withRoot()` stands for, for `tiny.imports()`: the
+ * import it marks, a collection or a `withInputs()` one, to root in each
+ * instance of the `tiny.SignalComponent` whose factory imports it.
+ */
+const rootedImports = new WeakMap<object, object>();
+
+/** `item` marked by `withRoot()`, as `withInputs()` marks it with inputs. */
+function rootedImport<T extends object>(item: T): T {
+  const marked: T = new Proxy(item, {
+    get: (target, property) => {
+      if (property === "withRoot") return () => marked;
+      const value = Reflect.get(target, property, target);
+      const bound = typeof value === "function" ? value.bind(target) : value;
+      // Inputs given after `withRoot()` keep the mark.
+      return property === "withInputs"
+        ? (...args: unknown[]) => rootedImport(bound(...args))
+        : bound;
+    },
+  });
+  rootedImports.set(marked, item);
+  return marked;
+}
+
+/** An import without its `withRoot()` mark. */
+function unmarked<T>(item: T): T {
+  return (rootedImports.get(item as object) ?? item) as T;
+}
+
+/** What `withRoot()` is for, for the errors where it is not. */
+const rootOutsideImports =
+  "collection.withRoot() roots a collection in each instance of a tiny.SignalComponent, so it goes in a tiny.imports() in one's factory. To root a collection in markup, give each copy a component of its own whose tiny.imports() holds just that collection, and wrap its markup in <SignalRoot>.";
+
+/** The error for a `withRoot()` import in a handler definition. */
+const rootInDefinition =
+  `A handler definition imports collections as they are. ${rootOutsideImports}`;
+
+/** The error for a `withRoot()` import outside a component's factory. */
+const rootOutsideComponent =
+  `This tiny.imports() is not in a tiny.SignalComponent's factory. ${rootOutsideImports}`;
+
 /** `InstanceRoot`: wraps the element, or a component returning one, it makes a root of a level. */
 export type InstanceRootComponent<Seed> = (
   props: { seed?: Seed; children: JSX.Element },
 ) => JSX.Element;
 
 /**
- * An `InstanceRoot` for the level `key`: `tt-instance`, and `tt-seed` from
- * the `seed` prop or else `fallback()`. `check` runs first, when given.
+ * An `InstanceRoot` for the collection `key`: `tt-instance`, and `tt-seed`
+ * from the `seed` prop or else `fallback()`.
  */
 function instanceRoot(
   key: string,
   fallback?: () => Record<string, unknown> | undefined,
-  check?: () => void,
 ): InstanceRootComponent<Record<string, unknown>> {
   return inlineComponent(
     (props: { seed?: Record<string, unknown>; children: JSX.Element }) => {
-      check?.();
       const values = props.seed ?? fallback?.();
-      // An element rooting several levels lists each key, and its one
-      // `tt-seed` holds each level's values under its key.
+      // An element rooting several collections lists each key, and its one
+      // `tt-seed` holds each one's values under its key.
       return markOnlyRoot(props.children, (own, tag) => {
         const keys = own("tt-instance")?.split(" ").filter(Boolean) ?? [];
         const seed = own("tt-seed");
@@ -2858,7 +2882,12 @@ class SignalsClass extends HandlersClass {
     return "signal";
   }
 
-  #prelude: { code: string; files: string[]; graph: string };
+  #prelude: {
+    code: string;
+    files: string[];
+    lazyFiles: string[];
+    graph: string;
+  };
   #kinds: ReadonlyMap<string, SignalKind>;
   /** The compiled factory; set once an async definition has resolved. */
   #compiled: { factory?: SignalFactory };
@@ -2867,7 +2896,6 @@ class SignalsClass extends HandlersClass {
   #upstream: SignalUpstream;
   /** The signals kept in browser storage, which take no server input. */
   #persisted: ReadonlySet<string>;
-
   /**
    * `(factory)` or `(import.meta.url, factory)`; either may be plain values.
    * Tools between them, one or an array (`(import.meta.url, [a, b],
@@ -2916,7 +2944,12 @@ class SignalsClass extends HandlersClass {
     const compiled: { factory?: SignalFactory } = deferred ? {} : {
       factory: compileSignalFactory(factoryOrDefinition as SignalFactory),
     };
-    const prelude = { code: "", files: [] as string[], graph: "" };
+    const prelude = {
+      code: "",
+      files: [] as string[],
+      lazyFiles: [] as string[],
+      graph: "",
+    };
     const kinds = new Map<string, SignalKind>();
     const owner: { collection?: SignalsClass } = {};
     super(sourceFileUrl, async () => {
@@ -2954,9 +2987,8 @@ class SignalsClass extends HandlersClass {
           }
           : run;
       }
-      const perInstance = new Set<string>();
-      const signals = signalKinds(compiled.factory!, perInstance);
-      checkPersisted(persisted, signals, perInstance);
+      const signals = signalKinds(compiled.factory!);
+      checkPersisted(persisted, signals);
       kinds.clear();
       signals.forEach((kind, name) => kinds.set(name, kind));
       const names = [...signals.keys()];
@@ -2980,27 +3012,53 @@ class SignalsClass extends HandlersClass {
         [];
       let graph: string;
       let tools: ReturnType<typeof signalToolsPrelude>;
+      /** The expression building the factory's signals once. */
+      let build: string;
       if (split && !parameterNames.some((name) => taken.has(name))) {
         parameterNames.forEach((name) => taken.add(name));
         graph = free("signals");
-        tools = signalToolsPrelude(split.parameter, instanceKey);
-        prelude.code = [
-          declarations + tools.code,
-          `const ${graph} = ${flattened(tools, `(${split.body})()`)};`,
-        ].filter(Boolean).join("\n");
+        tools = signalToolsPrelude(split.parameter);
+        prelude.code = declarations + tools.code;
+        build = `(${split.body})()`;
       } else {
         const define = free("defineSignals");
         graph = free("signals");
-        tools = signalToolsPrelude(undefined, instanceKey);
+        tools = signalToolsPrelude(undefined);
         prelude.code = declarations + tools.code + "\n" +
-          `const ${define} = ${factory};\n` +
-          `const ${graph} = ${flattened(tools, `${define}(${tools.tools})`)};`;
+          `const ${define} = ${factory};`;
+        build = `${define}(${tools.tools})`;
       }
+      prelude.files = tools.files;
+      // Built once for the page, and again for each root of the collection.
+      const builder = free("buildSignals");
+      const roots = rootablePrelude(
+        free("rootable"),
+        graph,
+        builder,
+        instanceKey,
+      );
+      // Reading another collection's `.all` builds that collection's group
+      // as this one loads, so it needs the per-root runtime at once.
+      const readsAll = /\.all\b/.test(factory.toString());
+      prelude.code = [
+        prelude.code,
+        readsAll ? instanceRuntime.code : "",
+        `const ${builder} = () => ${build};`,
+        `const ${graph} = ${builder}();`,
+        roots.code,
+      ].filter(Boolean).join("\n");
+      prelude.files = [
+        ...new Set([
+          ...prelude.files,
+          roots.file,
+          ...(readsAll ? [instanceRuntime.file] : []),
+        ]),
+      ];
+      prelude.lazyFiles = readsAll ? [] : [instanceRuntime.file];
       // Each signal without a name is named after its key, as on the server.
       prelude.code +=
         `\nfor (const [name, signal] of Object.entries(${graph})) ` +
         `if (signal instanceof EventTarget) signal.name ??= name;`;
-      prelude.files = tools.files;
       if (Object.keys(persisted).length) {
         const persist = persistPrelude(
           free("persistSignals"),
@@ -3042,8 +3100,11 @@ class SignalsClass extends HandlersClass {
   get instanceKey(): string {
     const baseName = this.sourceFileUrl.replace(/\\/g, "/").split("/").pop()
       ?.replace(/\.[^.]+$/, "").replace(/\W/g, "_") || "signals";
+    // The index goes first: FNV-1a barely changes the leading digits, the
+    // ones kept, for a difference in the last bytes, so `url#0` and `url#1`
+    // gave every collection of a file the same key.
     return `${baseName}_${
-      generateHandlerHash(`${this.sourceFileUrl}#${this._bundleIndex}`)
+      generateHandlerHash(`${this._bundleIndex}#${this.sourceFileUrl}`)
     }`;
   }
 
@@ -3052,37 +3113,32 @@ class SignalsClass extends HandlersClass {
     return this.#kinds.get(name);
   }
 
-  #levels?: { leaves: string[]; enclosing: string[] };
+  #rootReads?: [string, "value" | "all"][];
 
   /**
-   * The keys of the innermost per-instance levels, whose roots a component
-   * instance's root is, and of the levels enclosing them, whose roots the
-   * page provides around it.
+   * How this collection reads the collections it imports from inside one of
+   * its roots, by their `instanceKey`: by value (or listed as a dependency),
+   * which makes that collection's instance the one around this one's, or
+   * through `.all`, which makes this one's the one around its instances.
+   * Learned from one detached server build, which runs its computeds once.
    */
-  _instanceLevels(): { leaves: string[]; enclosing: string[] } {
-    if (this.#levels) return this.#levels;
-    const graph = runSignalFactory(
-      this.#compiled.factory!,
-      signalClasses(false, this.instanceKey),
+  _rootReads(): readonly [string, "value" | "all"][] {
+    if (this.#rootReads) return this.#rootReads;
+    const imported = new Set(
+      this.#upstream.collections.map((collection) => collection.instanceKey),
     );
-    const leaves = new Set<string>();
-    const enclosing = new Set<string>();
-    const groupsIn = (signals: Record<string, unknown>) =>
-      new Set(
-        Object.values(signals).flatMap((signal) =>
-          signal instanceof InstanceSignalHandle ? [signal.group] : []
-        ),
-      );
-    const visit = (group: InstanceGroup) => {
-      const children = groupsIn(group.template);
-      (children.size ? enclosing : leaves).add(group.key);
-      children.forEach(visit);
-    };
-    groupsIn(graph).forEach(visit);
-    return this.#levels = {
-      leaves: [...leaves],
-      enclosing: [...enclosing],
-    };
+    const reads: [string, "value" | "all"][] = [];
+    const previous = hearRootReads((rootable, how) => {
+      if (imported.has(rootable.key)) reads.push([rootable.key, how]);
+    });
+    try {
+      inRoot(null, () => this.#build({}));
+    } catch {
+      // A factory that cannot run on the server reads nothing here.
+    } finally {
+      hearRootReads(previous);
+    }
+    return this.#rootReads = reads;
   }
 
   seed(values: Record<string, unknown>): string {
@@ -3093,41 +3149,11 @@ class SignalsClass extends HandlersClass {
     return this._instanceRoot();
   }
 
-  /**  `InstanceRoot` of the unnamed level, seeded by `fallback`. */
+  /** `InstanceRoot`, seeded by `fallback`. */
   _instanceRoot(
     fallback?: () => Record<string, unknown> | undefined,
   ): InstanceRootComponent<Record<string, unknown>> {
-    return instanceRoot(this.instanceKey, fallback, () => {
-      const { leaves, enclosing } = this._instanceLevels();
-      if (![...leaves, ...enclosing].includes(this.instanceKey)) {
-        throw new TypeError(
-          "InstanceRoot roots the unnamed Scope, which this collection does not return: use scopes.<name>.InstanceRoot for a named level.",
-        );
-      }
-    });
-  }
-
-  get scopes(): Record<
-    string,
-    {
-      key: string;
-      seed(values: Record<string, unknown>): string;
-      InstanceRoot: InstanceRootComponent<Record<string, unknown>>;
-    }
-  > {
-    return new Proxy({}, {
-      get: (_, level) => {
-        if (typeof level !== "string") return undefined;
-        // Must match the key `InstanceGroup.name(level)` builds in signals.ts.
-        const key = `${this.instanceKey}-${level}`;
-        return {
-          key,
-          seed: (values: Record<string, unknown>) =>
-            JSON.stringify({ [key]: values }),
-          InstanceRoot: instanceRoot(key),
-        };
-      },
-    });
+    return instanceRoot(this.instanceKey, fallback);
   }
 
   /**
@@ -3159,63 +3185,39 @@ class SignalsClass extends HandlersClass {
     }
   }
 
+  withRoot(): this {
+    return rootedImport(this);
+  }
+
   withInputs(
     inputs: Record<string, unknown> = {},
     seed?: Record<string, unknown>,
   ): this {
     // `seed()` with no values seeds a root from `seed`: the values of the
-    // signals its level holds.
-    const own = (key: string) => {
+    // collection's own signals among it.
+    const own = () => {
       const { graph } = this.#build(inputs);
       return Object.fromEntries(
-        Object.entries(seed ?? {}).filter(([name]) => {
-          // A nested level's signal is its parent's handle of the level's own.
-          let signal = graph[name];
-          while (
-            signal instanceof InstanceSignalHandle &&
-            signal.templateSignal instanceof InstanceSignalHandle
-          ) signal = signal.templateSignal;
-          return signal instanceof InstanceSignalHandle &&
-            signal.group.key === key;
-        }),
+        Object.entries(seed ?? {}).filter(([name]) =>
+          Object.hasOwn(graph, name)
+        ),
       );
     };
     const seeds = {
-      seed: (values?: Record<string, unknown>) =>
-        this.seed(values ?? own(this.instanceKey)),
+      seed: (values?: Record<string, unknown>) => this.seed(values ?? own()),
       get InstanceRoot() {
         return root;
       },
-      get scopes() {
-        return scopes;
-      },
     };
-    const root = this._instanceRoot(
-      seed ? () => own(this.instanceKey) : undefined,
-    );
-    const scopes = new Proxy({}, {
-      get: (_, level) => {
-        const scope = Reflect.get(this.scopes, level);
-        return scope && {
-          key: scope.key,
-          seed: (values?: Record<string, unknown>) =>
-            scope.seed(values ?? own(scope.key)),
-          InstanceRoot: instanceRoot(
-            scope.key,
-            seed ? () => own(scope.key) : undefined,
-          ),
-        };
-      },
-    });
+    const root = this._instanceRoot(seed ? own : undefined);
     // Members run on the collection, so its private fields stay reachable.
     const withInputs = new Proxy(this, {
       get: (target, property) => {
-        if (
-          property === "seed" || property === "scopes" ||
-          property === "InstanceRoot"
-        ) {
+        if (property === "seed" || property === "InstanceRoot") {
           return seeds[property];
         }
+        // Marked with its inputs, not as the bare collection.
+        if (property === "withRoot") return () => rootedImport(withInputs);
         const value = Reflect.get(target, property, target);
         return typeof value === "function" ? value.bind(target) : value;
       },
@@ -3238,17 +3240,22 @@ class SignalsClass extends HandlersClass {
   #build(
     inputs: Record<string, unknown>,
   ): { tools: InternalSignalTools; graph: SignalDefinitions } {
-    const tools: InternalSignalTools = signalClasses(true, this.instanceKey);
-    const graph = runSignalFactory(this.#compiled.factory!, tools);
+    const tools: InternalSignalTools = signalClasses(true);
+    const factory = this.#compiled.factory!;
+    const graph = runSignalFactory(factory, tools);
+    // As in the bundle: a root of the collection gets a fresh build.
+    rootSignals(
+      graph,
+      () =>
+        runSignalFactory(factory, signalClasses(true)) as ReturnType<
+          Parameters<typeof rootSignals>[1]
+        >,
+      this.instanceKey,
+    );
     for (const [name, value] of Object.entries(inputs)) {
       if (!Object.hasOwn(graph, name)) {
         throw new TypeError(
           `Signal '${name}' is not defined in this collection.`,
-        );
-      }
-      if (graph[name] instanceof tools.InstanceSignal) {
-        throw new TypeError(
-          `Signal '${name}' is per-instance and cannot be set here.`,
         );
       }
       if (this.#persisted.has(name)) {
@@ -3266,27 +3273,21 @@ class SignalsClass extends HandlersClass {
     inputs: Record<string, unknown>,
     seed?: Record<string, unknown>,
   ): Record<string, unknown> {
-    const { tools, graph } = this.#build(inputs);
-    for (const name of Object.keys(seed ?? {})) {
-      if (!(graph[name] instanceof tools.InstanceSignal)) {
+    const { graph } = this.#build(inputs);
+    // A root's copy started from `seed`, as its `tt-seed` starts it; `.all`
+    // sees no roots on the server.
+    for (const [name, value] of Object.entries(seed ?? {})) {
+      if (signalKind(graph[name]) !== "writable") {
         throw new TypeError(
-          `Cannot seed '${name}': it is not a per-instance signal of this collection.`,
+          `Cannot seed '${name}': it is not a writable signal of this collection.`,
         );
       }
+      (graph[name] as { value: unknown }).value = value;
     }
-    // Per-instance signals report the value of one instance, started from
-    // `seed` when given and fresh otherwise; `.all` aggregates see no
-    // instances on the server.
-    const instances = new Map();
     return Object.fromEntries(
-      Object.entries(graph).map(([name, signal]) => [
-        name,
-        !(signal instanceof tools.InstanceSignal)
-          ? (signal as { value: unknown }).value
-          : seed
-          ? signal.seededValue(seed, instances)
-          : signal.initialValue,
-      ]),
+      Object.entries(graph).map((
+        [name, signal],
+      ) => [name, (signal as { value: unknown }).value]),
     );
   }
 
@@ -3296,6 +3297,10 @@ class SignalsClass extends HandlersClass {
 
   protected override get bundleRuntimeFiles(): Iterable<string> {
     return this.#prelude.files;
+  }
+
+  protected override get bundleLazyRuntimeFiles(): Iterable<string> {
+    return this.#prelude.lazyFiles;
   }
 
   protected override get bundleMembers(): string {
@@ -3488,6 +3493,8 @@ class TemplatesClass extends ClientToolsClass<Empty, Empty, Empty> {
   #rendered = new Map<string, RenderedTemplate>();
   #prelude = "";
   #styleFiles = new Set<string>();
+  /** The per-root runtime, when the markup holds a root (see `instanceRuntime`). */
+  #runtimeFiles: string[] = [];
 
   /** `(templates)` or `(import.meta.url, templates)`. */
   constructor(...args: unknown[]) {
@@ -3541,7 +3548,14 @@ class TemplatesClass extends ClientToolsClass<Empty, Empty, Empty> {
         }
         functions[name] = handlerFromSource(templateCloneSource(markup));
       }
+      // A clone holding a root is resolved by the handler that inserts it,
+      // so the copies it gets need the per-root runtime already loaded.
+      const holdsRoot = [...this.#rendered.values()].some(({ markup }) =>
+        /\stt-(instance|link)=/.test(markup)
+      );
+      this.#runtimeFiles = holdsRoot ? [instanceRuntime.file] : [];
       this.#prelude = [
+        holdsRoot ? instanceRuntime.code : "",
         templateStylesPrelude(this.#styleFiles),
         lifecycleDefinitionsPrelude(lifecycleTags),
       ].filter(Boolean).join("\n");
@@ -3555,6 +3569,10 @@ class TemplatesClass extends ClientToolsClass<Empty, Empty, Empty> {
 
   protected override get bundleStyleFiles(): Iterable<string> {
     return this.#styleFiles;
+  }
+
+  protected override get bundleRuntimeFiles(): Iterable<string> {
+    return this.#runtimeFiles;
   }
 
   /** The rendered template of `name`, once defined. */
@@ -3684,13 +3702,6 @@ export type Part<Props, Result> = (props: Props & { class?: string }) => Result;
 export type ImportedComponent<Name extends string, TSignals, Props, Result> = {
   readonly name: Name;
   instance(): Instance<TSignals, Props, Result>;
-  /**
-   * The `tt-instance` for an element enclosing instances, when the
-   * component's signals have levels above its own: `<section
-   * tt-instance={component.Name.scopeKey}>`. Signals at those levels are
-   * shared by every instance inside that element.
-   */
-  readonly scopeKey: string;
 };
 
 // deno-lint-ignore no-explicit-any
@@ -3727,10 +3738,12 @@ export type ComponentLinker<TComponents> = {
    */
   instance(): ComponentInstances<TComponents>;
   /**
-   * `repeat` copies made together: each has its own instance of the
-   * innermost level, and they share the levels enclosing it (see
-   * `scopeKey`), so two boxes keep their own colour but share a recolor.
-   * `const [one, two] = component.instance(2)`.
+   * `repeat` copies made together: each has its own copy of the collections
+   * the factory roots, except those another of them reads by value, which
+   * the copies share, so two boxes keep their own colour but share a
+   * recolor. `const [one, two] = component.instance(2)`. An instance made
+   * alone reads those from a root around it, a `<SignalRoot>` of the
+   * shared collection, or else the page's.
    */
   instance(repeat: number): ComponentInstances<TComponents>[];
   /**
@@ -3749,8 +3762,7 @@ declare const exposedBrand: unique symbol;
  * A `tiny.SignalComponent`'s `signal` list, stated rather than inferred, for
  * an exported component's type (JSR does not infer the types of a published
  * module). `Signals` are the exposed signals as their collection defines
- * them: `ExposedSignals<InstanceSignals<{ open: Signal<boolean> }>>` for a
- * per-instance `open`.
+ * them: `ExposedSignals<{ open: Signal<boolean> }>`.
  */
 export type ExposedSignals<Signals extends SignalDefinitions = Empty> =
   & readonly (
@@ -3792,19 +3804,51 @@ function renderOf(value: unknown): ComponentPart["render"] | undefined {
  */
 type SignalSource = (links?: string) => SignalReferences<unknown>;
 
-/** Each signal reference from a request's `tiny.imports()`, by its name. */
+/**
+ * Each signal reference from a request's `tiny.imports()`, by its name, and
+ * the collection defining it.
+ */
 const signalSources = new WeakMap<
   object,
-  { name: string; source: SignalSource }
+  { name: string; source: SignalSource; collection?: SignalsClass }
 >();
 
+/** The exposed names each component has been warned about (see below). */
+const warnedExposures = new WeakMap<object, Set<string>>();
+
 /**
- * The per-instance levels of the signal collections a `tiny.SignalComponent`
- * factory imports: its instance roots carry the innermost, and the page
- * provides roots for the enclosing ones.
+ * Warns, while developing, of each signal a component's `signal` list
+ * exposes from a collection its factory does not root: every instance's
+ * `signal.name` is then the page's one signal, which is rarely meant.
+ */
+function warnPageWideExposures(
+  component: object,
+  list: unknown,
+  rooted: ReadonlySet<SignalsClass>,
+): void {
+  const warned = warnedExposures.get(component) ??
+    warnedExposures.set(component, new Set()).get(component)!;
+  for (const reference of Array.isArray(list) ? list : []) {
+    const found = signalSources.get(reference);
+    if (
+      !found?.collection || rooted.has(found.collection) ||
+      warned.has(found.name)
+    ) continue;
+    warned.add(found.name);
+    console.warn(
+      `[tiny-tools] A tiny.SignalComponent exposes '${found.name}' on each instance, but its factory imports the collection defining it ('${found.collection.instanceKey}') without withRoot(), so every instance shares the page's one. Import it with .withRoot() to give each instance its own.`,
+    );
+  }
+}
+
+/**
+ * The levels of the signal collections a `tiny.SignalComponent` factory
+ * roots: its instance roots carry the innermost, and the copies made
+ * together share the enclosing ones. `rooted` are those it imports with
+ * `withRoot()`, whose levels come from how they read one another.
  */
 const signalComponentScope = new AsyncLocalStorage<
-  { leaves: Set<string>; enclosing: Set<string> }
+  { leaves: Set<string>; enclosing: Set<string>; rooted: Set<SignalsClass> }
 >();
 
 /**
@@ -3843,8 +3887,15 @@ function exposedSignals(list: unknown): Map<string, SignalSource> {
  * `tiny.imports()` of it runs the factory for the request and returns
  * `component.ColorBox`, and `component.instance()` gives one copy of each
  * component to render as `<box.ColorBox />` (its root links into that
- * instance of the innermost level of every collection the factory imported)
- * and drive through `box.signal`.
+ * instance of the innermost level of every collection it roots) and drive
+ * through `box.signal`.
+ *
+ * The collections it roots are those the factory imports with `withRoot()`,
+ * `tiny.imports(pageSignals, groupSignals.withRoot(), boxSignals.withRoot())`.
+ * Every other collection it uses stays page-wide. Of those marked, one read
+ * by value (or listed as a dependency) by another is the level around it,
+ * shared by the copies one `component.instance(n)` makes; the rest are each
+ * copy's own.
  */
 export class SignalComponent<TComponents extends AnyComponentParts> {
   /** The factory passed in, run by each `tiny.imports()` of the component. */
@@ -3855,7 +3906,35 @@ export class SignalComponent<TComponents extends AnyComponentParts> {
    * returns them by name, with the signals they expose.
    */
   constructor(factory: () => TComponents | Promise<TComponents>) {
+    if (typeof factory !== "function") {
+      throw new TypeError(
+        "tiny.SignalComponent takes only its factory. Each instance roots the collections the factory imports with withRoot(): tiny.imports(boxSignals.withRoot()).",
+      );
+    }
     this.factory = factory;
+  }
+}
+
+/**
+ * Adds the levels of the collections a `tiny.SignalComponent` factory
+ * imports with `withRoot()` to `levels`: each is one, a leaf (each copy's
+ * own) unless another of them reads it by value, which makes it the level
+ * around that one, or it reads another's `.all`, which makes it the level
+ * around that one's instances.
+ */
+async function rootedLevels(
+  rooted: readonly SignalsClass[],
+  levels: { leaves: Set<string>; enclosing: Set<string> },
+): Promise<void> {
+  if (!rooted.length) return;
+  await Promise.all(rooted.map((collection) => collection.ensureDefined()));
+  const keys = new Set(rooted.map((collection) => collection.instanceKey));
+  for (const collection of rooted) {
+    levels.leaves.add(collection.instanceKey);
+    for (const [key, how] of collection._rootReads()) {
+      if (!keys.has(key)) continue;
+      levels.enclosing.add(how === "value" ? key : collection.instanceKey);
+    }
   }
 }
 
@@ -3979,7 +4058,6 @@ function linkableComponents(
       };
       const component: AnyImportedComponent = {
         name,
-        scopeKey: enclosing.join(" "),
         instance: () => {
           const { part, links } = make();
           return Object.assign(part, {
@@ -4135,9 +4213,13 @@ function membersOf(argument: ImportArgument): Importable[] {
     : [argument as Importable];
 }
 
-/** The collection an import stands for: a `withInputs()` one's own. */
+/**
+ * The collection an import stands for: a `withInputs()` or `withRoot()`
+ * one's own.
+ */
 function collectionOf(item: Importable): Importable {
-  return signalInputs.get(item as AnyClientToolsInstance)?.collection ?? item;
+  const own = unmarked(item);
+  return signalInputs.get(own as AnyClientToolsInstance)?.collection ?? own;
 }
 
 /**
@@ -4285,7 +4367,9 @@ async function importsAt(
     ...new Set(
       members.filter((item) => !(item instanceof SignalComponent)).map(
         (item) => {
-          const evaluation = signalInputs.get(item as AnyClientToolsInstance);
+          const evaluation = signalInputs.get(
+            unmarked(item) as AnyClientToolsInstance,
+          );
           if (evaluation) evaluations.set(evaluation.collection, evaluation);
           return collectionOf(item);
         },
@@ -4299,6 +4383,20 @@ async function importsAt(
     !(item instanceof ConstantsClass)
   );
   const definition = handlerDefinitionScope.getStore();
+  // The collections marked `withRoot()`, rooted in each instance of the
+  // component whose factory this call is in.
+  const marked = [
+    ...new Set(
+      members.filter((item) => rootedImports.has(item))
+        .map((item) => collectionOf(item) as SignalsClass),
+    ),
+  ];
+  if (marked.length) {
+    if (definition?.active) throw new TypeError(rootInDefinition);
+    const component = signalComponentScope.getStore();
+    if (!component) throw new TypeError(rootOutsideComponent);
+    for (const collection of marked) component.rooted.add(collection);
+  }
   if (definition?.active) {
     if (components.length) {
       throw new Error(
@@ -4385,7 +4483,7 @@ async function importsAt(
       signal: signalReferences as SignalReferences<unknown>,
       template: templateReferences,
       component: {} as ComponentLinker<unknown>,
-      get signalRoot() {
+      get SignalRoot() {
         return unsupported();
       },
       fn: new Proxy(references, {
@@ -4505,46 +4603,31 @@ async function importsAt(
     use(owners[0]);
     return resolveToolAccessFromChain(signals, "function", name, recordUsage);
   };
-  // Each level's InstanceRoot, from the one collection defining that level,
-  // seeded as the collection was imported.
-  const signalRoot = new Proxy({}, {
-    get: (_target, level) => {
-      if (typeof level !== "string") return undefined;
-      const keyOf = (tool: SignalsClass) =>
-        level === "self" ? tool.instanceKey : `${tool.instanceKey}-${level}`;
-      const owners = signals.filter((tool) => {
-        const { leaves, enclosing } = tool._instanceLevels();
-        return [...leaves, ...enclosing].includes(keyOf(tool));
-      });
-      const what = level === "self"
-        ? "an unnamed Scope"
-        : `a Scope named '${level}'`;
-      if (owners.length !== 1) {
+  // Each collection's InstanceRoot, seeded as the collection was imported.
+  const rootOf = (owner: SignalsClass) => {
+    use(owner);
+    const evaluation = evaluations.get(owner);
+    return (evaluation?.seed
+      ? owner.withInputs(evaluation.inputs, evaluation.seed)
+      : owner).InstanceRoot;
+  };
+  // Roots the one collection the call imports: a copy is a component of its
+  // own, importing just the collection it roots. Checked as it renders, so a
+  // call with several collections that never renders it is fine.
+  const SignalRoot = inlineComponent(
+    (props: { seed?: Record<string, unknown>; children: JSX.Element }) => {
+      if (signals.length !== 1) {
         throw new TypeError(
-          owners.length
-            ? `signalRoot.${level} is ambiguous: the collections ${
-              owners.map((tool) => `'${tool.instanceKey}'`).join(" and ")
-            } each have ${what}. Import those collections in separate tiny.imports() calls.`
-            : `signalRoot.${level}: no imported signal collection has ${what}.`,
+          signals.length
+            ? `<SignalRoot> roots the one signal collection its tiny.imports() holds, and this one holds ${
+              signals.map((tool) => `'${tool.instanceKey}'`).join(" and ")
+            }. Give each copy a component of its own whose tiny.imports() holds just the collection it roots.`
+            : "<SignalRoot>: this tiny.imports() holds no signal collection to root.",
         );
       }
-      const [owner] = owners;
-      use(owner);
-      const evaluation = evaluations.get(owner);
-      const collection = evaluation?.seed
-        ? owner.withInputs(evaluation.inputs, evaluation.seed)
-        : owner;
-      return level === "self"
-        ? collection.InstanceRoot
-        : collection.scopes[level].InstanceRoot;
+      return rootOf(signals[0])(props);
     },
-  });
-  const levels = signalComponentScope.getStore();
-  for (const tool of levels ? signals : []) {
-    const { leaves, enclosing } = tool._instanceLevels();
-    leaves.forEach((key) => levels!.leaves.add(key));
-    enclosing.forEach((key) => levels!.enclosing.add(key));
-  }
+  );
   const source: SignalSource = (links) =>
     createSignalReferences(resolveSignal, rendering, links);
   const references = createSignalReferences(resolveSignal, rendering);
@@ -4555,7 +4638,11 @@ async function importsAt(
       if (
         typeof name === "string" && reference && typeof reference === "object"
       ) {
-        signalSources.set(reference, { name, source });
+        signalSources.set(reference, {
+          name,
+          source,
+          collection: signals.find((tool) => tool._handlerFilenames.has(name)),
+        });
       }
       return reference;
     },
@@ -4565,9 +4652,14 @@ async function importsAt(
       const levels = {
         leaves: new Set<string>(),
         enclosing: new Set<string>(),
+        rooted: new Set<SignalsClass>(),
       };
       return signalComponentScope.run(levels, async () => {
         const { signal: list, ...parts } = await component.factory() ?? {};
+        await rootedLevels([...levels.rooted], levels);
+        if (!cache.trustCache) {
+          warnPageWideExposures(component, list, levels.rooted);
+        }
         // Every component of the factory shares its one list.
         const exposed = exposedSignals(list);
         return Object.entries(parts).map(([name, value]) => {
@@ -4582,7 +4674,11 @@ async function importsAt(
             exposed,
             name,
             owner: component,
-            instanceKeys: [...levels.leaves].join(" "),
+            // A level another rooted collection's instances sit inside
+            // (see `rootedLevels`) is not one of the innermost.
+            instanceKeys: [...levels.leaves].filter((key) =>
+              !levels.enclosing.has(key)
+            ).join(" "),
             enclosing: [...levels.enclosing],
           };
         });
@@ -4673,7 +4769,7 @@ async function importsAt(
     ),
     template,
     component,
-    signalRoot,
+    SignalRoot,
     styled: styled as ActivateScopedStyles<unknown>,
     get c(): Context {
       if (!context) {

@@ -45,7 +45,6 @@ import { h, type JSX } from "../../jsx-runtime.ts";
 import {
   type ExposedSignals,
   type HandlerProp,
-  type InstanceSignals,
   optimized,
   type Signal,
   type SignalComponent,
@@ -57,12 +56,12 @@ import type { LifecycleElement } from "../../lifecycleElement.ts";
 const tiny = optimized(import.meta.url);
 
 /** Whether the palette is open, one per instance. */
-const paletteSignals = new tiny.Signals(({ Signal, Scope }) =>
-  new Scope(() => ({ open: new Signal<boolean>(false) }))
-);
+const paletteSignals = new tiny.Signals(({ Signal }) => ({
+  open: new Signal<boolean>(false),
+}));
 
 /** The signals a palette exposes. */
-type PaletteExposed = InstanceSignals<{ open: Signal<boolean> }>;
+type PaletteExposed = { open: Signal<boolean> };
 
 /** Props for the palette's `Trigger`. */
 type TriggerProps = {
@@ -343,7 +342,7 @@ export const CommandPaletteSignalComponent: SignalComponent<{
 }> = new tiny.SignalComponent(
   async () => {
     const { fn, signal, styled } = await tiny.imports(
-      paletteSignals,
+      paletteSignals.withRoot(),
       paletteHandlers,
       paletteStyles,
     );

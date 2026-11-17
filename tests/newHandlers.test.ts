@@ -193,6 +193,7 @@ Deno.test({
           `${second._handlerFilenames.get("count")}.js`,
           built.find((name) => name.startsWith("tt-signal_"))!,
           built.find((name) => name.startsWith("tt-computed_"))!,
+          built.find((name) => name.startsWith("tt-instance_"))!,
         ].sort(),
       );
       const signalCode = await Deno.readTextFile(
@@ -208,11 +209,20 @@ Deno.test({
         'import { ComputedInstance as Computed } from "./tt-computed_',
       );
       assertEquals(signalCode.includes("tt-trigger_"), false);
-      assertEquals(signalCode.includes("tt-instance_"), false);
+      // Built once for the page and again for each root of the collection,
+      // whose copies import the per-root runtime only once the page has a
+      // root: written beside the bundle, but not imported up front.
       assertStringIncludes(
         signalCode,
-        "const signals = (() => {",
+        'import { rootable } from "./tt-signal_',
       );
+      assertStringIncludes(signalCode, '() => import("./tt-instance_');
+      assertEquals(/^import "\.\/tt-instance_/m.test(signalCode), false);
+      assertStringIncludes(
+        signalCode,
+        "const buildSignals = () => (() => {",
+      );
+      assertStringIncludes(signalCode, "const signals = buildSignals();");
       // Factory locals keep their names even though they match exports.
       assertStringIncludes(signalCode, "const count = new Signal(1)");
       // The signals themselves are exported and registered.
@@ -387,10 +397,10 @@ Deno.test({
         plainBundle.code,
         "const tools = { Signal: __tiny_Signal,",
       );
-      // Given every tool, the factory may return scopes, so they are lifted.
+      // Built once for the page, and again for each root.
       assertStringIncludes(
         plainBundle.code,
-        "const signals = __tiny_flattenScopes((() =>",
+        "const buildSignals = () => (() =>",
       );
       assertEquals(plainBundle.module.total.value, 2);
       const expressionBundle = await load(expression);
@@ -400,13 +410,13 @@ Deno.test({
       );
       assertStringIncludes(
         expressionBundle.code,
-        "const signals = (function()",
+        "const buildSignals = () => (function()",
       );
       assertEquals(expressionBundle.module.label.value, "text");
       const clashingBundle = await load(clashing);
       assertStringIncludes(
         clashingBundle.code,
-        "const signals = __tiny_flattenScopes(defineSignals({ Signal: __tiny_Signal,",
+        "const buildSignals = () => defineSignals({ Signal: __tiny_Signal,",
       );
       assertEquals(clashingBundle.module.Signal.value, 3);
     } finally {
@@ -418,7 +428,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "Signals bundles scope Scope signals to their level's roots",
+  name: "Signals bundles give each root of a collection its own copy",
   sanitizeOps: false,
   sanitizeResources: false,
   async fn() {
@@ -426,19 +436,16 @@ Deno.test({
     const directory = "./.test-build-output/instance-signals";
     const layers = new Signals(
       import.meta.url,
-      ({ Signal, Computed, Scope }) => {
-        const layer = new Scope(() => ({ material: new Signal("bulk") }));
-        const materials = new Computed(
-          () => layer.material.all.value.join(", "),
-          [layer.material.all],
-        );
-        return { layer, materials };
-      },
+      ({ Signal }) => ({ material: new Signal("bulk") }),
     );
+    // Page-wide, reading every layer root's copy.
+    const summary = new Signals(import.meta.url, layers, ({ signal }) => ({
+      materials: () => signal.material.all.value.join(", "),
+    }));
     const { parseHTML } = await import("linkedom");
     // The second root also roots another collection.
     const window = parseHTML(
-      `<html><body><p tt-instance="${layers.scopes.layer.key}"><i id="a"></i></p><p tt-instance="other ${layers.scopes.layer.key}"><i id="b"></i></p></body></html>`,
+      `<html><body><p tt-instance="${layers.instanceKey}"><i id="a"></i></p><p tt-instance="other ${layers.instanceKey}"><i id="b"></i></p></body></html>`,
     );
     Object.assign(globalThis, {
       document: window.document,
@@ -446,9 +453,14 @@ Deno.test({
     });
     try {
       await buildScriptFiles({ fresh: true, publicDir: directory });
-      const filename = [...layers._handlerFilenames.values()][0];
-      const path = `${Deno.cwd()}/${directory}/handlers/${filename}.js`;
-      const module = await import(pathToFileURL(path).href);
+      const load = (name: string) =>
+        import(
+          pathToFileURL(`${Deno.cwd()}/${directory}/handlers/${name}.js`).href
+        );
+      const module = {
+        ...await load(layers._handlerFilenames.get("material")!),
+        ...await load(summary._handlerFilenames.get("materials")!),
+      };
       const a = window.document.getElementById("a")!;
       // `onChange={fn.signals.update(signal.material)}` on an element inside
       // the first root, given its instance as `runHandler` gives it.
@@ -461,8 +473,10 @@ Deno.test({
       // The second root counts once something inside it resolves a signal.
       module.material.forInstance(window.document.getElementById("b"));
       assertEquals(module.materials.value, "flow, bulk");
-      // Read from a handler, the accessor is the per-instance handle.
+      // Read from a handler, the signal is the page's, and its root's copy
+      // through forInstance.
       assertEquals(module.material.forInstance(a).value, "flow");
+      assertEquals(module.material.value, "bulk");
     } finally {
       const globals = globalThis as Record<string, unknown>;
       delete globals.document;
@@ -484,17 +498,21 @@ Deno.test({
     const directory = "./.test-build-output/signal-actions";
     const actions = new Signals(
       import.meta.url,
-      ({ Signal, Computed, Trigger, Scope }) => {
+      ({ Signal, Computed, Trigger }) => {
         const size = new Signal(76);
         const italic = new Signal(false);
         const reset = new Trigger();
         const doubled = new Computed(() => size.value * 2);
-        const row = new Scope(() => ({ open: new Signal(false) }));
-        return { size, italic, reset, doubled, row };
+        return { size, italic, reset, doubled };
       },
     );
+    // Each row root has its own.
+    const rows = new Signals(
+      import.meta.url,
+      ({ Signal }) => ({ open: new Signal(false) }),
+    );
     const consumer = new Handlers(import.meta.url, async () => {
-      const { signal } = await imports(actions);
+      const { signal } = await imports(actions, rows);
       return {
         names: function () {
           return Object.keys(signal);
@@ -511,7 +529,7 @@ Deno.test({
     });
     const { parseHTML } = await import("linkedom");
     const window = parseHTML(
-      `<html><body><p tt-instance="${actions.scopes.row.key}"><i id="a"></i></p></body></html>`,
+      `<html><body><p tt-instance="${rows.instanceKey}"><i id="a"></i></p></body></html>`,
     );
     Object.assign(globalThis, { document: window.document });
     try {
@@ -519,6 +537,11 @@ Deno.test({
       const filename = actions._handlerFilenames.get("size")!;
       const path = `${Deno.cwd()}/${directory}/handlers/${filename}.js`;
       const module = await import(pathToFileURL(path).href);
+      const rowsFile = rows._handlerFilenames.get("open")!;
+      const rowsModule = await import(
+        pathToFileURL(`${Deno.cwd()}/${directory}/handlers/${rowsFile}.js`)
+          .href
+      );
       // Signals are the only exports: their handlers are `fn.signals`.
       assertEquals(
         Object.keys(module).filter((name) => name.includes("$")),
@@ -557,24 +580,29 @@ Deno.test({
       const fired = module.reset.value;
       mutators.fire.call(element, new Event("click"), module.reset);
       assertEquals(module.reset.value, fired + 1);
-      // A per-instance signal is passed as the instance enclosing the element.
+      // Inside a root, a signal is passed as that root's copy.
       const a = window.document.getElementById("a")!;
-      mutators.toggle.call(a, new Event("click"), module.open.forInstance(a));
-      assertEquals(module.open.forInstance(a).value, true);
+      mutators.toggle.call(
+        a,
+        new Event("click"),
+        rowsModule.open.forInstance(a),
+      );
+      assertEquals(rowsModule.open.forInstance(a).value, true);
       // `runHandler` reads each signal from its bundle and passes it on.
       const handlers = (globalThis as unknown as {
         handlers: Record<string, unknown>;
       }).handlers;
       handlers[filename] ??= module;
+      handlers[rowsFile] ??= rowsModule;
       handlers[mutatorBundle("toggle")] ??= { toggle: mutators.toggle };
       a.setAttribute(
         "tt-handler-click",
         `${
           mutatorBundle("toggle")
-        }.toggle(${filename}.open,${filename}.italic)`,
+        }.toggle(${rowsFile}.open,${filename}.italic)`,
       );
       runHandler(a, new Event("click"));
-      assertEquals(module.open.forInstance(a).value, false);
+      assertEquals(rowsModule.open.forInstance(a).value, false);
       assertEquals(module.italic.value, false);
       // Handlers see the signals.
       const consumerPath = `${Deno.cwd()}/${directory}/handlers/${
@@ -584,9 +612,9 @@ Deno.test({
         (await import(pathToFileURL(consumerPath).href)).names().sort(),
         ["doubled", "italic", "open", "reset", "size"],
       );
-      const { fn, signal } = await imports(actions);
+      const { fn, signal } = await imports(actions, rows);
       // A handler of your own takes signals the same way, each passed as
-      // the signal it is (a per-instance one, the element's instance).
+      // the signal it is (inside a root, that root's copy).
       const consumerFile = consumer._handlerFilenames.get("flip")!;
       handlers[consumerFile] ??= await import(pathToFileURL(consumerPath).href);
       const { fn: own } = await imports(consumer);
@@ -596,11 +624,11 @@ Deno.test({
       )?.["tt-handler-click"];
       assertEquals(
         flip,
-        `${consumerFile}.flip(${filename}.open,${filename}.italic)`,
+        `${consumerFile}.flip(${rowsFile}.open,${filename}.italic)`,
       );
       a.setAttribute("tt-handler-click", flip!);
       runHandler(a, new Event("click"));
-      assertEquals(module.open.forInstance(a).value, true);
+      assertEquals(rowsModule.open.forInstance(a).value, true);
       assertEquals(module.italic.value, true);
       assertThrows(
         // @ts-expect-error A value is not a signal.

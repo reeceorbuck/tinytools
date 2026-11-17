@@ -54,7 +54,6 @@ import { h, type JSX } from "../../jsx-runtime.ts";
 import {
   type ExposedSignals,
   type HandlerProp,
-  type InstanceSignals,
   optimized,
   type Signal,
   type SignalComponent,
@@ -68,12 +67,10 @@ const tiny = optimized(import.meta.url);
  * Per instance: whether the content is open, and its id, which the content
  * writes as it connects and the triggers take as their `popovertarget`.
  */
-const popoverSignals = new tiny.Signals(({ Signal, Scope }) =>
-  new Scope(() => ({
-    open: new Signal<boolean>(false),
-    target: new Signal(""),
-  }))
-);
+const popoverSignals = new tiny.Signals(({ Signal }) => ({
+  open: new Signal<boolean>(false),
+  target: new Signal(""),
+}));
 
 /** Helpers the handlers share, called through `fn`. */
 const popoverTools = new tiny.Handlers({
@@ -336,7 +333,7 @@ const popoverStyles = new tiny.Styles({
 });
 
 /** The signals a popover exposes. */
-type PopoverExposed = InstanceSignals<{ open: Signal<boolean> }>;
+type PopoverExposed = { open: Signal<boolean> };
 
 /** What `Trigger` takes. */
 type TriggerProps = {
@@ -413,7 +410,7 @@ export const PopoverSignalComponent: SignalComponent<{
 }> = new tiny.SignalComponent(
   async () => {
     const { fn, signal, styled } = await tiny.imports(
-      popoverSignals,
+      popoverSignals.withRoot(),
       popoverHandlers,
       popoverStyles,
     );

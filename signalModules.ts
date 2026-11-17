@@ -1,9 +1,9 @@
 /**
  * The signal runtime as browser modules, one per feature, so a page loads
  * only the parts its collections use: `tt-signal` (`Signal`, `signalsFrom`
- * and dependency tracking) always, and `tt-computed`, `tt-trigger` and
- * `tt-instance` (`Scope`) only for collections whose factory takes
- * them, `tt-shape` only for those written as `tiny.Signals(tools, define)`,
+ * and dependency tracking) always, `tt-computed` and `tt-trigger` only for
+ * collections whose factory takes them, `tt-instance` (each root's copy of a
+ * collection) only once the page has a root, `tt-shape` only for those written as `tiny.Signals(tools, define)`,
  * and `tt-persist` only for those that `persist` signals. Each module is
  * built from the runtime in `signals.ts` with `toString()`, so the server runs exactly the code the browser gets.
  *
@@ -13,20 +13,20 @@
 import { compactSource, sourceHash } from "./lifecycleElement.ts";
 import {
   ComputedInstance,
-  flattenScopes,
+  groupRoots,
+  inRoot,
+  installRoots,
   InstanceGroup,
-  InstanceSignalHandle,
   persistSignals,
+  rootable,
+  rootNow,
   sameValue,
-  scopeFor,
-  ScopeInstance,
   shapeSignals,
   SignalInstance,
   signalsFrom,
   track,
   TriggerInstance,
   untracked,
-  withScope,
 } from "./signals.ts";
 
 /** A function or class, shipped as its source. */
@@ -46,6 +46,8 @@ function runtimeModule(
     state?: string;
     internal?: RuntimeFunction[];
     exported: RuntimeFunction[];
+    /** What the module does when it loads, after its functions. */
+    run?: string;
   },
 ): RuntimeModule {
   const source = [
@@ -55,18 +57,29 @@ function runtimeModule(
     parts.state ?? "",
     ...(parts.internal ?? []).map((part) => compactSource(part.toString())),
     ...parts.exported.map((part) => `export ${compactSource(part.toString())}`),
+    parts.run ?? "",
   ].filter(Boolean).join("\n") + "\n";
   return { file: `tt-${name}_${sourceHash(source)}.js`, source };
 }
 
 const signalModule = runtimeModule("signal", {
-  state: "let tracking = null;",
+  state:
+    "let tracking = null;\nlet currentRoot;\nlet rootReads;\nlet rootGroups;\nlet loadingRoots;",
   internal: [sameValue],
-  exported: [track, untracked, SignalInstance, signalsFrom],
+  exported: [
+    track,
+    untracked,
+    inRoot,
+    rootNow,
+    SignalInstance,
+    signalsFrom,
+    installRoots,
+    rootable,
+  ],
 });
 
 const computedModule = runtimeModule("computed", {
-  imports: [[signalModule, ["SignalInstance", "track"]]],
+  imports: [[signalModule, ["SignalInstance", "track", "inRoot", "rootNow"]]],
   exported: [ComputedInstance],
 });
 
@@ -75,12 +88,32 @@ const triggerModule = runtimeModule("trigger", {
   exported: [TriggerInstance],
 });
 
+/**
+ * Each root's copy of a collection: loaded the first time a page has a root
+ * (see `rootable`), it installs the groups the copies live in.
+ */
 const instanceModule = runtimeModule("instance", {
-  imports: [[signalModule, ["SignalInstance", "untracked"]]],
-  state: "let currentScope;",
-  internal: [withScope, InstanceGroup],
-  exported: [InstanceSignalHandle, ScopeInstance, scopeFor, flattenScopes],
+  imports: [[signalModule, [
+    "SignalInstance",
+    "untracked",
+    "inRoot",
+    "installRoots",
+  ]]],
+  internal: [InstanceGroup],
+  exported: [groupRoots],
+  run: "installRoots(groupRoots);",
 });
+
+/**
+ * The per-root runtime as a static import, for a bundle that needs it as
+ * soon as it loads: a collection reading another's `.all`, or templates
+ * whose markup holds a root, cloned and resolved in one handler.
+ */
+export const instanceRuntime: { readonly file: string; readonly code: string } =
+  {
+    file: instanceModule.file,
+    code: `import "./${instanceModule.file}";`,
+  };
 
 const shapeModule = runtimeModule("shape", { exported: [shapeSignals] });
 
@@ -101,6 +134,29 @@ export function persistPrelude(
       `import { persistSignals as ${local} } from "./${persistModule.file}";\n` +
       `${local}(${graph}, ${JSON.stringify(persisted)});`,
     file: persistModule.file,
+  };
+}
+
+/**
+ * The bundle code making `graph`, a collection's signals, its page-wide
+ * instance, each root of the collection getting its own copy from `define`
+ * (see `rootable`), and the runtime file it imports. The per-root runtime is
+ * imported only once the page has a root.
+ */
+export function rootablePrelude(
+  local: string,
+  graph: string,
+  define: string,
+  instanceKey: string,
+): { code: string; file: string } {
+  return {
+    code: `import { ${
+      local === "rootable" ? local : `rootable as ${local}`
+    } } from "./${signalModule.file}";\n` +
+      `${local}(${graph}, ${define}, ${
+        JSON.stringify(instanceKey)
+      }, () => import("./${instanceModule.file}"));`,
+    file: signalModule.file,
   };
 }
 
@@ -131,8 +187,6 @@ const toolSources = {
   shapeSignals: [shapeModule, "shapeSignals"],
   Computed: [computedModule, "ComputedInstance"],
   Trigger: [triggerModule, "TriggerInstance"],
-  // Called with the collection's instance key (see `toolBinding`).
-  Scope: [instanceModule, "scopeFor"],
 } as const satisfies Record<string, [RuntimeModule, string]>;
 
 type ToolName = keyof typeof toolSources;
@@ -168,13 +222,11 @@ function destructuredTools(
  * that does not destructure gets every tool as one object, `const <parameter>
  * = { ... }`; with no parameter at all (a factory the bundle calls rather
  * than inlines), `tools` is that object, to pass. Returns the code and the
- * runtime files it imports, and with `Scope` among the tools, `flatten`:
- * what to call the factory's result with to lift out the scopes it returns.
+ * runtime files it imports.
  */
 export function signalToolsPrelude(
   parameter: string | undefined,
-  instanceKey: string,
-): { code: string; files: string[]; tools?: string; flatten?: string } {
+): { code: string; files: string[]; tools?: string } {
   if (parameter !== undefined && !parameter.trim()) {
     return { code: "", files: [] };
   }
@@ -192,20 +244,8 @@ export function signalToolsPrelude(
   const declarations: string[] = [];
   for (const [tool, local] of tools) {
     const [module, exported] = toolSources[tool];
-    const binding = tool === "Scope" ? `__tiny_${exported}` : local;
-    const specifier = exported === binding
-      ? exported
-      : `${exported} as ${binding}`;
+    const specifier = exported === local ? exported : `${exported} as ${local}`;
     imports.set(module, [...imports.get(module) ?? [], specifier]);
-    if (tool === "Scope") {
-      declarations.push(
-        `const ${local} = ${binding}(${JSON.stringify(instanceKey)});`,
-      );
-    }
-  }
-  const flatten = tools.has("Scope") ? "__tiny_flattenScopes" : undefined;
-  if (flatten) {
-    imports.get(instanceModule)!.push(`flattenScopes as ${flatten}`);
   }
   const object = destructured
     ? undefined
@@ -224,6 +264,5 @@ export function signalToolsPrelude(
     ].join("\n"),
     files: [...imports.keys()].map((module) => module.file),
     tools: parameter === undefined ? object : undefined,
-    flatten,
   };
 }

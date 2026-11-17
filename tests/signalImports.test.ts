@@ -216,8 +216,7 @@ Deno.test({
     const directory = "./.test-build-output/signal-component-instance";
     const boxSignals = new Signals(
       import.meta.url,
-      ({ Trigger, Scope }) =>
-        new Scope(() => ({ press: new Trigger(), internal: new Trigger() })),
+      ({ Trigger }) => ({ press: new Trigger(), internal: new Trigger() }),
     );
     const strings = (...parts: string[]) =>
       Object.assign(parts, { raw: parts }) as unknown as TemplateStringsArray;
@@ -234,7 +233,7 @@ Deno.test({
           children: props.label,
         });
     const BoxComponent = new SignalComponent(async () => {
-      const { signal } = await imports(boxSignals);
+      const { signal } = await imports(boxSignals.withRoot());
       return { signal: [signal.press], Box };
     });
     try {
@@ -331,28 +330,40 @@ Deno.test({
         TypeError,
         "lists signals from a tiny.imports()",
       );
-      // With an enclosing level, an instance's root carries only its own
-      // level, and the page encloses instances in a root of `scopeKey`.
-      const nested = new Signals(
+      // With an enclosing level (a rooted collection another reads by
+      // value), an instance made alone carries only its own level, and the
+      // page encloses instances in a `<SignalRoot>` of the outer one.
+      const groupLevel = new Signals(
         import.meta.url,
-        ({ Trigger, Scope }) =>
-          new Scope(() => ({
-            recolor: new Trigger(),
-            box: new Scope(() => ({ press: new Trigger() })),
-          })),
+        ({ Trigger }) => ({ recolor: new Trigger() }),
       );
-      await nested.ensureBuilt();
+      const boxLevel = new Signals(
+        import.meta.url,
+        groupLevel,
+        ({ signal, Trigger, Computed }) => ({
+          press: new Trigger(),
+          recolors: new Computed(
+            (count: number) => count + 1,
+            [signal.recolor],
+            0,
+          ),
+        }),
+      );
+      await groupLevel.ensureBuilt();
+      await boxLevel.ensureBuilt();
       const { component: grouped } = await imports(
         new SignalComponent(async () => {
-          const { signal } = await imports(nested);
+          const { signal } = await imports(
+            groupLevel.withRoot(),
+            boxLevel.withRoot(),
+          );
           return { signal: [signal.press, signal.recolor], Box };
         }),
       );
-      assertEquals(grouped.Box.scopeKey, nested.instanceKey);
       const inGroup = grouped.Box.instance();
       const inGroupLink = linkOf(String(await inGroup({ label: "c" })))!;
       assertEquals(
-        inGroupLink.startsWith(`${nested.scopes.box.key}=link-`),
+        inGroupLink.startsWith(`${boxLevel.instanceKey}=link-`),
         true,
       );
       // The outer level is the enclosing element's, for its references too.
@@ -370,7 +381,6 @@ Deno.test({
           .includes("tt-link"),
         false,
       );
-      assertEquals(component.Box.scopeKey, "");
       // component.instance() makes one copy: an instance of each component,
       // sharing every level. Copies made together by `repeat` share the
       // enclosing level and each keep their own innermost one.
@@ -380,8 +390,8 @@ Deno.test({
           (link.exec(String(await instance({ label: "d" })))?.[1] ??
             "").split(" ").map((token) => token.split("=")),
         );
-      const outer = nested.instanceKey;
-      const inner = nested.scopes.box.key;
+      const outer = groupLevel.instanceKey;
+      const inner = boxLevel.instanceKey;
       const alone = await linksOf(grouped.instance().Box);
       assertEquals(Object.keys(alone).sort(), [outer, inner].sort());
       const copies = grouped.instance(2);
@@ -433,7 +443,7 @@ Deno.test({
       // and every one exposes the factory's signals.
       const { component: pair } = await imports(
         new SignalComponent(async () => {
-          const { signal } = await imports(boxSignals);
+          const { signal } = await imports(boxSignals.withRoot());
           return { signal: [signal.press], Box, Other: Box };
         }),
       );
@@ -466,7 +476,7 @@ Deno.test({
       const { component: both } = await imports(
         BoxComponent,
         new SignalComponent(async () => {
-          const { signal } = await imports(boxSignals);
+          const { signal } = await imports(boxSignals.withRoot());
           return { signal: [signal.press], Second: Box };
         }),
       );
@@ -491,7 +501,7 @@ Deno.test({
       // So is markup, rendered as it is, in both JSX modes.
       const { component: markup } = await imports(
         new SignalComponent(async () => {
-          const { signal } = await imports(boxSignals);
+          const { signal } = await imports(boxSignals.withRoot());
           return {
             signal: [signal.press],
             Plain: jsx("output", { children: "i" }) as unknown as JSX.Element,
@@ -938,7 +948,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "tiny.imports() gives each imported level's InstanceRoot as root",
+  name:
+    "SignalRoot roots the one collection a call imports, seeded as imported",
   sanitizeOps: false,
   sanitizeResources: false,
   async fn() {
@@ -946,64 +957,57 @@ Deno.test({
     const directory = "./.test-build-output/signal-roots";
     const picker = new Signals(
       import.meta.url,
-      ({ Signal, Scope }) => ({
-        picker: new Scope(() => ({ patientId: new Signal<string>("") })),
-        query: new Signal<string>(""),
-      }),
+      ({ Signal }) => ({ patientId: new Signal<string>("") }),
+    );
+    const search = new Signals(
+      import.meta.url,
+      ({ Signal }) => ({ query: new Signal<string>("") }),
     );
     const lines = new Signals(
       import.meta.url,
-      ({ Signal, Scope }) =>
-        new Scope(() => ({ quantity: new Signal<number>(1) })),
-    );
-    const other = new Signals(
-      import.meta.url,
-      ({ Signal, Scope }) => ({
-        picker: new Scope(() => ({ id: new Signal<string>("") })),
-      }),
+      ({ Signal }) => ({ quantity: new Signal<number>(1) }),
     );
     const tagOf = (html: unknown) =>
       /^<[^>]*>/.exec(String(html))![0].replaceAll("&#34;", "&quot;");
     try {
       await buildScriptFiles({ fresh: true, publicDir: directory });
-      const { signalRoot: root } = await imports(
+      const { SignalRoot: Root } = await imports(
         picker.withInputs(undefined, { patientId: "10972" }),
-        lines,
       );
-      // A seeded import seeds its roots; an unseeded one only marks them.
+      // A seeded import seeds its roots.
       const pickerRoot = tagOf(
-        root.picker({ children: jsx("patient-picker", {}) as never }),
+        Root({ children: jsx("patient-picker", {}) as never }),
       );
-      assertStringIncludes(
-        pickerRoot,
-        `tt-instance="${picker.scopes.picker.key}"`,
-      );
+      assertStringIncludes(pickerRoot, `tt-instance="${picker.instanceKey}"`);
       assertStringIncludes(
         pickerRoot,
         `tt-seed="${
-          picker.scopes.picker.seed({ patientId: "10972" }).replaceAll(
-            '"',
-            "&quot;",
-          )
+          picker.seed({ patientId: "10972" }).replaceAll('"', "&quot;")
         }"`,
       );
+      // Unseeded, it only marks the root.
+      const { SignalRoot: LineRoot } = await imports(lines);
       assertEquals(
-        tagOf(root.self({ children: jsx("tr", {}) as never })),
+        tagOf(LineRoot({ children: jsx("tr", {}) as never })),
         `<tr is="tt-tr" tt-instance="${lines.instanceKey}">`,
       );
-      // @ts-expect-error No imported collection has this level.
-      assertThrows(() => root.missing, TypeError, "no imported signal");
-      // A level two collections share is ambiguous.
-      const { signalRoot: both } = await imports(picker, other);
-      assertThrows(() => both.picker, TypeError, "is ambiguous");
-      // An unnamed Scope holding nothing writable still has its self root.
+      // Several collections leave it no one to root: typed so it can't
+      // render, and throwing if it does.
+      const { SignalRoot: Both } = await imports(picker, search);
+      assertThrows(
+        // @ts-expect-error a call holding two collections has no root
+        () => Both({ children: jsx("p", {}) as never }),
+        TypeError,
+        "a component of its own",
+      );
+      // A collection holding nothing writable still has its root.
       const pings = new Signals(
         new URL("./pings.ts", import.meta.url).href,
-        ({ Trigger, Scope }) => new Scope(() => ({ ping: new Trigger() })),
+        ({ Trigger }) => ({ ping: new Trigger() }),
       );
-      const { signalRoot: pingRoot } = await imports(pings);
+      const { SignalRoot: PingRoot } = await imports(pings);
       assertEquals(
-        tagOf(pingRoot.self({ children: jsx("p", {}) as never })),
+        tagOf(PingRoot({ children: jsx("p", {}) as never })),
         `<p is="tt-p" tt-instance="${pings.instanceKey}">`,
       );
     } finally {
@@ -1014,38 +1018,33 @@ Deno.test({
   },
 });
 
-Deno.test("seed() of a withInputs() collection seeds each level from its seed", async () => {
+Deno.test("seed() of a withInputs() collection seeds a root from its seed", async () => {
   const picker = new Signals(
     import.meta.url,
-    ({ Signal, Scope }) =>
-      new Scope(() => ({
-        query: new Signal<string>(""),
-        row: new Scope(() => ({ patientId: new Signal<string>("") })),
-      })),
+    ({ Signal }) => ({
+      query: new Signal(""),
+      patientId: new Signal(""),
+    }),
+  );
+  const row = new Signals(
+    new URL("./row.ts", import.meta.url).href,
+    ({ Signal }) => ({ id: new Signal("") }),
   );
   const seeded = picker.withInputs(undefined, {
     query: "smi",
     patientId: "10972",
   });
-  // Each level takes the values of its own signals.
-  assertEquals(seeded.seed(), picker.seed({ query: "smi" }));
-  assertEquals(
-    seeded.scopes.row.seed(),
-    picker.scopes.row.seed({ patientId: "10972" }),
-  );
-  assertEquals(seeded.scopes.row.key, picker.scopes.row.key);
+  const seedValues = { query: "smi", patientId: "10972" };
+  assertEquals(seeded.seed(), picker.seed(seedValues));
   // Values given still win.
   assertEquals(
-    seeded.scopes.row.seed({ patientId: "1" }),
-    picker.scopes.row.seed({ patientId: "1" }),
+    seeded.seed({ patientId: "1" }),
+    picker.seed({ patientId: "1" }),
   );
-  // Without a seed, a level starts fresh.
-  assertEquals(
-    picker.withInputs().scopes.row.seed(),
-    picker.scopes.row.seed({}),
-  );
+  // Without a seed, a root starts fresh.
+  assertEquals(picker.withInputs().seed(), picker.seed({}));
   // @ts-expect-error The collection itself has no seed to fall back on.
-  picker.scopes.row.seed();
+  picker.seed();
 
   // InstanceRoot puts tt-instance and tt-seed on the one element it wraps,
   // in both JSX modes, and the root stays the enclosing component's to mark.
@@ -1072,19 +1071,14 @@ Deno.test("seed() of a withInputs() collection seeds each level from its seed", 
     return String(jsx(Card, {}));
   };
   for (const precompiled of [false, true]) {
-    assertEquals(rootOf(wrapped(seeded.scopes.row.InstanceRoot, precompiled)), {
-      instance: picker.scopes.row.key,
-      seed: picker.scopes.row.seed({ patientId: "10972" }),
-      component: "Card",
-    });
     assertEquals(rootOf(wrapped(seeded.InstanceRoot, precompiled)), {
       instance: picker.instanceKey,
-      seed: picker.seed({ query: "smi" }),
+      seed: picker.seed(seedValues),
       component: "Card",
     });
     // Unseeded, it only marks the root.
-    assertEquals(rootOf(wrapped(picker.scopes.row.InstanceRoot, precompiled)), {
-      instance: picker.scopes.row.key,
+    assertEquals(rootOf(wrapped(picker.InstanceRoot, precompiled)), {
+      instance: picker.instanceKey,
       seed: undefined,
       component: "Card",
     });
@@ -1100,18 +1094,18 @@ Deno.test("seed() of a withInputs() collection seeds each level from its seed", 
   // Precompiled markup with async content inside arrives as a promise.
   assertEquals(
     rootOf(
-      await jsx(picker.scopes.row.InstanceRoot as never, {
+      await jsx(picker.InstanceRoot as never, {
         children: Promise.resolve(
           jsxTemplate(strings('<section class="card">', "</section>"), "b"),
         ),
       }),
     ).instance,
-    picker.scopes.row.key,
+    picker.instanceKey,
   );
   // It wraps one element, not several.
   assertThrows(
     () =>
-      jsx(picker.scopes.row.InstanceRoot as never, {
+      jsx(picker.InstanceRoot as never, {
         children: [jsx("p", {}), jsx("p", {})],
       }),
     TypeError,
@@ -1130,29 +1124,29 @@ Deno.test("seed() of a withInputs() collection seeds each level from its seed", 
         : jsx("li", { class: "item", children: useContext(Context) });
     const html = await jsx(Context.Provider as never, {
       value: "provided",
-      children: jsx(picker.scopes.row.InstanceRoot as never, {
+      children: jsx(picker.InstanceRoot as never, {
         children: jsx(Item, {}),
       }),
     }).toString();
     assertEquals(rootOf(html), {
-      instance: picker.scopes.row.key,
+      instance: picker.instanceKey,
       seed: undefined,
       component: "Item",
     });
     assertStringIncludes(html, ">provided</li>");
   }
-  // Nested, the wrappers root one element in every level they name: the keys
-  // listed in tt-instance, each level's seed under its key in one tt-seed,
-  // and a key written by hand kept.
+  // Nested, the wrappers root one element in every collection they name:
+  // the keys listed in tt-instance, each one's seed under its key in one
+  // tt-seed, and a key written by hand kept.
   const badge = new Signals(
     new URL("./badge.ts", import.meta.url).href,
-    ({ Signal, Scope }) => new Scope(() => ({ tone: new Signal<string>("") })),
+    ({ Signal }) => ({ tone: new Signal<string>("") }),
   );
   const seededBadge = badge.withInputs(undefined, { tone: "warm" });
   for (const precompiled of [false, true]) {
     const html = await jsx(seeded.InstanceRoot as never, {
       children: jsx(seededBadge.InstanceRoot as never, {
-        children: jsx(picker.scopes.row.InstanceRoot as never, {
+        children: jsx(row.InstanceRoot as never, {
           children: precompiled
             ? jsxTemplate(
               strings(
@@ -1172,11 +1166,11 @@ Deno.test("seed() of a withInputs() collection seeds each level from its seed", 
     const root = rootOf(html);
     assertEquals(
       root.instance,
-      `by-hand ${picker.scopes.row.key} ${badge.instanceKey} ${picker.instanceKey}`,
+      `by-hand ${row.instanceKey} ${badge.instanceKey} ${picker.instanceKey}`,
     );
     assertEquals(JSON.parse(root.seed!), {
       [badge.instanceKey]: { tone: "warm" },
-      [picker.instanceKey]: { query: "smi" },
+      [picker.instanceKey]: seedValues,
     });
     assertEquals(html.match(/ tt-instance=/g)?.length, 1);
     assertEquals(html.match(/ tt-seed=/g)?.length, 1);
@@ -1188,13 +1182,13 @@ Deno.test("seed() of a withInputs() collection seeds each level from its seed", 
   const tracker = createNoContextToolUsageTracker();
   const lifecycle = await withNoContextToolUsageTracker(tracker, async () =>
     [
-      await jsx(picker.scopes.row.InstanceRoot as never, {
+      await jsx(picker.InstanceRoot as never, {
         children: jsx("note-card", {}),
       }).toString(),
-      await jsx(picker.scopes.row.InstanceRoot as never, {
+      await jsx(picker.InstanceRoot as never, {
         children: jsxTemplate(strings("<fieldset>", "</fieldset>"), "x"),
       }).toString(),
-      await jsx(picker.scopes.row.InstanceRoot as never, {
+      await jsx(picker.InstanceRoot as never, {
         children: jsx("li", { is: "plain" }),
       }).toString(),
     ].map((html) => /^<[^>]*>/.exec(html)![0]));
@@ -1211,24 +1205,12 @@ Deno.test("seed() of a withInputs() collection seeds each level from its seed", 
   assertThrows(
     () =>
       String(
-        jsx(picker.scopes.row.InstanceRoot as never, {
+        jsx(picker.InstanceRoot as never, {
           children: jsx(Pair, {}),
         }),
       ),
     TypeError,
     "wraps <Pair>, which must return exactly one element",
-  );
-  // Without an unnamed Scope, only a named level has roots.
-  const named = new Signals(
-    import.meta.url,
-    ({ Signal, Scope }) => ({
-      row: new Scope(() => ({ id: new Signal<string>("") })),
-    }),
-  );
-  assertThrows(
-    () => jsx(named.InstanceRoot as never, { children: jsx("p", {}) }),
-    TypeError,
-    "use scopes.<name>.InstanceRoot",
   );
 });
 

@@ -24,7 +24,6 @@
 import { h, type JSX } from "../../jsx-runtime.ts";
 import {
   type ExposedSignals,
-  type InstanceSignals,
   optimized,
   type Signal,
   type SignalComponent,
@@ -35,9 +34,9 @@ import type { SignalEvent } from "../../handlers/signals.ts";
 const tiny = optimized(import.meta.url);
 
 /** Whether the section is open, one per instance. */
-const disclosureSignals = new tiny.Signals(({ Signal, Scope }) =>
-  new Scope(() => ({ open: new Signal<boolean>(false) }))
-);
+const disclosureSignals = new tiny.Signals(({ Signal }) => ({
+  open: new Signal<boolean>(false),
+}));
 
 const disclosureHandlers = new tiny.Handlers(async () => {
   const { signal } = await tiny.imports(disclosureSignals);
@@ -102,7 +101,7 @@ const disclosureStyles = new tiny.Styles({
 });
 
 /** The signals a disclosure exposes. */
-type DisclosureExposed = InstanceSignals<{ open: Signal<boolean> }>;
+type DisclosureExposed = { open: Signal<boolean> };
 
 /** What `Details` takes. */
 type DetailsProps = {
@@ -134,7 +133,7 @@ export const DisclosureSignalComponent: SignalComponent<{
 }> = new tiny.SignalComponent(
   async () => {
     const { fn, signal, styled } = await tiny.imports(
-      disclosureSignals,
+      disclosureSignals.withRoot(),
       disclosureHandlers,
       disclosureStyles,
     );

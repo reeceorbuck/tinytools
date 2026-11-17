@@ -36,7 +36,6 @@ import { h, type JSX } from "../../jsx-runtime.ts";
 import { createContext, useContext } from "hono/jsx";
 import {
   type ExposedSignals,
-  type InstanceSignals,
   optimized,
   type Signal,
   type SignalComponent,
@@ -46,12 +45,12 @@ import { css } from "../../scopedStyles.ts";
 const tiny = optimized(import.meta.url);
 
 /** The selected tab's value, one per instance. */
-const tabsSignals = new tiny.Signals(({ Signal, Scope }) =>
-  new Scope(() => ({ selected: new Signal("") }))
-);
+const tabsSignals = new tiny.Signals(({ Signal }) => ({
+  selected: new Signal(""),
+}));
 
 /** The signals a set of tabs exposes. */
-type TabsExposed = InstanceSignals<{ selected: Signal<string> }>;
+type TabsExposed = { selected: Signal<string> };
 
 /** The tab list's props. */
 type ListProps = {
@@ -234,7 +233,7 @@ export const TabsSignalComponent: SignalComponent<{
 }> = new tiny.SignalComponent(
   async () => {
     const { fn, signal, styled } = await tiny.imports(
-      tabsSignals,
+      tabsSignals.withRoot(),
       tabsHandlers,
       tabsStyles,
     );

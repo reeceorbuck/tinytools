@@ -35,7 +35,6 @@
 import { h, type JSX } from "../../jsx-runtime.ts";
 import {
   type ExposedSignals,
-  type InstanceSignals,
   optimized,
   type Signal,
   type SignalComponent,
@@ -50,43 +49,41 @@ const tiny = optimized(import.meta.url);
  * Per instance: the slide at the start of the track, how many there are,
  * whether it wraps around, and whether it is moving on by itself.
  */
-const carouselSignals = new tiny.Signals(({ Signal, Computed, Scope }) =>
-  new Scope(() => {
-    const index = new Signal(0);
-    const count = new Signal(0);
-    const loop = new Signal<boolean>(false);
-    const playing = new Signal<boolean>(false);
-    return {
-      index,
-      count,
-      loop,
-      playing,
-      atStart: new Computed(
-        () => !loop.value && index.value <= 0,
-        [index, loop],
-      ),
-      atEnd: new Computed(
-        () => !loop.value && index.value >= count.value - 1,
-        [index, count, loop],
-      ),
-      /** "2 / 5", once the slides are counted. */
-      summary: new Computed(
-        () => count.value ? `${index.value + 1} / ${count.value}` : "",
-        [index, count],
-      ),
-      playLabel: new Computed(
-        () => playing.value ? "Pause" : "Play",
-        [playing],
-      ),
-    };
-  })
-);
+const carouselSignals = new tiny.Signals(({ Signal, Computed }) => {
+  const index = new Signal(0);
+  const count = new Signal(0);
+  const loop = new Signal<boolean>(false);
+  const playing = new Signal<boolean>(false);
+  return {
+    index,
+    count,
+    loop,
+    playing,
+    atStart: new Computed(
+      () => !loop.value && index.value <= 0,
+      [index, loop],
+    ),
+    atEnd: new Computed(
+      () => !loop.value && index.value >= count.value - 1,
+      [index, count, loop],
+    ),
+    /** "2 / 5", once the slides are counted. */
+    summary: new Computed(
+      () => count.value ? `${index.value + 1} / ${count.value}` : "",
+      [index, count],
+    ),
+    playLabel: new Computed(
+      () => playing.value ? "Pause" : "Play",
+      [playing],
+    ),
+  };
+});
 
 /** The signals a carousel exposes. */
-type CarouselExposed = InstanceSignals<{
+type CarouselExposed = {
   index: Signal<number>;
   count: Signal<number>;
-}>;
+};
 
 /** Props for the carousel's `Track`. */
 type TrackProps = {
@@ -363,7 +360,7 @@ export const CarouselSignalComponent: SignalComponent<{
 }> = new tiny.SignalComponent(
   async () => {
     const { fn, signal, styled } = await tiny.imports(
-      carouselSignals,
+      carouselSignals.withRoot(),
       carouselHandlers,
       carouselStyles,
       signalTools,

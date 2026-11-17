@@ -451,9 +451,13 @@ class TinyHono<E extends Env = BlankEnv> extends HonoBase<E> {
  *
  * A reference may name signals for its handler, `<bundle>.<handler>(<bundle>.<signal>,...)`
  * (`fn.signals.add(signal.count)`, `fn.recalculate(signal.total)`): each is
- * its bundle's member of that name, a per-instance one resolved to the
- * instance enclosing the element, and passed after the event. Every bundle
+ * its bundle's member of that name, inside a root of its collection that
+ * root's copy, and passed after the event. Every bundle
  * a reference names loads before its handler runs.
+ *
+ * Inside a root, those copies need the per-root runtime, which a page loads
+ * only once it has a root: `tiny.waitForRoots`, which a signal bundle adds
+ * (see `rootable` in signals.ts), gives what a handler there waits for.
  */
 export function runHandler(
   el: HTMLElement | typeof globalThis,
@@ -468,6 +472,15 @@ export function runHandler(
   // Bundles imported here, in case one does not register itself.
   const imported: Record<string, Bundle> = {};
   const bundleOf = (name: string) => registered(name) ?? imported[name];
+  // What a handler here waits for first: the per-root runtime, inside a root.
+  const rootsFor = (signals: boolean) =>
+    typeof tiny !== "undefined" && (tiny as {
+      waitForRoots?(t: unknown, type: string, s: boolean): Promise<unknown>;
+    }).waitForRoots?.(
+      el === globalThis ? document.body : el,
+      e.type,
+      signals,
+    );
   for (
     const reference of ((el === globalThis ? document.body : el as HTMLElement)
       .getAttribute("tt-handler-" + e.type) ?? "").split(" ")
@@ -493,8 +506,9 @@ export function runHandler(
         );
       } else console.error(`Handler ${reference} not found in its bundle.`);
     };
-    if (!pending && names.every(registered)) run();
-    else {
+    if (!pending && names.every(registered) && !rootsFor(args.length > 0)) {
+      run();
+    } else {
       // Re-checked at run time: an earlier link may have loaded the bundle.
       // Held in a variable so `deno publish` does not rewrite the URL as a
       // package-relative path.
@@ -504,7 +518,8 @@ export function runHandler(
           ? Promise.resolve()
           : import(url).then((module) => imported[bundle] = module);
       };
-      const ready = () => Promise.all(names.map(load));
+      const ready = () =>
+        Promise.all(names.map(load)).then(() => rootsFor(args.length > 0));
       pending = (pending ? pending.then(ready) : ready())
         .then(run)
         .catch((error) => console.error(`Handler ${reference} failed:`, error));

@@ -20,7 +20,6 @@
 import { h, type JSX } from "../../jsx-runtime.ts";
 import {
   type ExposedSignals,
-  type InstanceSignals,
   optimized,
   type Signal,
   type SignalComponent,
@@ -30,16 +29,16 @@ import { css } from "../../scopedStyles.ts";
 const tiny = optimized(import.meta.url);
 
 /**
- * One count per instance. Each of its components is one part of a counter:
- * the parts made together by `component.instance()` share one count,
- * wherever they sit on the page.
+ * One count per instance: the component roots it. Each of its components is
+ * one part of a counter: the parts made together by `component.instance()`
+ * share one count, wherever they sit on the page.
  */
-const counterSignals = new tiny.Signals(({ Signal, Scope }) =>
-  new Scope(() => ({ count: new Signal(0) }))
-);
+const counterSignals = new tiny.Signals(({ Signal }) => ({
+  count: new Signal(0),
+}));
 
 /** The signals a counter exposes. */
-type CounterExposed = InstanceSignals<{ count: Signal<number> }>;
+type CounterExposed = { count: Signal<number> };
 
 const counterHandlers = new tiny.Handlers(async () => {
   const { signal } = await tiny.imports(counterSignals);
@@ -77,7 +76,7 @@ export const CounterSignalComponent: SignalComponent<{
 }> = new tiny.SignalComponent(
   async () => {
     const { fn, signal, styled } = await tiny.imports(
-      counterSignals,
+      counterSignals.withRoot(),
       counterHandlers,
       counterStyles,
     );

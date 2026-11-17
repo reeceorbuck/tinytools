@@ -39,7 +39,6 @@
 import { h, type JSX } from "../../jsx-runtime.ts";
 import {
   type ExposedSignals,
-  type InstanceSignals,
   optimized,
   type Signal,
   type SignalComponent,
@@ -53,19 +52,17 @@ const tiny = optimized(import.meta.url);
  * Per instance: the chosen option's value and text, and whether the list is
  * open.
  */
-const comboboxSignals = new tiny.Signals(({ Signal, Scope }) =>
-  new Scope(() => ({
-    value: new Signal(""),
-    label: new Signal(""),
-    open: new Signal<boolean>(false),
-  }))
-);
+const comboboxSignals = new tiny.Signals(({ Signal }) => ({
+  value: new Signal(""),
+  label: new Signal(""),
+  open: new Signal<boolean>(false),
+}));
 
 /** The signals a combobox exposes. */
-type ComboboxExposed = InstanceSignals<{
+type ComboboxExposed = {
   value: Signal<string>;
   label: Signal<string>;
-}>;
+};
 
 /** Props for the combobox's `Input`. */
 type InputProps = {
@@ -423,7 +420,7 @@ export const ComboboxSignalComponent: SignalComponent<{
 }> = new tiny.SignalComponent(
   async () => {
     const { fn, signal, styled } = await tiny.imports(
-      comboboxSignals,
+      comboboxSignals.withRoot(),
       comboboxHandlers,
       comboboxStyles,
       signalTools,

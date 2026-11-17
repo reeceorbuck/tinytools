@@ -39,7 +39,6 @@ import { h, type JSX } from "../../jsx-runtime.ts";
 import {
   type ExposedSignals,
   type HandlerReference,
-  type InstanceSignals,
   optimized,
   type ReadonlySignal,
   type Signal,
@@ -54,29 +53,27 @@ const tiny = optimized(import.meta.url);
  * how many of its elements there are and how many match it.
  */
 const searchFilterSignals = new tiny.Signals((
-  { Signal, Computed, Scope },
-) =>
-  new Scope(() => {
-    const query = new Signal("");
-    const shown = new Signal(0);
-    const total = new Signal(0);
-    return {
-      query,
-      shown,
-      total,
-      /** "3 of 40" while a query filters the results; empty otherwise. */
-      summary: new Computed(
-        () => query.value.trim() ? `${shown.value} of ${total.value}` : "",
-        [query, shown, total],
-      ),
-      /** Whether a query matches nothing. */
-      noMatches: new Computed(
-        () => query.value.trim() !== "" && shown.value === 0,
-        [query, shown],
-      ),
-    };
-  })
-);
+  { Signal, Computed },
+) => {
+  const query = new Signal("");
+  const shown = new Signal(0);
+  const total = new Signal(0);
+  return {
+    query,
+    shown,
+    total,
+    /** "3 of 40" while a query filters the results; empty otherwise. */
+    summary: new Computed(
+      () => query.value.trim() ? `${shown.value} of ${total.value}` : "",
+      [query, shown, total],
+    ),
+    /** Whether a query matches nothing. */
+    noMatches: new Computed(
+      () => query.value.trim() !== "" && shown.value === 0,
+      [query, shown],
+    ),
+  };
+});
 
 const searchFilterHandlers = new tiny.Handlers(async () => {
   const { signal } = await tiny.imports(searchFilterSignals);
@@ -133,12 +130,12 @@ type InputHandler =
   | readonly HandlerReference<string, (event: Event) => unknown>[];
 
 /** The signals a search filter exposes. */
-type SearchFilterExposed = InstanceSignals<{
+type SearchFilterExposed = {
   query: Signal<string>;
   shown: Signal<number>;
   total: Signal<number>;
   summary: ReadonlySignal<string>;
-}>;
+};
 
 /** What `FilterInput` takes. */
 type FilterInputProps = {
@@ -181,7 +178,7 @@ export const SearchFilterSignalComponent: SignalComponent<{
 }> = new tiny.SignalComponent(
   async () => {
     const { fn, signal, styled } = await tiny.imports(
-      searchFilterSignals,
+      searchFilterSignals.withRoot(),
       searchFilterHandlers,
       searchFilterStyles,
     );

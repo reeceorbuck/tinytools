@@ -47,8 +47,8 @@ export const signalBindingTools = new sourced.Handlers({
           .exec(name)?.[1];
       if (!property) continue;
       const dot = bound.indexOf(".");
-      // A signals bundle registers its signals; a per-instance one then
-      // resolves the instance enclosing this element.
+      // A signals bundle registers its signals; inside a root of its
+      // collection, one then resolves to that root's copy.
       const signal = (globalThis as {
         handlers?: Record<string, Record<string, Record<string, unknown>>>;
       }).handlers?.[bound.slice(0, dot)]?.[bound.slice(dot + 1)];
@@ -118,8 +118,8 @@ export const signalBindingTools = new sourced.Handlers({
  * to a signal uses: `<input value={signal.query}
  * onInput={fn.signals.update(signal.query)} />` subscribes to the signal and
  * writes it. Like every `fn.signals` handler, each takes the signals its
- * reference was given, a per-instance one as the instance enclosing the
- * element.
+ * reference was given, inside a root of its collection as that root's
+ * copy.
  */
 export const signalSyncTools = new sourced.Handlers({
   /** Runs the element's `onSignal` handlers on each later change of every signal. */

@@ -144,16 +144,6 @@ Deno.test("persist rejects signals it cannot store and malformed storage", async
       "only writable signals",
     ],
     [
-      () =>
-        new Signals(
-          ({ Signal, Scope }) => new Scope(() => ({ open: new Signal(false) })),
-          {
-            persist: { open: { local: "k" } },
-          },
-        ),
-      "per-instance",
-    ],
-    [
       // @ts-expect-error not a signal of the collection
       () => new Signals({ count: 0 }, { persist: { other: { local: "k" } } }),
       "not defined",

@@ -374,8 +374,21 @@ Deno.test("Signals collections share the runtime modules they use", async () => 
     [
       ...[...collection._handlerDefinitions.values()][0].bundle.runtimeFiles,
     ].map((file) => file.replace(/_\w+\.js$/, ""));
+  // Every collection can be rooted, but imports the per-root runtime only
+  // once the page has a root, so it is not preloaded with the bundle.
   assertEquals(runtimeOf(first), ["tt-signal"]);
   assertEquals(runtimeOf(second), ["tt-signal", "tt-trigger"]);
+  // One reading another collection's `.all` needs it as it loads.
+  const reader = new Signals(import.meta.url, first, ({ signal }) => ({
+    ones: () => signal.one.all.value.length,
+  }));
+  await reader.ensureDefined();
+  assertEquals(runtimeOf(reader), [
+    "tt-signal",
+    "tt-computed",
+    "tt-shape",
+    "tt-instance",
+  ]);
 });
 
 Deno.test("layouts may return their children unchanged", async () => {

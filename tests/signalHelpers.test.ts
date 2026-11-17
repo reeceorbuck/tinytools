@@ -19,12 +19,12 @@ Deno.test("setCssProperty writes the signal's named custom property", async () =
       },
     },
   };
-  const signal = new Signal<number>(0.5);
+  const signal = new Signal(0.5);
   signal.name = "contrast-adjust";
   setCssProperty.call(element, { signal });
   assertEquals(properties.get("--contrast-adjust"), "0.5");
 
-  const unnamed = new Signal<number>(1);
+  const unnamed = new Signal(1);
   setCssProperty.call(element, { signal: unnamed });
   assertEquals(properties.size, 1);
 });
@@ -32,7 +32,7 @@ Deno.test("setCssProperty writes the signal's named custom property", async () =
 Deno.test("fn.signals.multiply multiplies by the element's value, which it needs", async () => {
   const multiply = await loadHandler("multiply");
   const { Signal } = signalClasses();
-  const zoom = new Signal<number>(4);
+  const zoom = new Signal(4);
   let value: string | null = null;
   const button = { localName: "button", getAttribute: () => value };
   assertThrows(
@@ -82,8 +82,8 @@ Deno.test("signals take their name from the input that writes them", () => {
 
 Deno.test("evaluateUsingInitialValues computes a collection's values on the server", () => {
   const signals = new Signals(import.meta.url, ({ Signal, Computed }) => {
-    const price = new Signal<number>(10);
-    const quantity = new Signal<number>(1);
+    const price = new Signal(10);
+    const quantity = new Signal(1);
     const total = new Computed(() => price.value * quantity.value, [
       price,
       quantity,
@@ -126,7 +126,7 @@ Deno.test("a signal without an initial value must allow null", () => {
   const { Signal } = signalClasses();
   assertEquals(new Signal().value, null);
   assertEquals(new Signal<string | null>().value, null);
-  const text: string = new Signal<string>("a").value;
+  const text: string = new Signal("a").value;
   assertEquals(text, "a");
   // @ts-expect-error a string signal needs an initial value
   new Signal<string>();
@@ -136,7 +136,7 @@ Deno.test("a subscription sends changes only, and fires on request", () => {
   const subscribers = recordingSubscribers();
   try {
     const { Signal } = signalClasses();
-    const signal = new Signal<number>(1);
+    const signal = new Signal(1);
     const { element, seen } = subscribers.subscriber();
     signal.subscribe(element);
     assertEquals(seen, []);
@@ -161,10 +161,10 @@ Deno.test("fireSelfSignal sends every subscribed signal once", () => {
   const subscribers = recordingSubscribers();
   try {
     const { Signal, Computed } = signalClasses();
-    const a = new Signal<string>("a");
-    const b = new Signal<number>(1);
+    const a = new Signal("a");
+    const b = new Signal(1);
     const doubled = new Computed(() => b.value * 2);
-    const unrelated = new Signal<string>("x");
+    const unrelated = new Signal("x");
     const { element, seen } = subscribers.subscriber();
     for (const signal of [a, doubled]) signal.subscribe(element);
     // Subscribing twice is one subscription.
@@ -294,7 +294,7 @@ Deno.test("setBound writes the value attribute of elements but input and textare
   }
 });
 
-Deno.test("setBound resolves a per-instance signal for the element", async () => {
+Deno.test("setBound resolves a signal to the copy of the root around the element", async () => {
   const setBound = await loadHandler("setBound");
   const { Signal } = signalClasses();
   const instance = new Signal<string>("milk");

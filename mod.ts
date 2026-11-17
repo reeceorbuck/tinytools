@@ -74,14 +74,8 @@ export {
 } from "./clientTools.ts";
 export type {
   EvaluationSeed,
-  FlattenScopes,
-  InstanceDefinitions,
-  InstanceLevels,
   InstanceSeed,
-  InstanceSignal,
-  InstanceSignals,
   ReadonlySignal,
-  Scope,
   Signal,
   SignalAccessors,
   SignalConstant,

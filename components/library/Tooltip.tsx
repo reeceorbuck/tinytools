@@ -49,7 +49,6 @@
 import { h, type JSX } from "../../jsx-runtime.ts";
 import {
   type ExposedSignals,
-  type InstanceSignals,
   optimized,
   type Signal,
   type SignalComponent,
@@ -63,12 +62,10 @@ const tiny = optimized(import.meta.url);
  * Per instance: whether the tip or card is showing, and its id, which it
  * writes as it connects and its triggers find it by.
  */
-const tooltipSignals = new tiny.Signals(({ Signal, Scope }) =>
-  new Scope(() => ({
-    open: new Signal<boolean>(false),
-    target: new Signal(""),
-  }))
-);
+const tooltipSignals = new tiny.Signals(({ Signal }) => ({
+  open: new Signal<boolean>(false),
+  target: new Signal(""),
+}));
 
 /** A tip or card, holding its pending show or hide and its trigger. */
 type Content = HTMLElement & {
@@ -352,7 +349,7 @@ type Delays = {
 };
 
 /** The signals a tooltip exposes. */
-type TooltipExposed = InstanceSignals<{ open: Signal<boolean> }>;
+type TooltipExposed = { open: Signal<boolean> };
 
 /** The trigger's props: the element the content belongs to. */
 type TriggerProps = {
@@ -386,7 +383,7 @@ export const TooltipSignalComponent: SignalComponent<{
 }> = new tiny.SignalComponent(
   async () => {
     const { fn, signal, styled } = await tiny.imports(
-      tooltipSignals,
+      tooltipSignals.withRoot(),
       tooltipHandlers,
       tooltipStyles,
     );

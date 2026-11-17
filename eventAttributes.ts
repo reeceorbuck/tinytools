@@ -1,5 +1,5 @@
 import type { JSX } from "./jsx-runtime.ts";
-import type { InstanceSignal, SignalHolding, SignalKind } from "./signals.ts";
+import type { SignalHolding, SignalKind } from "./signals.ts";
 
 /**
  * The inline attribute body every TinyTools event binding emits. It is shared by
@@ -110,8 +110,8 @@ export type HandlerReferences<TFunctions> =
  * rendering, `onClick={fn.recalculate(signal.total)}`: each must hold what
  * its parameter's type holds (see `SignalHolding`), so a `Signal<number>`
  * parameter takes a writable signal of a number and a `ReadonlySignal<number>`
- * one a computed too. A per-instance signal is passed as the instance
- * enclosing the element.
+ * one a computed too. Inside a root of its collection, a signal is passed as
+ * that root's copy.
  */
 export type SignalArguments<TName extends string, TFunction> = TFunction extends
   (this: infer This, event: infer E, ...signals: infer Signals) => unknown
@@ -167,7 +167,7 @@ type SignalMutator<Holding> = (
 /**
  * `fn.signals`: handlers that act on the signals they are given, available
  * in every `tiny.imports()`. Each takes one or more signal references, and
- * a per-instance signal acts on the instance enclosing the element.
+ * inside a root of its collection, a signal acts on that root's copy.
  */
 export type SignalMutators = {
   /**
@@ -243,14 +243,14 @@ export type SignalOrigin<TEntry> = {
 export interface RenderableSignal<Signal> {
   /**
    * The value the signal starts with, as `evaluateUsingInitialValues()`
-   * reports it (a per-instance signal's is a fresh instance's), for
-   * initial markup such as an input's `value`.
+   * reports it (a root's copy starts there too), for initial markup such
+   * as an input's `value`.
    */
   readonly initial: SignalInitial<Signal>;
   /**
    * This signal with `initial` rendered in place of the value it starts
    * with, wherever it is bound or placed, for values the server cannot
-   * render (a seeded per-instance signal's) or a placeholder. Without one,
+   * render (a seeded root's copy) or a placeholder. Without one,
    * the binding renders no initial value and leaves the element's own markup
    * as it is, so a textarea's children are its placeholder:
    * `<textarea value={signal.message.withInitial()}>Loading…</textarea>`.
@@ -261,9 +261,8 @@ export interface RenderableSignal<Signal> {
 }
 
 /** The value type of a signal, as `RenderableSignal.initial` gives it. */
-type SignalInitial<Signal> = Signal extends // deno-lint-ignore no-explicit-any
-InstanceSignal<infer Value, any, any> ? Value
-  : Signal extends { readonly value: infer Value } ? Value
+type SignalInitial<Signal> = Signal extends { readonly value: infer Value }
+  ? Value
   : never;
 
 /**

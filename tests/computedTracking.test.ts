@@ -6,8 +6,8 @@ import { update } from "./helpers/signalRuntime.ts";
 Deno.test("computed signals follow the signals they read", () => {
   const { Signal, Computed } = signalClasses(true);
   const mode = new Signal<"a" | "b">("a");
-  const a = new Signal<number>(1);
-  const b = new Signal<number>(10);
+  const a = new Signal(1);
+  const b = new Signal(10);
   let runs = 0;
   const picked = new Computed(() => {
     runs++;
@@ -81,7 +81,7 @@ Deno.test("array values compare by item and are read from control groups", () =>
   assertEquals(notified, 1);
 
   // A numeric signal reads numbers, a boolean signal a checkbox's state.
-  const depth = new Signal<number>(1);
+  const depth = new Signal(1);
   update({ value: "3", dataset: {} }, depth);
   assertEquals(depth.value, 3);
   const flag = new Signal<boolean>(false);

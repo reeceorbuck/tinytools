@@ -41,7 +41,6 @@
 import { h, type JSX } from "../../jsx-runtime.ts";
 import {
   type ExposedSignals,
-  type InstanceSignals,
   optimized,
   type ReadonlySignal,
   type Signal,
@@ -56,10 +55,10 @@ const tiny = optimized(import.meta.url);
 type StepEntry = { id: string; title: string };
 
 /** The signals a set of steps exposes. */
-type StepsExposed = InstanceSignals<{
+type StepsExposed = {
   current: Signal<string>;
   index: ReadonlySignal<number>;
-}>;
+};
 
 /** A step's props. */
 type StepProps = {
@@ -92,31 +91,29 @@ type SubmitProps = {
  * Per instance: the steps in page order, and the id of the one showing.
  * The rest follows from those two.
  */
-const stepsSignals = new tiny.Signals(({ Signal, Computed, Scope }) =>
-  new Scope(() => {
-    const steps = new Signal<StepEntry[]>([]);
-    const current = new Signal("");
-    const at = () => steps.value.findIndex((step) => step.id === current.value);
-    // Until the steps connect, the last step's controls show: the form's
-    // own submit, without Back or Next.
-    const last = () =>
-      steps.value.length === 0 || at() === steps.value.length - 1;
-    return {
-      steps,
-      current,
-      index: new Computed(at, [steps, current]),
-      onFirst: new Computed(() => at() <= 0, [steps, current]),
-      onLast: new Computed(last, [steps, current]),
-      notLast: new Computed(() => !last(), [steps, current]),
-      /** "Step 2 of 4", once the steps connect. */
-      summary: new Computed(
-        () =>
-          steps.value.length ? `Step ${at() + 1} of ${steps.value.length}` : "",
-        [steps, current],
-      ),
-    };
-  })
-);
+const stepsSignals = new tiny.Signals(({ Signal, Computed }) => {
+  const steps = new Signal<StepEntry[]>([]);
+  const current = new Signal("");
+  const at = () => steps.value.findIndex((step) => step.id === current.value);
+  // Until the steps connect, the last step's controls show: the form's
+  // own submit, without Back or Next.
+  const last = () =>
+    steps.value.length === 0 || at() === steps.value.length - 1;
+  return {
+    steps,
+    current,
+    index: new Computed(at, [steps, current]),
+    onFirst: new Computed(() => at() <= 0, [steps, current]),
+    onLast: new Computed(last, [steps, current]),
+    notLast: new Computed(() => !last(), [steps, current]),
+    /** "Step 2 of 4", once the steps connect. */
+    summary: new Computed(
+      () =>
+        steps.value.length ? `Step ${at() + 1} of ${steps.value.length}` : "",
+      [steps, current],
+    ),
+  };
+});
 
 /** Helpers the handlers share, called through `fn`. */
 const stepsTools = new tiny.Handlers({
@@ -395,7 +392,7 @@ export const StepsSignalComponent: SignalComponent<{
 }> = new tiny.SignalComponent(
   async () => {
     const { fn, signal, styled } = await tiny.imports(
-      stepsSignals,
+      stepsSignals.withRoot(),
       stepsHandlers,
       stepsStyles,
       signalTools,

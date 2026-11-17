@@ -29,7 +29,6 @@ import { h, type JSX } from "../../jsx-runtime.ts";
 import {
   type ExposedSignals,
   type HandlerReference,
-  type InstanceSignals,
   optimized,
   type ReadonlySignal,
   type Signal,
@@ -107,23 +106,22 @@ const dateTools = new tiny.Handlers(dateFunctions);
  */
 const datePickerSignals = new tiny.Signals(async () => {
   const { fn } = await tiny.imports(dateTools);
-  return ({ Signal, Computed, Scope }) =>
-    new Scope(() => {
-      const date = new Signal("");
-      return {
-        date,
-        type: new Signal("date"),
-        skipWeekends: new Signal(false),
-        weekday: new Computed(() => fn.weekday(date.value), [date]),
-      };
-    });
+  return ({ Signal, Computed }) => {
+    const date = new Signal("");
+    return {
+      date,
+      type: new Signal("date"),
+      skipWeekends: new Signal(false),
+      weekday: new Computed(() => fn.weekday(date.value), [date]),
+    };
+  };
 });
 
 /** The signals a date picker exposes. */
-type DatePickerExposed = InstanceSignals<{
+type DatePickerExposed = {
   date: Signal<string>;
   weekday: ReadonlySignal<string>;
-}>;
+};
 
 /** Props for the picker's `DateInput`. */
 type DateInputProps = {
@@ -232,7 +230,7 @@ export const DatePickerSignalComponent: SignalComponent<{
 }> = new tiny.SignalComponent(
   async () => {
     const { fn, signal, styled } = await tiny.imports(
-      datePickerSignals,
+      datePickerSignals.withRoot(),
       datePickerHandlers,
       datePickerStyles,
     );

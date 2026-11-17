@@ -58,9 +58,9 @@ type PendingItem = { label: string; dismissable: boolean };
  * add parts append to it and the list moves them into items, so they meet
  * only through the signal, wherever each sits on the page.
  */
-const listSignals = new tiny.Signals(({ Signal, Scope }) =>
-  new Scope(() => ({ pending: new Signal<PendingItem[]>([]) }))
-);
+const listSignals = new tiny.Signals(({ Signal }) => ({
+  pending: new Signal<PendingItem[]>([]),
+}));
 
 const listStyles = new tiny.Styles({
   list: css`
@@ -387,7 +387,7 @@ export const ListSignalComponent: SignalComponent<{
   AddButton: (props: AddButtonProps) => JSX.Element;
 }> = new tiny.SignalComponent(async () => {
   const { fn, signal, styled } = await tiny.imports(
-    listSignals,
+    listSignals.withRoot(),
     listHandlers,
     listStyles,
     dragSortTools,

@@ -47,7 +47,6 @@
 import { h, type JSX } from "../../jsx-runtime.ts";
 import {
   type ExposedSignals,
-  type InstanceSignals,
   optimized,
   type Signal,
   type SignalComponent,
@@ -59,12 +58,12 @@ import type { SignalEvent } from "../../handlers/signals.ts";
 const tiny = optimized(import.meta.url);
 
 /** Whether the dialog is open, one per instance. */
-const dialogSignals = new tiny.Signals(({ Signal, Scope }) =>
-  new Scope(() => ({ open: new Signal<boolean>(false) }))
-);
+const dialogSignals = new tiny.Signals(({ Signal }) => ({
+  open: new Signal<boolean>(false),
+}));
 
 /** The signals a dialog exposes. */
-type DialogExposed = InstanceSignals<{ open: Signal<boolean> }>;
+type DialogExposed = { open: Signal<boolean> };
 
 /** Props for the dialog's `Open` and `Close` buttons. */
 type DialogButtonProps = { children?: unknown; label?: string };
@@ -254,7 +253,7 @@ export const DialogSignalComponent: SignalComponent<{
 }> = new tiny.SignalComponent(
   async () => {
     const { fn, signal, styled } = await tiny.imports(
-      dialogSignals,
+      dialogSignals.withRoot(),
       dialogHandlers,
       dialogStyles,
     );

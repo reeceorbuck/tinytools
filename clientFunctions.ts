@@ -197,6 +197,11 @@ export type HandlerBundleOptions = {
   styleFiles?: Iterable<string>;
   /** Runtime modules (`tt-*.js`) the prelude imports. */
   runtimeFiles?: Iterable<string>;
+  /**
+   * Runtime modules the bundle may import later, not at once: written beside
+   * it, but not preloaded with it.
+   */
+  lazyFiles?: Iterable<string>;
   /** The prelude's graph, whose signals a Signals bundle exports. */
   members?: string;
 };
@@ -219,6 +224,8 @@ export class HandlerBundle {
   readonly styleFiles: ReadonlySet<string>;
   /** Runtime modules the prelude imports, preloaded beside the bundle. */
   readonly runtimeFiles: ReadonlySet<string>;
+  /** Runtime modules the bundle may import later (see `lazyFiles`). */
+  readonly lazyFiles: ReadonlySet<string>;
   /** The prelude's graph, whose signals a Signals bundle exports. */
   readonly members?: string;
   #explicitDependencies?: Map<string, ClientFunctionImpl>;
@@ -234,6 +241,7 @@ export class HandlerBundle {
     this.prelude = options.prelude ?? "";
     this.styleFiles = new Set(options.styleFiles);
     this.runtimeFiles = new Set(options.runtimeFiles);
+    this.lazyFiles = new Set(options.lazyFiles);
     this.members = options.members;
     this.#explicitDependencies = options.dependencies &&
       new Map(options.dependencies);
@@ -457,7 +465,7 @@ export class HandlerBundle {
     }
     // The runtime modules the prelude imports sit beside the bundle, so the
     // handler directory holds everything its bundles import.
-    for (const file of this.runtimeFiles) {
+    for (const file of [...this.runtimeFiles, ...this.lazyFiles]) {
       const runtimePath = `${handlerDir}/${file}`;
       if (await fsStat(runtimePath).then(() => true, () => false)) continue;
       await mkdir(handlerDir, { recursive: true });

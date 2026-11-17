@@ -47,7 +47,6 @@
 import { h, type JSX } from "../../jsx-runtime.ts";
 import {
   type ExposedSignals,
-  type InstanceSignals,
   optimized,
   type ReadonlySignal,
   type Signal,
@@ -62,28 +61,26 @@ const tiny = optimized(import.meta.url);
  * Per instance: every checkbox's value, the chosen ones, and the last one
  * clicked, where a shift-click's range starts.
  */
-const selectionSignals = new tiny.Signals(({ Signal, Computed, Scope }) =>
-  new Scope(() => {
-    const values = new Signal<string[]>([]);
-    const selected = new Signal<string[]>([]);
-    return {
-      values,
-      selected,
-      anchor: new Signal(""),
-      count: new Computed(() => selected.value.length, [selected]),
-      /** Whether nothing is chosen. */
-      none: new Computed(() => selected.value.length === 0, [selected]),
-      /** "3 of 12 selected" while any are; empty otherwise. */
-      summary: new Computed(
-        () =>
-          selected.value.length
-            ? `${selected.value.length} of ${values.value.length} selected`
-            : "",
-        [selected, values],
-      ),
-    };
-  })
-);
+const selectionSignals = new tiny.Signals(({ Signal, Computed }) => {
+  const values = new Signal<string[]>([]);
+  const selected = new Signal<string[]>([]);
+  return {
+    values,
+    selected,
+    anchor: new Signal(""),
+    count: new Computed(() => selected.value.length, [selected]),
+    /** Whether nothing is chosen. */
+    none: new Computed(() => selected.value.length === 0, [selected]),
+    /** "3 of 12 selected" while any are; empty otherwise. */
+    summary: new Computed(
+      () =>
+        selected.value.length
+          ? `${selected.value.length} of ${values.value.length} selected`
+          : "",
+      [selected, values],
+    ),
+  };
+});
 
 const selectionHandlers = new tiny.Handlers(async () => {
   const { signal } = await tiny.imports(selectionSignals);
@@ -195,10 +192,10 @@ const selectionStyles = new tiny.Styles({
 });
 
 /** The signals a selection exposes. */
-type SelectionExposed = InstanceSignals<{
+type SelectionExposed = {
   selected: Signal<string[]>;
   count: ReadonlySignal<number>;
-}>;
+};
 
 /** What `Checkbox` takes. */
 type CheckboxProps = {
@@ -251,7 +248,7 @@ export const SelectionSignalComponent: SignalComponent<{
 }> = new tiny.SignalComponent(
   async () => {
     const { fn, signal, styled } = await tiny.imports(
-      selectionSignals,
+      selectionSignals.withRoot(),
       selectionHandlers,
       selectionStyles,
       signalTools,
