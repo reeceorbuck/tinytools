@@ -3428,15 +3428,35 @@ async function renderToMarkup(child: unknown): Promise<string> {
   }
 }
 
+/** A `tt-link` holding an id `newLinkId` minted. */
+const MINTED_LINK = / tt-link="[^"]*=link-[0-9a-f]{16}/;
+
 /**
  * The browser source of one clone function. `markup` is spliced in as a
  * string literal, so the function has no free variables and runs unchanged
  * on the server, where it returns the markup. Params are text: escaped, so
  * a value is never parsed as markup, in an attribute or between tags.
+ *
+ * Each clone is a new copy of every signal component instance the markup
+ * made with `component.instance()`: the link ids those minted (see
+ * `newLinkId`) are swapped for fresh ones, the same one throughout a clone,
+ * so a copy's parts and a group's copies stay linked to each other but not
+ * to another clone's. Ids named with `instance(id)` are kept, as they are
+ * meant to join the copy already on the page.
  */
 function templateCloneSource(markup: string): string {
+  const relink = MINTED_LINK.test(markup)
+    ? `
+  const links = {};
+  markup = markup.replace(/ tt-link="[^"]*"/g, (attribute) =>
+    attribute.replace(/=link-[0-9a-f]{16}/g, (id) =>
+      links[id] ??= "=link-" + Array.from(
+        crypto.getRandomValues(new Uint8Array(8)),
+        (byte) => byte.toString(16).padStart(2, "0"),
+      ).join("")));`
+    : "";
   return `function (params) {
-  let markup = ${JSON.stringify(markup)};
+  let markup = ${JSON.stringify(markup)};${relink}
   if (params) {
     markup = markup.replace(
       /\\$\\[([^\\]]+)\\]/g,
@@ -3986,6 +4006,7 @@ type ExtractComponents<T> = T extends SignalComponent<infer TComponents> ?
  * server-wide count would show how much the server has rendered.
  */
 function newLinkId(): string {
+  // A template clone swaps these for fresh ones (see `templateCloneSource`).
   const bytes = crypto.getRandomValues(new Uint8Array(8));
   return `link-${
     Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")

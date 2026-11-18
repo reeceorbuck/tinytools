@@ -585,3 +585,57 @@ Deno.test({
     }
   },
 });
+
+Deno.test({
+  name:
+    "each clone of a template is a new copy of the component instances its markup made",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  async fn() {
+    reset();
+    const counts = new tiny.Signals(({ Signal }) => ({ count: new Signal(0) }));
+    const CounterComponent = new SignalComponent(async () => {
+      await imports(counts.withRoot());
+      return {
+        Display: () => jsx("output", {}),
+        Button: () => jsx("button", { type: "button" }),
+      };
+    });
+    const counterTemplates = new tiny.Templates({
+      counter: async () => {
+        const { component } = await imports(CounterComponent);
+        const copy = component.instance();
+        const named = component.instance("shared-counter");
+        return jsx("div", {
+          children: [
+            await copy.Display({}),
+            await copy.Button({}),
+            await named.Display({}),
+          ],
+        });
+      },
+    });
+    try {
+      const { template } = await imports(counterTemplates);
+      const linksOf = (html: unknown) =>
+        [...String(html).matchAll(/tt-link="([^"]+)"/g)].map((match) =>
+          match[1]
+        );
+      const rendered = linksOf(counterTemplates.rendered("counter")!.markup);
+      const first = linksOf(template.counter());
+      const second = linksOf(template.counter({ unused: "" }));
+      assertEquals(first.length, 3);
+      // A copy's parts stay linked to each other, but each clone is a copy
+      // of its own, not the one the template rendered.
+      assertEquals(first[0], first[1]);
+      assertEquals(second[0], second[1]);
+      assertEquals(new Set([rendered[0], first[0], second[0]]).size, 3);
+      assertStringIncludes(first[0], `${counts.instanceKey}=link-`);
+      // A named copy is the one the page shows, in every clone.
+      assertEquals(first[2], `${counts.instanceKey}=shared-counter.0`);
+      assertEquals(second[2], first[2]);
+    } finally {
+      reset();
+    }
+  },
+});

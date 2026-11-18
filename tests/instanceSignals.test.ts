@@ -176,6 +176,55 @@ Deno.test("tt-link alone makes separate elements one copy of a collection", () =
   }
 });
 
+Deno.test("a linked copy leaves `.all` once its upgraded members abort", () => {
+  const byId = installDocument(`<div id="list"></div>`);
+  try {
+    const { Signal, Computed } = signalClasses(true);
+    const { count } = rooted(() => ({ count: new Signal(0) }));
+    const counts = new Computed(
+      () => allOf(count).value.join(" "),
+      [allOf(count)],
+    );
+    const document = byId("list").ownerDocument;
+    // As lifecycle elements: a new controller on every connection.
+    const member = (id: string) =>
+      Object.assign(document.createElement("output"), {
+        id,
+        abortController: new AbortController(),
+      });
+    const parts = [member("a1"), member("a2"), member("b")];
+    for (const [index, part] of parts.entries()) {
+      part.setAttribute("tt-link", `${key}=${index < 2 ? "c1" : "c2"}`);
+      byId("list").append(part);
+    }
+    count.forInstance(byId("a1")).value = 1;
+    count.forInstance(byId("a2"));
+    count.forInstance(byId("b")).value = 2;
+    assertEquals(counts.value, "1 2");
+
+    // One part going leaves the copy in, at its other part.
+    const [a1, a2, b] = parts;
+    a1.remove();
+    a1.abortController.abort();
+    assertEquals(counts.value, "1 2");
+    // Its last part going takes it out at once, not at the next change.
+    a2.remove();
+    a2.abortController.abort();
+    assertEquals(counts.value, "2");
+
+    // Back in the page, a part resolves the same copy and joins again.
+    a1.abortController = new AbortController();
+    byId("list").prepend(a1);
+    assertEquals(count.forInstance(a1).value, 1);
+    assertEquals(counts.value, "1 2");
+    b.remove();
+    b.abortController.abort();
+    assertEquals(counts.value, "1");
+  } finally {
+    uninstallDocument();
+  }
+});
+
 Deno.test("tt-link links an inner collection by copy inside a linked outer one", () => {
   const link = (copy: string) => `tt-link="${key}=g ${key}-own=${copy}"`;
   const byId = installDocument(`

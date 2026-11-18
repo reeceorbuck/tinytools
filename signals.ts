@@ -917,6 +917,14 @@ export class InstanceGroup {
     }
     if (!linked.members.has(member)) {
       linked.members.add(member);
+      // A member that aborts (an upgraded element, removed) leaves `.all` at
+      // once, as a root does; back in the page, it resolves and joins again.
+      const members = linked.members;
+      (member as { abortController?: AbortController }).abortController
+        ?.signal.addEventListener("abort", () => {
+          members.delete(member);
+          this.#refreshAggregates();
+        }, { once: true });
       this.#refreshAggregates();
     }
     return linked.graph;
