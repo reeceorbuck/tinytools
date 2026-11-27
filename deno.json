@@ -26,7 +26,7 @@
     "@std/fs": "jsr:@std/fs@^1.0.24",
     "esbuild": "npm:esbuild@^0.28.2",
     "esbuild-wasm": "npm:esbuild-wasm@^0.28.2",
-    "hono": "jsr:@hono/hono@^4.13.18",
+    "hono": "jsr:@hono/hono@^4.13.22",
     "linkedom": "npm:linkedom@0.18.15"
   },
   "compilerOptions": {
