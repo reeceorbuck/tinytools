@@ -6,7 +6,7 @@
  * the name of its day. Each part sits wherever the page puts it.
  *
  * ```tsx
- * const { component } = await tiny.imports(DatePickerSignalComponent);
+ * const { component } = await tiny.imports(DatePickerComponents);
  * const visitDate = component.instance();
  *
  * <visitDate.Step by={-1} unit="week">«</visitDate.Step>
@@ -27,12 +27,12 @@
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
 import { h, type JSX } from "../../jsx-runtime.ts";
 import {
+  type Components,
   type ExposedSignals,
   type HandlerReference,
   optimized,
   type ReadonlySignal,
   type Signal,
-  type SignalComponent,
 } from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
 import type { SignalEvent } from "../../handlers/signals.ts";
@@ -221,13 +221,13 @@ const datePickerStyles = new tiny.Styles({
  * names its day, `Step` moves it by `by` days or weeks and `Today` sets it to
  * today. The picker exposes `signal.date` and `signal.weekday`.
  */
-export const DatePickerSignalComponent: SignalComponent<{
+export const DatePickerComponents: Components<{
   signal: ExposedSignals<DatePickerExposed>;
   DateInput: (props: DateInputProps) => JSX.Element;
   Weekday: (props: WeekdayProps) => JSX.Element;
   Step: (props: StepProps) => JSX.Element;
   Today: (props: TodayProps) => JSX.Element;
-}> = new tiny.SignalComponent(
+}> = new tiny.Components(
   async () => {
     const { fn, signal, styled } = await tiny.imports(
       datePickerSignals.withRoot(),

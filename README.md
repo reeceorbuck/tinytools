@@ -172,10 +172,10 @@ selection, search filter, list and toasts. Place their parts anywhere and link
 them with `instance()`:
 
 ```tsx
-import { DialogSignalComponent } from "tinytools/library";
+import { DialogComponents } from "tinytools/library";
 
 app.get("/profile", async (c) => {
-  const { component } = await tiny.imports(DialogSignalComponent);
+  const { component } = await tiny.imports(DialogComponents);
   const dialog = component.instance();
   return c.render(
     <>

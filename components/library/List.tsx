@@ -11,7 +11,7 @@
  * what it holds, or as `as` names.
  *
  * ```tsx
- * const { component } = await tiny.imports(ListSignalComponent);
+ * const { component } = await tiny.imports(ListComponents);
  * const tasks = component.instance();
  *
  * <tasks.List label="Tasks">
@@ -68,10 +68,10 @@ import { h, type JSX } from "../../jsx-runtime.ts";
 import { createContext, useContext } from "hono/jsx";
 import type { HtmlEscapedString } from "hono/utils/html";
 import {
+  type Components,
   type ExposedSignals,
   mergeClassNames,
   optimized,
-  type SignalComponent,
   type Trigger,
 } from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
@@ -557,14 +557,14 @@ type AddButtonProps =
  * through context, and those it adds as it adds them; `dismissable` is
  * each item's own.
  */
-export const ListSignalComponent: SignalComponent<{
+export const ListComponents: Components<{
   signal: ExposedSignals<ListExposed>;
   List: (props: ListProps) => JSX.Element;
   Item: (props: ListItemProps) => Promise<HtmlEscapedString>;
   Row: (props: ListItemProps) => Promise<HtmlEscapedString>;
   AddItem: (props: AddItemProps) => JSX.Element;
   AddButton: (props: AddButtonProps) => JSX.Element;
-}> = new tiny.SignalComponent(async () => {
+}> = new tiny.Components(async () => {
   const { fn, signal, styled } = await tiny.imports(
     listSignals.withRoot(),
     listHandlers,

@@ -81,7 +81,7 @@ export const clientRouteTools = new sourced.Handlers(async () => {
         fragment.appendChild(once ? child : child.cloneNode(true));
       }
       if (once) route.remove();
-      // Each clone is a new copy of the signal component instances in the
+      // Each clone is a new copy of the `tiny.Components` instances in the
       // route, as a template clone is: the link ids `component.instance()`
       // minted are swapped for fresh ones, the same one throughout the clone.
       // Ids named with `instance(id)` are kept. A `once` route moves the

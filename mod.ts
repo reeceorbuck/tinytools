@@ -53,6 +53,7 @@ export type { LifecycleElement } from "./lifecycleElement.ts";
 export {
   type ComponentInstances,
   type ComponentLinker,
+  Components,
   Constants,
   type ExposedSignals,
   Handlers,
@@ -63,7 +64,6 @@ export {
   type InstanceRootComponent,
   type Part,
   type RenderedTemplate,
-  SignalComponent,
   Signals,
   type SignalsOptions,
   Styles,
@@ -105,8 +105,8 @@ export {
 } from "./scopedStyles.ts";
 
 export {
-  component,
   COMPONENT_ROOT_ATTRIBUTE,
+  markAsComponent,
   transparent,
 } from "./componentScope.ts";
 

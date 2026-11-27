@@ -2,7 +2,6 @@
 /** @jsx h */
 /** @jsxFrag Fragment */
 /** Hono middleware and request rendering for TinyTools. */
-import { component } from "./componentScope.ts";
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
 import { h } from "./jsx-runtime.ts";
 import { Hono as HonoBase } from "hono";
@@ -16,6 +15,7 @@ import { contextStorage } from "hono/context-storage";
 import { jsxRenderer } from "hono/jsx-renderer";
 
 import {
+  Components,
   Constants,
   generateHandlerHash,
   Handlers,
@@ -26,7 +26,6 @@ import {
   setGeneratedFilenameHashLength,
   setGeneratedHandlerHashLength,
   setGeneratedStyleHashLength,
-  SignalComponent,
   Signals,
   sourcedCollections,
   Styles,
@@ -539,8 +538,7 @@ export type TinyApi = {
   readonly Styles: typeof Styles;
   readonly css: typeof css;
   readonly imports: typeof imports;
-  readonly component: typeof component;
-  readonly SignalComponent: typeof SignalComponent;
+  readonly Components: typeof Components;
   /**
    * This API with `sourceFileUrl` given to every `Handlers`, `Signals`,
    * `Styles` and `Templates`: `const tiny = optimized(import.meta.url)`.
@@ -579,8 +577,7 @@ export const tiny: TinyApi = {
   Styles,
   css,
   imports,
-  component,
-  SignalComponent,
+  Components,
   optimized,
   runHandler,
   defineLifecycleElement,

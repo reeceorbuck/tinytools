@@ -6,7 +6,7 @@
  * an element while the pointer rests on it or it has focus.
  *
  * ```tsx
- * const { component } = await tiny.imports(TooltipSignalComponent);
+ * const { component } = await tiny.imports(TooltipComponents);
  * const save = component.instance();
  * const patient = component.instance();
  *
@@ -48,10 +48,10 @@
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
 import { h, type JSX } from "../../jsx-runtime.ts";
 import {
+  type Components,
   type ExposedSignals,
   optimized,
   type Signal,
-  type SignalComponent,
 } from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
 import type { LifecycleElement } from "../../lifecycleElement.ts";
@@ -375,12 +375,12 @@ type CardProps = Delays & { label?: string };
  * and `Card` richer content, one per instance. The tooltip exposes
  * `signal.open`, which shows the content when set true.
  */
-export const TooltipSignalComponent: SignalComponent<{
+export const TooltipComponents: Components<{
   signal: ExposedSignals<TooltipExposed>;
   Trigger: (props: TriggerProps) => JSX.Element;
   Tip: (props: TipProps) => JSX.Element;
   Card: (props: CardProps) => JSX.Element;
-}> = new tiny.SignalComponent(
+}> = new tiny.Components(
   async () => {
     const { fn, signal, styled } = await tiny.imports(
       tooltipSignals.withRoot(),

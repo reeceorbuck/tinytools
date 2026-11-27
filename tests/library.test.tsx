@@ -3,23 +3,23 @@ import { imports, Templates } from "../clientTools.ts";
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
 import { h } from "../jsx-runtime.ts";
 import {
-  CarouselSignalComponent,
-  ComboboxSignalComponent,
-  CommandPaletteSignalComponent,
-  CounterSignalComponent,
-  DatePickerSignalComponent,
-  DialogSignalComponent,
-  DisclosureSignalComponent,
+  CarouselComponents,
+  ComboboxComponents,
+  CommandPaletteComponents,
+  CounterComponents,
+  DatePickerComponents,
+  DialogComponents,
+  DisclosureComponents,
+  ListComponents,
   ListItem,
   ListRow,
-  ListSignalComponent,
-  PopoverSignalComponent,
-  SearchFilterSignalComponent,
-  SelectionSignalComponent,
-  StepsSignalComponent,
-  TabsSignalComponent,
-  ToastSignalComponent,
-  TooltipSignalComponent,
+  PopoverComponents,
+  SearchFilterComponents,
+  SelectionComponents,
+  StepsComponents,
+  TabsComponents,
+  ToastComponents,
+  TooltipComponents,
 } from "../components/library/mod.ts";
 import { dateFunctions } from "../components/library/DatePicker.tsx";
 
@@ -30,7 +30,7 @@ const render = async (result: unknown) =>
   String(await (await result as { toString(): unknown }).toString());
 
 Deno.test("the library counter's parts share one count", async () => {
-  const { component } = await imports(CounterSignalComponent);
+  const { component } = await imports(CounterComponents);
   const counter = component.instance();
   const display = await render(counter.CounterDisplay({}));
   const button = await render(counter.Increment({ by: -5 }));
@@ -46,7 +46,7 @@ Deno.test("the library counter's parts share one count", async () => {
 });
 
 Deno.test("the library date picker's parts share one date", async () => {
-  const { component } = await imports(DatePickerSignalComponent);
+  const { component } = await imports(DatePickerComponents);
   const picker = component.instance();
   const input = await render(
     <picker.DateInput name="day" value="2026-10-23" skipWeekends />,
@@ -107,7 +107,7 @@ Deno.test("the library date picker steps days, weekdays and weeks", () => {
 });
 
 Deno.test("the library list holds its Items and links its form", async () => {
-  const { component } = await imports(ListSignalComponent);
+  const { component } = await imports(ListComponents);
   const tasks = component.instance();
   const list = await render(
     <tasks.List label="Tasks">
@@ -157,7 +157,7 @@ Deno.test("the library list holds its Items and links its form", async () => {
 });
 
 Deno.test("a library list of Rows is the body of the page's table", async () => {
-  const { component } = await imports(ListSignalComponent);
+  const { component } = await imports(ListComponents);
   const costs = component.instance();
   const table = await render(
     <table>
@@ -214,7 +214,7 @@ const entryTemplates = new Templates(import.meta.url, {
 });
 
 Deno.test("a library list holds a template's clones as they are", async () => {
-  const { component } = await imports(ListSignalComponent);
+  const { component } = await imports(ListComponents);
   const { template } = await imports(entryTemplates);
   const entries = component.instance();
   const list = await render(
@@ -259,7 +259,7 @@ const rowTemplates = new Templates(import.meta.url, {
 });
 
 Deno.test("a library list of a template's ListRows is a table body", async () => {
-  const { component } = await imports(ListSignalComponent);
+  const { component } = await imports(ListComponents);
   const { template } = await imports(rowTemplates);
   const costs = component.instance();
   const body = await render(
@@ -293,7 +293,7 @@ Deno.test("a library list of a template's ListRows is a table body", async () =>
 });
 
 Deno.test("the library search filter's parts share one query", async () => {
-  const { component } = await imports(SearchFilterSignalComponent);
+  const { component } = await imports(SearchFilterComponents);
   const filter = component.instance();
   const input = await render(
     <filter.FilterInput label="Filter items" value="glo" />,
@@ -325,7 +325,7 @@ Deno.test("the library search filter's parts share one query", async () => {
 });
 
 Deno.test("the library dialog's parts share one open state", async () => {
-  const { component } = await imports(DialogSignalComponent);
+  const { component } = await imports(DialogComponents);
   const editor = component.instance();
   const open = await render(<editor.Open>Edit</editor.Open>);
   const panel = await render(
@@ -363,7 +363,7 @@ Deno.test("the library dialog's parts share one open state", async () => {
 });
 
 Deno.test("a library confirm asks before the button it wraps", async () => {
-  const { component } = await imports(DialogSignalComponent);
+  const { component } = await imports(DialogComponents);
   const deletion = component.instance();
   const confirm = await render(
     <deletion.Confirm message="Delete this task?" confirmLabel="Delete">
@@ -396,7 +396,7 @@ Deno.test("a library confirm asks before the button it wraps", async () => {
 });
 
 Deno.test("the library disclosure's parts share one open state", async () => {
-  const { component } = await imports(DisclosureSignalComponent);
+  const { component } = await imports(DisclosureComponents);
   const section = component.instance();
   const details = await render(
     <section.Details summary="Filters" name="filters" remember="chart" open>
@@ -417,7 +417,7 @@ Deno.test("the library disclosure's parts share one open state", async () => {
 });
 
 Deno.test("the library tabs' parts share one selected tab", async () => {
-  const { component } = await imports(TabsSignalComponent);
+  const { component } = await imports(TabsComponents);
   const views = component.instance();
   const list = await render(
     <views.List label="Views" value="xrays" remember="chart-view">
@@ -458,7 +458,7 @@ Deno.test("the library tabs' parts share one selected tab", async () => {
 });
 
 Deno.test("the library toasts reach one toaster from any instance", async () => {
-  const { component } = await imports(ToastSignalComponent);
+  const { component } = await imports(ToastComponents);
   const toasts = component.instance();
   const toaster = await render(
     <toasts.Toaster position="top-right" duration={3000} />,
@@ -490,7 +490,7 @@ Deno.test("the library toasts reach one toaster from any instance", async () => 
 });
 
 Deno.test("the library popover can try beside its trigger when tall", async () => {
-  const { component } = await imports(PopoverSignalComponent);
+  const { component } = await imports(PopoverComponents);
   const form = component.instance();
   assertStringIncludes(
     await render(<form.Content tall>Fields</form.Content>),
@@ -499,7 +499,7 @@ Deno.test("the library popover can try beside its trigger when tall", async () =
 });
 
 Deno.test("the library popover can centre itself on a narrow display", async () => {
-  const { component } = await imports(PopoverSignalComponent);
+  const { component } = await imports(PopoverComponents);
   const form = component.instance();
   assertStringIncludes(
     await render(<form.Content centerWhenNarrow>Fields</form.Content>),
@@ -508,7 +508,7 @@ Deno.test("the library popover can centre itself on a narrow display", async () 
 });
 
 Deno.test("the library popover closes itself when it holds pickers", async () => {
-  const { component } = await imports(PopoverSignalComponent);
+  const { component } = await imports(PopoverComponents);
   const form = component.instance();
   assertStringIncludes(
     await render(<form.Content holdsPickers>Fields</form.Content>),
@@ -517,7 +517,7 @@ Deno.test("the library popover closes itself when it holds pickers", async () =>
 });
 
 Deno.test("the library popover's parts share one open state", async () => {
-  const { component } = await imports(PopoverSignalComponent);
+  const { component } = await imports(PopoverComponents);
   const actions = component.instance();
   const trigger = await render(
     <actions.Trigger label="Patient actions">⋯</actions.Trigger>,
@@ -553,7 +553,7 @@ Deno.test("the library popover's parts share one open state", async () => {
 });
 
 Deno.test("a library popover menu can be styled and invoke a dialog", async () => {
-  const { component } = await imports(PopoverSignalComponent);
+  const { component } = await imports(PopoverComponents);
   const account = component.instance();
   const trigger = await render(
     <account.Trigger class="accountCard" menu>Ann Lee</account.Trigger>,
@@ -576,7 +576,7 @@ Deno.test("a library popover menu can be styled and invoke a dialog", async () =
 });
 
 Deno.test("the library selection's parts share one set of rows", async () => {
-  const { component } = await imports(SelectionSignalComponent);
+  const { component } = await imports(SelectionComponents);
   const picked = component.instance();
   const row = await render(
     <picked.Checkbox value={12} name="ids" form="recalls" label="Ann Lee" />,
@@ -606,7 +606,7 @@ Deno.test("the library selection's parts share one set of rows", async () => {
 });
 
 Deno.test("the library command palette holds its items", async () => {
-  const { component } = await imports(CommandPaletteSignalComponent);
+  const { component } = await imports(CommandPaletteComponents);
   const commands = component.instance();
   const trigger = await render(<commands.Trigger />);
   const palette = await render(
@@ -638,7 +638,7 @@ Deno.test("the library command palette holds its items", async () => {
 });
 
 Deno.test("the library combobox submits the option chosen", async () => {
-  const { component } = await imports(ComboboxSignalComponent);
+  const { component } = await imports(ComboboxComponents);
   const dentist = component.instance();
   const input = await render(
     <dentist.Input
@@ -675,7 +675,7 @@ Deno.test("the library combobox submits the option chosen", async () => {
 });
 
 Deno.test("the library tooltip's trigger and tip share one state", async () => {
-  const { component } = await imports(TooltipSignalComponent);
+  const { component } = await imports(TooltipComponents);
   const save = component.instance();
   const trigger = await render(
     <save.Trigger>
@@ -711,7 +711,7 @@ Deno.test("the library tooltip's trigger and tip share one state", async () => {
 });
 
 Deno.test("the library steps show one step of a form at a time", async () => {
-  const { component } = await imports(StepsSignalComponent);
+  const { component } = await imports(StepsComponents);
   const signup = component.instance();
   const progress = await render(<signup.Progress />);
   const step = await render(
@@ -746,7 +746,7 @@ Deno.test("the library steps show one step of a form at a time", async () => {
 });
 
 Deno.test("the library carousel's controls steer one track", async () => {
-  const { component } = await imports(CarouselSignalComponent);
+  const { component } = await imports(CarouselComponents);
   const photos = component.instance();
   const track = await render(
     <photos.Track label="Photos" loop autoplay={4000}>

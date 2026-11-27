@@ -2,11 +2,11 @@ import { assertEquals, assertStringIncludes } from "@std/assert";
 import { getEsbuild } from "../esbuildInit.ts";
 import {
   cache,
+  Components,
   Constants,
   Handlers,
   imports,
   registeredClientTools,
-  SignalComponent,
   Signals,
   Styles,
 } from "../clientTools.ts";
@@ -55,11 +55,11 @@ Deno.test({
     }));
     const defaults = new Constants({ size: 3 });
     const unreadDefaults = new Constants({ colour: "red" });
-    const Parts = new SignalComponent(() => ({
+    const Parts = new Components(() => ({
       Box: () => jsx("div", {}),
       Button: () => jsx("button", {}),
     }));
-    const Unread = new SignalComponent(() => ({ Panel: () => jsx("p", {}) }));
+    const Unread = new Components(() => ({ Panel: () => jsx("p", {}) }));
     try {
       await buildScriptFiles({ fresh: true, publicDir: directory });
       // One call site, rendered twice: a read on either render counts.
@@ -93,7 +93,7 @@ Deno.test({
         "Handlers in importUsage.test.ts (forgotten)",
         "Styles in importUsage.test.ts (gone)",
         "Constants (colour)",
-        "SignalComponent (Panel)",
+        "Components (Panel)",
       ]);
       // The other branch reads `used`; nothing reads the rest.
       await page(true);
@@ -101,7 +101,7 @@ Deno.test({
         "Handlers in importUsage.test.ts (forgotten)",
         "Styles in importUsage.test.ts (gone)",
         "Constants (colour)",
-        "SignalComponent (Panel)",
+        "Components (Panel)",
       ]);
     } finally {
       await Deno.remove(directory, { recursive: true }).catch(() => {});

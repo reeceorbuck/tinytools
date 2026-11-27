@@ -6,7 +6,7 @@
  * before the next, with a progress list and Back and Next buttons.
  *
  * ```tsx
- * const { component } = await tiny.imports(StepsSignalComponent);
+ * const { component } = await tiny.imports(StepsComponents);
  * const signup = component.instance();
  *
  * <form method="post" action="/patients">
@@ -40,11 +40,11 @@
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
 import { h, type JSX } from "../../jsx-runtime.ts";
 import {
+  type Components,
   type ExposedSignals,
   optimized,
   type ReadonlySignal,
   type Signal,
-  type SignalComponent,
 } from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
 import { signalTools } from "../../handlers/signals.ts";
@@ -381,7 +381,7 @@ const stepsStyles = new tiny.Styles({
  * move through them and send the form. The steps expose `signal.current`,
  * the showing step's id, and `signal.index`, its place.
  */
-export const StepsSignalComponent: SignalComponent<{
+export const StepsComponents: Components<{
   signal: ExposedSignals<StepsExposed>;
   Step: (props: StepProps) => JSX.Element;
   Progress: (props: ProgressProps) => JSX.Element;
@@ -389,7 +389,7 @@ export const StepsSignalComponent: SignalComponent<{
   Back: (props: MoveProps) => JSX.Element;
   Next: (props: MoveProps) => JSX.Element;
   Submit: (props: SubmitProps) => JSX.Element;
-}> = new tiny.SignalComponent(
+}> = new tiny.Components(
   async () => {
     const { fn, signal, styled } = await tiny.imports(
       stepsSignals.withRoot(),

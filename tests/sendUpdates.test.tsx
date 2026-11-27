@@ -6,12 +6,12 @@ import { contextStorage } from "hono/context-storage";
 import { imports, Styles } from "../clientTools.ts";
 import { css } from "../scopedStyles.ts";
 import { sendUpdateStream } from "../sendUpdates.tsx";
-import { ToastSignalComponent } from "../components/library/mod.ts";
+import { ToastComponents } from "../components/library/mod.ts";
 
 // A page that has not shown a toast yet has neither its element declared nor
 // its handlers loaded, so the update's head must name both.
 Deno.test("an update's head lists the lifecycle tags and bundles its content uses", async () => {
-  const { component } = await imports(ToastSignalComponent);
+  const { component } = await imports(ToastComponents);
   const toasts = component.instance();
   let data = "";
   await sendUpdateStream(

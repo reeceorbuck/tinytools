@@ -7,7 +7,7 @@
  * it.
  *
  * ```tsx
- * const { component } = await tiny.imports(SearchFilterSignalComponent);
+ * const { component } = await tiny.imports(SearchFilterComponents);
  * const stockFilter = component.instance();
  *
  * <stockFilter.FilterInput label="Filter items" />
@@ -37,12 +37,12 @@
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
 import { h, type JSX } from "../../jsx-runtime.ts";
 import {
+  type Components,
   type ExposedSignals,
   type HandlerReference,
   optimized,
   type ReadonlySignal,
   type Signal,
-  type SignalComponent,
 } from "../../mod.ts";
 import { css, setCustomScope } from "../../scopedStyles.ts";
 
@@ -169,13 +169,13 @@ type NoMatchesProps = { children?: unknown };
  * children while nothing matches. The filter exposes `signal.query`,
  * `signal.shown`, `signal.total` and `signal.summary`.
  */
-export const SearchFilterSignalComponent: SignalComponent<{
+export const SearchFilterComponents: Components<{
   signal: ExposedSignals<SearchFilterExposed>;
   FilterInput: (props: FilterInputProps) => JSX.Element;
   Results: (props: ResultsProps) => JSX.Element;
   MatchCount: JSX.Element;
   NoMatches: (props: NoMatchesProps) => JSX.Element;
-}> = new tiny.SignalComponent(
+}> = new tiny.Components(
   async () => {
     const { fn, signal, styled } = await tiny.imports(
       searchFilterSignals.withRoot(),

@@ -6,7 +6,7 @@
  * asking to confirm before a submit button's form submits.
  *
  * ```tsx
- * const { component } = await tiny.imports(DialogSignalComponent);
+ * const { component } = await tiny.imports(DialogComponents);
  * const editor = component.instance();
  *
  * <editor.Open>Edit details</editor.Open>
@@ -46,10 +46,10 @@
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
 import { h, type JSX } from "../../jsx-runtime.ts";
 import {
+  type Components,
   type ExposedSignals,
   optimized,
   type Signal,
-  type SignalComponent,
 } from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
 import { transparent } from "../../componentScope.ts";
@@ -244,13 +244,13 @@ const dialogStyles = new tiny.Styles({
  * set true. `Confirm` stands alone: it wraps a submit button, and its own dialog
  * asks before the button's form submits, in place of `confirm()`.
  */
-export const DialogSignalComponent: SignalComponent<{
+export const DialogComponents: Components<{
   signal: ExposedSignals<DialogExposed>;
   Open: (props: DialogButtonProps) => JSX.Element;
   Panel: (props: PanelProps) => JSX.Element;
   Close: (props: DialogButtonProps) => JSX.Element;
   Confirm: (props: ConfirmProps) => JSX.Element;
-}> = new tiny.SignalComponent(
+}> = new tiny.Components(
   async () => {
     const { fn, signal, styled } = await tiny.imports(
       dialogSignals.withRoot(),

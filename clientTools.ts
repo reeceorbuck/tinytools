@@ -1012,8 +1012,8 @@ export type ImportedTools<
    */
   readonly template: TTemplates;
   /**
-   * Every imported `tiny.SignalComponent`, by name, and
-   * `component.instance()` to make one linked instance of each.
+   * Every component of the imported `tiny.Components` collections, by
+   * name, and `component.instance()` to make one linked instance of each.
    */
   readonly component: TComponents & ComponentLinker<TComponents>;
   /**
@@ -1080,7 +1080,7 @@ type ExtractTemplates<T> = T extends { readonly _isTemplates: true }
 type Importable =
   | AnyClientToolsInstance
   | ConstantsClass<SignalConstants>
-  | AnySignalComponent;
+  | AnyComponents;
 
 /**
  * A `tiny.imports()` argument: a collection, or a list of them imported as
@@ -1404,7 +1404,7 @@ type SignalsCollection<
     & SignalsCollection<Definitions, Deferred, Persisted>
     & SeededWithInputs<Definitions>;
   /**
-   * This collection, for a `tiny.SignalComponent` factory's `tiny.imports()`,
+   * This collection, for a `tiny.Components` factory's `tiny.imports()`,
    * rooted in each instance of the component: every copy
    * `component.instance()` makes gets its own copy of its signals.
    * Collections imported without it stay page-wide:
@@ -2745,7 +2745,7 @@ function importingDefinition(
       imported.add("constants");
     } else if (
       collection instanceof TemplatesClass ||
-      collection instanceof SignalComponent
+      collection instanceof Components
     ) {
       throw new TypeError(
         "tiny.Signals(tools, define) imports signals, handlers and constants only.",
@@ -2784,7 +2784,7 @@ const signalInputs = new WeakMap<object, SignalEvaluation>();
 /**
  * What each `collection.withRoot()` stands for, for `tiny.imports()`: the
  * import it marks, a collection or a `withInputs()` one, to root in each
- * instance of the `tiny.SignalComponent` whose factory imports it.
+ * instance of the `tiny.Components` collection whose factory imports it.
  */
 const rootedImports = new WeakMap<object, object>();
 
@@ -2812,7 +2812,7 @@ function unmarked<T>(item: T): T {
 
 /** What `withRoot()` is for, for the errors where it is not. */
 const rootOutsideImports =
-  "collection.withRoot() roots a collection in each instance of a tiny.SignalComponent, so it goes in a tiny.imports() in one's factory. To root a collection in markup, give each copy a component of its own whose tiny.imports() holds just that collection, and wrap its markup in <SignalRoot>.";
+  "collection.withRoot() roots a collection in each instance of a tiny.Components collection, so it goes in a tiny.imports() in one's factory. To root a collection in markup, give each copy a component of its own whose tiny.imports() holds just that collection, and wrap its markup in <SignalRoot>.";
 
 /** The error for a `withRoot()` import in a handler definition. */
 const rootInDefinition =
@@ -2820,7 +2820,7 @@ const rootInDefinition =
 
 /** The error for a `withRoot()` import outside a component's factory. */
 const rootOutsideComponent =
-  `This tiny.imports() is not in a tiny.SignalComponent's factory. ${rootOutsideImports}`;
+  `This tiny.imports() is not in a tiny.Components factory. ${rootOutsideImports}`;
 
 /** `InstanceRoot`: wraps the element, or a component returning one, it makes a root of a level. */
 export type InstanceRootComponent<Seed> = (
@@ -3501,7 +3501,7 @@ const MINTED_LINK = / tt-link="[^"]*=link-[0-9a-f]{16}/;
  * on the server, where it returns the markup. Params are text: escaped, so
  * a value is never parsed as markup, in an attribute or between tags.
  *
- * Each clone is a new copy of every signal component instance the markup
+ * Each clone is a new copy of every `tiny.Components` instance the markup
  * made with `component.instance()`: the link ids those minted (see
  * `newLinkId`) are swapped for fresh ones, the same one throughout a clone,
  * so a copy's parts and a group's copies stay linked to each other but not
@@ -3862,7 +3862,7 @@ type AnySignalsCollection = AnyClientToolsInstance & {
 };
 
 /**
- * One instance of an imported signal component, made on its own by
+ * One instance of an imported `tiny.Components` component, made on its own by
  * `component.Box.instance()`: the component itself, to render as `<Box />`,
  * with `signal` references to the signals its factory exposes, acting on it
  * from anywhere on the page, whether or not `<Box />` itself is rendered: an
@@ -3883,7 +3883,7 @@ export type Instance<TSignals, Props, Result> =
 export type Part<Props, Result> = (props: Props & { class?: string }) => Result;
 
 /**
- * A signal component as `tiny.imports()` returns it under `component`:
+ * A `tiny.Components` component as `tiny.imports()` returns it under `component`:
  * each `instance()` is a new instance of it.
  */
 export type ImportedComponent<Name extends string, TSignals, Props, Result> = {
@@ -3946,7 +3946,7 @@ export type ComponentLinker<TComponents> = {
 declare const exposedBrand: unique symbol;
 
 /**
- * A `tiny.SignalComponent`'s `signal` list, stated rather than inferred, for
+ * The `signal` list of a `tiny.Components` collection, stated rather than inferred, for
  * an exported component's type (JSR does not infer the types of a published
  * module). `Signals` are the exposed signals as their collection defines
  * them: `ExposedSignals<{ open: Signal<boolean> }>`.
@@ -4023,18 +4023,18 @@ function warnPageWideExposures(
     ) continue;
     warned.add(found.name);
     console.warn(
-      `[tiny-tools] A tiny.SignalComponent exposes '${found.name}' on each instance, but its factory imports the collection defining it ('${found.collection.instanceKey}') without withRoot(), so every instance shares the page's one. Import it with .withRoot() to give each instance its own.`,
+      `[tiny-tools] A tiny.Components collection exposes '${found.name}' on each instance, but its factory imports the collection defining it ('${found.collection.instanceKey}') without withRoot(), so every instance shares the page's one. Import it with .withRoot() to give each instance its own.`,
     );
   }
 }
 
 /**
- * The levels of the signal collections a `tiny.SignalComponent` factory
+ * The levels of the signal collections a `tiny.Components` factory
  * roots: its instance roots carry the innermost, and the copies made
  * together share the enclosing ones. `rooted` are those it imports with
  * `withRoot()`, whose levels come from how they read one another.
  */
-const signalComponentScope = new AsyncLocalStorage<
+const componentsScope = new AsyncLocalStorage<
   { leaves: Set<string>; enclosing: Set<string>; rooted: Set<SignalsClass> }
 >();
 
@@ -4055,7 +4055,7 @@ function exposedSignals(list: unknown): Map<string, SignalSource> {
     const found = signalSources.get(reference);
     if (!found) {
       throw new TypeError(
-        "A tiny.SignalComponent's `signal` lists signals from a tiny.imports() in its factory: signal: [signal.press].",
+        "The `signal` of a tiny.Components collection lists signals from a tiny.imports() in its factory: signal: [signal.press].",
       );
     }
     exposed.set(found.name, found.source);
@@ -4064,7 +4064,7 @@ function exposedSignals(list: unknown): Map<string, SignalSource> {
 }
 
 /**
- * A component whose instances other code renders and drives. Like
+ * Components whose linked instances other code renders and drives. Like
  * `tiny.Signals`, it takes a factory; the factory imports what the component
  * renders with and returns its components by name, each a function or JSX,
  * and under `signal` the signals other code may drive on each instance:
@@ -4084,7 +4084,7 @@ function exposedSignals(list: unknown): Map<string, SignalSource> {
  * shared by the copies one `component.instance(n)` makes; the rest are each
  * copy's own.
  */
-export class SignalComponent<TComponents extends AnyComponentParts> {
+export class Components<TComponents extends AnyComponentParts> {
   /** The factory passed in, run by each `tiny.imports()` of the component. */
   readonly factory: () => TComponents | Promise<TComponents>;
 
@@ -4095,7 +4095,7 @@ export class SignalComponent<TComponents extends AnyComponentParts> {
   constructor(factory: () => TComponents | Promise<TComponents>) {
     if (typeof factory !== "function") {
       throw new TypeError(
-        "tiny.SignalComponent takes only its factory. Each instance roots the collections the factory imports with withRoot(): tiny.imports(boxSignals.withRoot()).",
+        "tiny.Components takes only its factory. Each instance roots the collections the factory imports with withRoot(): tiny.imports(boxSignals.withRoot()).",
       );
     }
     this.factory = factory;
@@ -4103,7 +4103,7 @@ export class SignalComponent<TComponents extends AnyComponentParts> {
 }
 
 /**
- * Adds the levels of the collections a `tiny.SignalComponent` factory
+ * Adds the levels of the collections a `tiny.Components` factory
  * imports with `withRoot()` to `levels`: each is one, a leaf (each copy's
  * own) unless another of them reads it by value, which makes it the level
  * around that one, or it reads another's `.all`, which makes it the level
@@ -4126,7 +4126,7 @@ async function rootedLevels(
 }
 
 /**
- * What a `tiny.SignalComponent` factory returns: its components, by name,
+ * What a `tiny.Components` factory returns: its components, by name,
  * each a plain function or JSX, and under `signal` the signals they expose.
  */
 type AnyComponentParts = Record<
@@ -4135,15 +4135,15 @@ type AnyComponentParts = Record<
   ((props: any) => unknown) | JSX.Element | ExposedSignals<any>
 >;
 
-type AnySignalComponent = SignalComponent<AnyComponentParts>;
+type AnyComponents = Components<AnyComponentParts>;
 
 /**
- * The `component` of a `tiny.imports()` of signal components: each
+ * The `component` of a `tiny.imports()` of `tiny.Components` collections: each
  * component by name, and `signal`, the signals they expose, acting on
  * whichever instance or enclosing element the element using them sits in,
  * rather than on one instance.
  */
-type ExtractComponents<T> = T extends SignalComponent<infer TComponents> ?
+type ExtractComponents<T> = T extends Components<infer TComponents> ?
     & {
       readonly [
         // `keyof TComponents` (not `& string`) keeps each name linked to the
@@ -4212,7 +4212,7 @@ function linkableComponents(
     components.map(({ name, render, exposed, instanceKeys, enclosing }) => {
       if (name === "instance") {
         throw new TypeError(
-          "A tiny.SignalComponent can't name a component 'instance': component.instance() makes the instances.",
+          "A tiny.Components collection can't name a component 'instance': component.instance() makes the instances.",
         );
       }
       const leaves = instanceKeys.split(" ").filter(Boolean);
@@ -4348,7 +4348,8 @@ function instanceSignals(
 
 /**
  * A `tiny.imports()` argument as the unused-import report names it, with the
- * names it provides (a signal component's once its factory has run).
+ * names it provides (a `tiny.Components` collection's once its factory
+ * has run).
  */
 function describeImport(
   item: object,
@@ -4366,8 +4367,8 @@ function describeImport(
       Object.keys(item.values),
       "constants",
     ];
-  } else if (item instanceof SignalComponent) {
-    [kind, names] = ["SignalComponent", [...componentNames]];
+  } else if (item instanceof Components) {
+    [kind, names] = ["Components", [...componentNames]];
   } else {
     const tool = item as AnyClientToolsInstance;
     [kind, accessor] = tool instanceof SignalsClass
@@ -4476,7 +4477,7 @@ function checkListClashes(given: readonly ImportArgument[]): void {
     const seen = new Set<object>();
     for (const member of membersOf(argument)) {
       const collection = collectionOf(member);
-      if (collection instanceof SignalComponent || seen.has(collection)) {
+      if (collection instanceof Components || seen.has(collection)) {
         continue;
       }
       seen.add(collection);
@@ -4551,10 +4552,10 @@ async function importsAt(
 > {
   const evaluations = new Map<SignalsClass, SignalEvaluation>();
   const members = given.flatMap(membersOf);
-  const components = members.filter((item) => item instanceof SignalComponent);
+  const components = members.filter((item) => item instanceof Components);
   const imported = [
     ...new Set(
-      members.filter((item) => !(item instanceof SignalComponent)).map(
+      members.filter((item) => !(item instanceof Components)).map(
         (item) => {
           const evaluation = signalInputs.get(
             unmarked(item) as AnyClientToolsInstance,
@@ -4582,7 +4583,7 @@ async function importsAt(
   ];
   if (marked.length) {
     if (definition?.active) throw new TypeError(rootInDefinition);
-    const component = signalComponentScope.getStore();
+    const component = componentsScope.getStore();
     if (!component) throw new TypeError(rootOutsideComponent);
     for (const collection of marked) component.rooted.add(collection);
   }
@@ -4849,13 +4850,13 @@ async function importsAt(
     },
   });
   const factoryParts = await Promise.all(
-    (components as AnySignalComponent[]).map((component) => {
+    (components as AnyComponents[]).map((component) => {
       const levels = {
         leaves: new Set<string>(),
         enclosing: new Set<string>(),
         rooted: new Set<SignalsClass>(),
       };
-      return signalComponentScope.run(levels, async () => {
+      return componentsScope.run(levels, async () => {
         const { signal: list, ...parts } = await component.factory() ?? {};
         await rootedLevels([...levels.rooted], levels);
         if (!cache.trustCache) {
@@ -4867,7 +4868,7 @@ async function importsAt(
           const render = renderOf(value);
           if (!render) {
             throw new TypeError(
-              `A tiny.SignalComponent factory returns its components by name, each a function or JSX, and under \`signal\` the signals they expose: '${name}' is neither.`,
+              `A tiny.Components factory returns its components by name, each a function or JSX, and under \`signal\` the signals they expose: '${name}' is neither.`,
             );
           }
           return {
@@ -4902,7 +4903,7 @@ async function importsAt(
         describeArgument(
           argument,
           (item) =>
-            item instanceof SignalComponent
+            item instanceof Components
               ? describeImport(
                 item,
                 [

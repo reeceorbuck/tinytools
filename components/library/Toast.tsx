@@ -8,7 +8,7 @@
  * can send one in any response.
  *
  * ```tsx
- * const { component } = await tiny.imports(ToastSignalComponent);
+ * const { component } = await tiny.imports(ToastComponents);
  * const toasts = component.instance();
  *
  * // Once, in the layout:
@@ -43,7 +43,7 @@
 
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
 import { h, type JSX } from "../../jsx-runtime.ts";
-import { optimized, type SignalComponent } from "../../mod.ts";
+import { type Components, optimized } from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
 
 const tiny = optimized(import.meta.url);
@@ -396,11 +396,11 @@ type ToastProps = RaiseProps & { children?: unknown };
  * raises its children as one when it reaches the page. None exposes
  * signals.
  */
-export const ToastSignalComponent: SignalComponent<{
+export const ToastComponents: Components<{
   Toaster: (props: ToasterProps) => JSX.Element;
   Trigger: (props: TriggerProps) => JSX.Element;
   Toast: (props: ToastProps) => JSX.Element;
-}> = new tiny.SignalComponent(async () => {
+}> = new tiny.Components(async () => {
   const { fn, signal, styled } = await tiny.imports(
     toastSignals,
     toastHandlers,

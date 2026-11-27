@@ -10,12 +10,12 @@ import { createContext, useContext } from "hono/jsx";
 import { getEsbuild } from "../esbuildInit.ts";
 import {
   cache,
+  Components,
   Constants,
   createNoContextToolUsageTracker,
   Handlers,
   imports,
   registeredClientTools,
-  SignalComponent,
   Signals,
   withNoContextToolUsageTracker,
 } from "../clientTools.ts";
@@ -213,7 +213,7 @@ Deno.test({
   sanitizeResources: false,
   async fn() {
     reset();
-    const directory = "./.test-build-output/signal-component-instance";
+    const directory = "./.test-build-output/components-instance";
     const boxSignals = new Signals(
       import.meta.url,
       ({ Trigger }) => ({ press: new Trigger(), internal: new Trigger() }),
@@ -232,7 +232,7 @@ Deno.test({
           class: props.own ? "own" : undefined,
           children: props.label,
         });
-    const BoxComponent = new SignalComponent(async () => {
+    const BoxComponent = new Components(async () => {
       const { signal } = await imports(boxSignals.withRoot());
       return { signal: [signal.press], Box };
     });
@@ -313,7 +313,7 @@ Deno.test({
         () =>
           imports(
             // deno-lint-ignore no-explicit-any
-            new SignalComponent(() => ({ signal: [{} as any], Box })),
+            new Components(() => ({ signal: [{} as any], Box })),
           ),
         TypeError,
         "lists signals from a tiny.imports()",
@@ -324,7 +324,7 @@ Deno.test({
           const { signal } = await imports(boxSignals);
           await imports(
             // @ts-expect-error `signal` is a list of references
-            new SignalComponent(() => ({ signal: signal.press, Box })),
+            new Components(() => ({ signal: signal.press, Box })),
           );
         },
         TypeError,
@@ -352,7 +352,7 @@ Deno.test({
       await groupLevel.ensureBuilt();
       await boxLevel.ensureBuilt();
       const { component: grouped } = await imports(
-        new SignalComponent(async () => {
+        new Components(async () => {
           const { signal } = await imports(
             groupLevel.withRoot(),
             boxLevel.withRoot(),
@@ -433,7 +433,7 @@ Deno.test({
       await assertRejects(
         () =>
           imports(
-            new SignalComponent(() => ({ instance: Box })),
+            new Components(() => ({ instance: Box })),
           ),
         TypeError,
         "can't name a component 'instance'",
@@ -442,7 +442,7 @@ Deno.test({
       // A factory may return several components; each has its own instances,
       // and every one exposes the factory's signals.
       const { component: pair } = await imports(
-        new SignalComponent(async () => {
+        new Components(async () => {
           const { signal } = await imports(boxSignals.withRoot());
           return { signal: [signal.press], Box, Other: Box };
         }),
@@ -475,7 +475,7 @@ Deno.test({
       // copy to act on, so reading it throws; their other parts still work.
       const { component: both } = await imports(
         BoxComponent,
-        new SignalComponent(async () => {
+        new Components(async () => {
           const { signal } = await imports(boxSignals.withRoot());
           return { signal: [signal.press], Second: Box };
         }),
@@ -489,7 +489,7 @@ Deno.test({
       );
       // A plain function is a component that exposes no signals.
       const { component: plain } = await imports(
-        new SignalComponent(() => ({ Box })),
+        new Components(() => ({ Box })),
       );
       const plainBox = plain.instance().Box;
       // No component's root has an id to repeat.
@@ -500,7 +500,7 @@ Deno.test({
       assertEquals(plain.instance().signal.press, undefined);
       // So is markup, rendered as it is, in both JSX modes.
       const { component: markup } = await imports(
-        new SignalComponent(async () => {
+        new Components(async () => {
           const { signal } = await imports(boxSignals.withRoot());
           return {
             signal: [signal.press],
@@ -523,7 +523,7 @@ Deno.test({
       );
       await assertRejects(
         // @ts-expect-error a component is a function or JSX
-        () => imports(new SignalComponent(() => ({ Box: 1 }))),
+        () => imports(new Components(() => ({ Box: 1 }))),
         TypeError,
         "'Box' is neither",
       );

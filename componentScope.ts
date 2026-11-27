@@ -574,10 +574,10 @@ export function isMarkup(value: unknown): boolean {
  *
  * @example
  * ```tsx
- * return tiny.component(<section class={styled.card}>...</section>, "Card");
+ * return markAsComponent(<section class={styled.card}>...</section>, "Card");
  * ```
  */
-export function component<T>(jsx: T, name = ""): T {
+export function markAsComponent<T>(jsx: T, name = ""): T {
   return markResult(jsx, { [COMPONENT_ROOT_ATTRIBUTE]: name }, undefined) as T;
 }
 

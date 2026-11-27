@@ -6,7 +6,7 @@
  * scroll, its buttons or its dots, optionally moving on by itself.
  *
  * ```tsx
- * const { component } = await tiny.imports(CarouselSignalComponent);
+ * const { component } = await tiny.imports(CarouselComponents);
  * const photos = component.instance();
  *
  * <photos.Track label="Intra-oral photos" loop>
@@ -34,10 +34,10 @@
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
 import { h, type JSX } from "../../jsx-runtime.ts";
 import {
+  type Components,
   type ExposedSignals,
   optimized,
   type Signal,
-  type SignalComponent,
 } from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
 import { signalTools } from "../../handlers/signals.ts";
@@ -348,7 +348,7 @@ const carouselStyles = new tiny.Styles({
  * slide at the track's start, which scrolls there when set, and
  * `signal.count`.
  */
-export const CarouselSignalComponent: SignalComponent<{
+export const CarouselComponents: Components<{
   signal: ExposedSignals<CarouselExposed>;
   Track: (props: TrackProps) => JSX.Element;
   Slide: (props: SlideProps) => JSX.Element;
@@ -357,7 +357,7 @@ export const CarouselSignalComponent: SignalComponent<{
   Dots: (props: DotsProps) => JSX.Element;
   Status: () => JSX.Element;
   Play: () => JSX.Element;
-}> = new tiny.SignalComponent(
+}> = new tiny.Components(
   async () => {
     const { fn, signal, styled } = await tiny.imports(
       carouselSignals.withRoot(),

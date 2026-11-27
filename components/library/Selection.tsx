@@ -7,7 +7,7 @@
  * puts it.
  *
  * ```tsx
- * const { component } = await tiny.imports(SelectionSignalComponent);
+ * const { component } = await tiny.imports(SelectionComponents);
  * const picked = component.instance();
  *
  * <form method="post" action="/recalls/send" id="recalls">
@@ -46,11 +46,11 @@
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
 import { h, type JSX } from "../../jsx-runtime.ts";
 import {
+  type Components,
   type ExposedSignals,
   optimized,
   type ReadonlySignal,
   type Signal,
-  type SignalComponent,
 } from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
 import { signalTools } from "../../handlers/signals.ts";
@@ -237,7 +237,7 @@ type ClearProps = { children?: unknown };
  * all. The selection exposes `signal.selected`, the chosen values, and
  * `signal.count`.
  */
-export const SelectionSignalComponent: SignalComponent<{
+export const SelectionComponents: Components<{
   signal: ExposedSignals<SelectionExposed>;
   Checkbox: (props: CheckboxProps) => JSX.Element;
   SelectAll: (props: SelectAllProps) => JSX.Element;
@@ -245,7 +245,7 @@ export const SelectionSignalComponent: SignalComponent<{
   Bar: (props: BarProps) => JSX.Element;
   Action: (props: ActionProps) => JSX.Element;
   Clear: (props: ClearProps) => JSX.Element;
-}> = new tiny.SignalComponent(
+}> = new tiny.Components(
   async () => {
     const { fn, signal, styled } = await tiny.imports(
       selectionSignals.withRoot(),

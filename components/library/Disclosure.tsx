@@ -6,7 +6,7 @@
  * which can remember it per viewer.
  *
  * ```tsx
- * const { component } = await tiny.imports(DisclosureSignalComponent);
+ * const { component } = await tiny.imports(DisclosureComponents);
  * const filters = component.instance();
  *
  * <filters.Toggle>Filters</filters.Toggle>
@@ -23,10 +23,10 @@
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
 import { h, type JSX } from "../../jsx-runtime.ts";
 import {
+  type Components,
   type ExposedSignals,
   optimized,
   type Signal,
-  type SignalComponent,
 } from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
 import type { SignalEvent } from "../../handlers/signals.ts";
@@ -126,11 +126,11 @@ type ToggleProps = { children?: unknown; label?: string };
  * it. `Toggle` is a button opening and closing it from elsewhere. The
  * disclosure exposes `signal.open`, which opens the section when set true.
  */
-export const DisclosureSignalComponent: SignalComponent<{
+export const DisclosureComponents: Components<{
   signal: ExposedSignals<DisclosureExposed>;
   Details: (props: DetailsProps) => JSX.Element;
   Toggle: (props: ToggleProps) => JSX.Element;
-}> = new tiny.SignalComponent(
+}> = new tiny.Components(
   async () => {
     const { fn, signal, styled } = await tiny.imports(
       disclosureSignals.withRoot(),

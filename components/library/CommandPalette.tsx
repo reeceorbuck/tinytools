@@ -6,7 +6,7 @@
  * with Ctrl + K (⌘ K on a Mac) or a trigger, and driven from the keyboard.
  *
  * ```tsx
- * const { component } = await tiny.imports(CommandPaletteSignalComponent);
+ * const { component } = await tiny.imports(CommandPaletteComponents);
  * const commands = component.instance();
  *
  * <commands.Trigger />
@@ -43,11 +43,11 @@
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
 import { h, type JSX } from "../../jsx-runtime.ts";
 import {
+  type Components,
   type ExposedSignals,
   type HandlerProp,
   optimized,
   type Signal,
-  type SignalComponent,
 } from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
 import type { SignalEvent } from "../../handlers/signals.ts";
@@ -333,13 +333,13 @@ const paletteStyles = new tiny.Styles({
  * button opening it. The palette exposes `signal.open`, which opens it
  * when set true.
  */
-export const CommandPaletteSignalComponent: SignalComponent<{
+export const CommandPaletteComponents: Components<{
   signal: ExposedSignals<PaletteExposed>;
   Trigger: (props: TriggerProps) => JSX.Element;
   Palette: (props: PaletteProps) => JSX.Element;
   Group: (props: GroupProps) => JSX.Element;
   Item: (props: ItemProps) => JSX.Element;
-}> = new tiny.SignalComponent(
+}> = new tiny.Components(
   async () => {
     const { fn, signal, styled } = await tiny.imports(
       paletteSignals.withRoot(),

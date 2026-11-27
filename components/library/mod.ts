@@ -1,9 +1,9 @@
 /**
- * Signal components for @tinytools/hono-tools: ready-made components whose
+ * `tiny.Components` collections for @tinytools/hono-tools: ready-made components whose
  * parts are placed and linked with `component.instance()`.
  *
  * ```tsx
- * const { component } = await tiny.imports(CounterSignalComponent);
+ * const { component } = await tiny.imports(CounterComponents);
  * const counter = component.instance();
  *
  * <counter.Increment by={1} />
@@ -13,23 +13,23 @@
  * @module
  */
 
-export { CarouselSignalComponent } from "./Carousel.tsx";
-export { ComboboxSignalComponent } from "./Combobox.tsx";
-export { CommandPaletteSignalComponent } from "./CommandPalette.tsx";
-export { CounterSignalComponent } from "./Counter.tsx";
-export { DatePickerSignalComponent } from "./DatePicker.tsx";
-export { DialogSignalComponent } from "./Dialog.tsx";
-export { DisclosureSignalComponent } from "./Disclosure.tsx";
+export { CarouselComponents } from "./Carousel.tsx";
+export { ComboboxComponents } from "./Combobox.tsx";
+export { CommandPaletteComponents } from "./CommandPalette.tsx";
+export { CounterComponents } from "./Counter.tsx";
+export { DatePickerComponents } from "./DatePicker.tsx";
+export { DialogComponents } from "./Dialog.tsx";
+export { DisclosureComponents } from "./Disclosure.tsx";
 export {
+  ListComponents,
   ListItem,
   type ListItemProps,
   ListRow,
-  ListSignalComponent,
 } from "./List.tsx";
-export { PopoverSignalComponent } from "./Popover.tsx";
-export { SearchFilterSignalComponent } from "./SearchFilter.tsx";
-export { SelectionSignalComponent } from "./Selection.tsx";
-export { StepsSignalComponent } from "./Steps.tsx";
-export { TabsSignalComponent } from "./Tabs.tsx";
-export { ToastSignalComponent } from "./Toast.tsx";
-export { TooltipSignalComponent } from "./Tooltip.tsx";
+export { PopoverComponents } from "./Popover.tsx";
+export { SearchFilterComponents } from "./SearchFilter.tsx";
+export { SelectionComponents } from "./Selection.tsx";
+export { StepsComponents } from "./Steps.tsx";
+export { TabsComponents } from "./Tabs.tsx";
+export { ToastComponents } from "./Toast.tsx";
+export { TooltipComponents } from "./Tooltip.tsx";

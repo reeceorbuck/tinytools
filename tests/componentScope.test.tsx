@@ -4,7 +4,7 @@ import { assertEquals, assertStringIncludes } from "@std/assert";
 import type { Child } from "hono/jsx";
 import { type JSX, jsx, jsxAttr, jsxTemplate } from "../jsx-runtime.ts";
 import { Styles } from "../clientTools.ts";
-import { component, transparent } from "../componentScope.ts";
+import { markAsComponent, transparent } from "../componentScope.ts";
 import { css, setCustomScope } from "../scopedStyles.ts";
 
 const render = async (node: unknown) => String(await (await node)!.toString());
@@ -107,8 +107,8 @@ Deno.test("component scope - transparent components are not marked", async () =>
   );
 });
 
-Deno.test("component scope - tiny.component marks directly-called output", async () => {
-  const direct = () => component(<main>hi</main>, "Shell");
+Deno.test("component scope - markAsComponent marks directly-called output", async () => {
+  const direct = () => markAsComponent(<main>hi</main>, "Shell");
   assertEquals(await render(await direct()), '<main data-tc="Shell">hi</main>');
 });
 

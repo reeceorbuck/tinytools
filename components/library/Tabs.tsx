@@ -7,7 +7,7 @@
  * header and the panels in the body.
  *
  * ```tsx
- * const { component } = await tiny.imports(TabsSignalComponent);
+ * const { component } = await tiny.imports(TabsComponents);
  * const chart = component.instance();
  *
  * <chart.List label="Chart views" value="notes" remember="chart-view">
@@ -35,10 +35,10 @@
 import { h, type JSX } from "../../jsx-runtime.ts";
 import { createContext, useContext } from "hono/jsx";
 import {
+  type Components,
   type ExposedSignals,
   optimized,
   type Signal,
-  type SignalComponent,
 } from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
 
@@ -225,12 +225,12 @@ const TabsProvider = TabsContext.Provider as unknown as (
  * of its `value`. The tabs expose `signal.selected`, the chosen value,
  * which selects that tab when set.
  */
-export const TabsSignalComponent: SignalComponent<{
+export const TabsComponents: Components<{
   signal: ExposedSignals<TabsExposed>;
   List: (props: ListProps) => JSX.Element;
   Tab: (props: TabProps) => JSX.Element;
   Panel: (props: PanelProps) => JSX.Element;
-}> = new tiny.SignalComponent(
+}> = new tiny.Components(
   async () => {
     const { fn, signal, styled } = await tiny.imports(
       tabsSignals.withRoot(),

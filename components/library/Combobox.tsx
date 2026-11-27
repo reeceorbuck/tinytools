@@ -6,7 +6,7 @@
  * from the server, choosing one with the mouse or the keyboard.
  *
  * ```tsx
- * const { component } = await tiny.imports(ComboboxSignalComponent);
+ * const { component } = await tiny.imports(ComboboxComponents);
  * const dentist = component.instance();
  *
  * <dentist.Input name="dentist" label="Dentist" required>
@@ -38,10 +38,10 @@
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
 import { h, type JSX } from "../../jsx-runtime.ts";
 import {
+  type Components,
   type ExposedSignals,
   optimized,
   type Signal,
-  type SignalComponent,
 } from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
 import { signalTools } from "../../handlers/signals.ts";
@@ -412,12 +412,12 @@ const comboboxStyles = new tiny.Styles({
  * `source`). `Value` shows the chosen option's text. The combobox exposes
  * `signal.value`, the chosen option's value, and `signal.label`, its text.
  */
-export const ComboboxSignalComponent: SignalComponent<{
+export const ComboboxComponents: Components<{
   signal: ExposedSignals<ComboboxExposed>;
   Input: (props: InputProps) => JSX.Element;
   Value: () => JSX.Element;
   Option: (props: OptionProps) => JSX.Element;
-}> = new tiny.SignalComponent(
+}> = new tiny.Components(
   async () => {
     const { fn, signal, styled } = await tiny.imports(
       comboboxSignals.withRoot(),

@@ -1,7 +1,7 @@
 /**
  * Optional roots. A collection is page-wide
  * outside its roots, and inside a root (`<SignalRoot>`, or an instance
- * of a `tiny.SignalComponent` whose factory imports it with `withRoot()`)
+ * of a `tiny.Components` collection whose factory imports it with `withRoot()`)
  * each root has its own copy.
  * Collections nest by importing each other.
  * The cases mirror the dental restorative note (a parent reading its
@@ -20,9 +20,9 @@ import { pathToFileURL } from "node:url";
 import { getEsbuild } from "../esbuildInit.ts";
 import {
   cache,
+  Components,
   imports,
   registeredClientTools,
-  SignalComponent,
 } from "../clientTools.ts";
 import { buildScriptFiles } from "../build.ts";
 import {
@@ -367,7 +367,7 @@ Deno.test({
     const page = new tiny.Signals(({ Trigger }) => ({ shadow: new Trigger() }));
     const shared = sharedSignals();
     const box = boxSignals(shared);
-    const ColorBoxComponent = new SignalComponent(async () => {
+    const ColorBoxComponent = new Components(async () => {
       const { signal } = await imports(page, shared.withRoot(), box.withRoot());
       return {
         signal: [signal.press, signal.recolor],
@@ -377,11 +377,11 @@ Deno.test({
     });
     // Marking only the box leaves its group page-wide. The mark and inputs
     // chain either way round.
-    const LoneBoxComponent = new SignalComponent(async () => {
+    const LoneBoxComponent = new Components(async () => {
       await imports(page, shared, box.withInputs({}).withRoot());
       return { ColorBox: () => jsx("color-box", {}) };
     });
-    const InputBoxComponent = new SignalComponent(async () => {
+    const InputBoxComponent = new Components(async () => {
       await imports(page, shared, box.withRoot().withInputs({}));
       return { ColorBox: () => jsx("color-box", {}) };
     });
@@ -428,7 +428,7 @@ Deno.test({
       const warn = console.warn;
       console.warn = (...args: unknown[]) => warnings.push(args.join(" "));
       try {
-        const Shared = new SignalComponent(async () => {
+        const Shared = new Components(async () => {
           const { signal } = await imports(page, box.withRoot());
           return {
             signal: [signal.shadow, signal.press],
@@ -501,7 +501,7 @@ Deno.test("a collection takes inputs for the page and seeds for its roots", asyn
   // factory, and `withRoot()` is only for a component factory's imports.
   assertThrows(
     () =>
-      new (SignalComponent as never as new (...args: unknown[]) => unknown)(
+      new (Components as never as new (...args: unknown[]) => unknown)(
         [rows],
         () => ({}),
       ),
@@ -594,7 +594,7 @@ Deno.test({
   async fn() {
     reset();
     const counts = new tiny.Signals(({ Signal }) => ({ count: new Signal(0) }));
-    const CounterComponent = new SignalComponent(async () => {
+    const CounterComponent = new Components(async () => {
       await imports(counts.withRoot());
       return {
         Display: () => jsx("output", {}),

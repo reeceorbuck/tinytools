@@ -7,7 +7,7 @@
  * arrow keys and close it when chosen.
  *
  * ```tsx
- * const { component } = await tiny.imports(PopoverSignalComponent);
+ * const { component } = await tiny.imports(PopoverComponents);
  * const actions = component.instance();
  *
  * <actions.Trigger label="Patient actions">⋯</actions.Trigger>
@@ -52,11 +52,11 @@
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
 import { h, type JSX } from "../../jsx-runtime.ts";
 import {
+  type Components,
   type ExposedSignals,
   type HandlerProp,
   optimized,
   type Signal,
-  type SignalComponent,
 } from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
 import type { SignalEvent } from "../../handlers/signals.ts";
@@ -400,14 +400,14 @@ type ItemProps = {
  * caller's, and `Separator` divides them. The popover exposes
  * `signal.open`, which opens the content when set true.
  */
-export const PopoverSignalComponent: SignalComponent<{
+export const PopoverComponents: Components<{
   signal: ExposedSignals<PopoverExposed>;
   Trigger: (props: TriggerProps) => JSX.Element;
   Content: (props: ContentProps) => JSX.Element;
   Close: (props: CloseProps) => JSX.Element;
   Item: (props: ItemProps) => JSX.Element;
   Separator: JSX.Element;
-}> = new tiny.SignalComponent(
+}> = new tiny.Components(
   async () => {
     const { fn, signal, styled } = await tiny.imports(
       popoverSignals.withRoot(),

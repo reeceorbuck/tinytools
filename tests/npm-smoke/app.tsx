@@ -1,7 +1,7 @@
 // A small app on the npm build, the way a Node or Bun user writes one.
 import { Hono } from "hono";
 import { css, optimized } from "@tinyenterprise/hono-tools";
-import { DialogSignalComponent } from "@tinyenterprise/hono-tools/library";
+import { DialogComponents } from "@tinyenterprise/hono-tools/library";
 import {
   applyNavigationHandlers,
   navigationTools,
@@ -69,7 +69,7 @@ app.get("/counter", async (c) => {
 });
 
 app.get("/profile", async (c) => {
-  const { component } = await tiny.imports(DialogSignalComponent);
+  const { component } = await tiny.imports(DialogComponents);
   const dialog = component.instance();
   return c.render(
     <>

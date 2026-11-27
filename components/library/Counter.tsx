@@ -5,7 +5,7 @@
  * A counter: a display and any number of buttons that change its count.
  *
  * ```tsx
- * const { component } = await tiny.imports(CounterSignalComponent);
+ * const { component } = await tiny.imports(CounterComponents);
  * const counter = component.instance();
  *
  * <counter.Increment by={-1} />
@@ -19,10 +19,10 @@
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
 import { h, type JSX } from "../../jsx-runtime.ts";
 import {
+  type Components,
   type ExposedSignals,
   optimized,
   type Signal,
-  type SignalComponent,
 } from "../../mod.ts";
 import { css } from "../../scopedStyles.ts";
 
@@ -69,11 +69,11 @@ const counterStyles = new tiny.Styles({
  * `onClick={fn.signals.add(counter.signal.count)}` outside the component
  * adds 1.
  */
-export const CounterSignalComponent: SignalComponent<{
+export const CounterComponents: Components<{
   signal: ExposedSignals<CounterExposed>;
   CounterDisplay: JSX.Element;
   Increment: (props: { by: number }) => JSX.Element;
-}> = new tiny.SignalComponent(
+}> = new tiny.Components(
   async () => {
     const { fn, signal, styled } = await tiny.imports(
       counterSignals.withRoot(),
