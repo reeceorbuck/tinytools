@@ -1393,6 +1393,17 @@ type SignalsCollection<
     & SignalsCollection<Definitions, Deferred, Persisted>
     & SeededWithInputs<Definitions>;
   /**
+   * `withInputs(undefined, seed)`: this collection, for `tiny.imports()`,
+   * with the copy its `SignalRoot` roots started from `seed`, on the server
+   * and in the browser: `tiny.imports(noteSignals.withSeed(saved))`. With no
+   * seed, or an empty one, it is the collection as it is.
+   */
+  withSeed(
+    seed?: EvaluationSeed<Definitions>,
+  ):
+    & SignalsCollection<Definitions, Deferred, Persisted>
+    & SeededWithInputs<Definitions>;
+  /**
    * This collection, for a `tiny.SignalComponent` factory's `tiny.imports()`,
    * rooted in each instance of the component: every copy
    * `component.instance()` makes gets its own copy of its signals.
@@ -2785,7 +2796,7 @@ function rootedImport<T extends object>(item: T): T {
       const value = Reflect.get(target, property, target);
       const bound = typeof value === "function" ? value.bind(target) : value;
       // Inputs given after `withRoot()` keep the mark.
-      return property === "withInputs"
+      return property === "withInputs" || property === "withSeed"
         ? (...args: unknown[]) => rootedImport(bound(...args))
         : bound;
     },
@@ -3226,6 +3237,12 @@ class SignalsClass extends HandlersClass {
     return withInputs;
   }
 
+  withSeed(seed?: Record<string, unknown>): this {
+    // An empty seed starts nothing, so its root needs no `tt-seed`.
+    const values = seed && Object.keys(seed).length ? seed : undefined;
+    return this.withInputs(undefined, values);
+  }
+
   evaluateUsingInitialValues(
     inputs: Record<string, unknown> = {},
     seed?: Record<string, unknown>,
@@ -3527,8 +3544,8 @@ function templateCloneSource(markup: string): string {
  * Module-level code declaring a template bundle's clone functions, as the
  * properties of `members`, which the bundle exports. Each places its clone
  * itself, with the partial insert handler (`partialReplace` or
- * `partialMergeContent`, named in `placers`) a partial of the same kind
- * would run: `template.row.append("rows", { index })` adds a row to
+ * `partialMergeContent`, imported as `templatePlacers` names them) a partial
+ * of the same kind would run: `template.row.append("rows", { index })` adds a row to
  * `#rows` as `<PartialAppend id="rows">` would, and `insert` puts a clone
  * whose markup is itself a partial in the page, where that partial applies.
  */

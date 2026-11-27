@@ -1,5 +1,5 @@
 import { assertEquals, assertMatch, assertStringIncludes } from "@std/assert";
-import { imports } from "../clientTools.ts";
+import { imports, Templates } from "../clientTools.ts";
 // deno-lint-ignore verbatim-module-syntax -- `h` is the classic JSX factory
 import { h } from "../jsx-runtime.ts";
 import {
@@ -10,6 +10,8 @@ import {
   DatePickerSignalComponent,
   DialogSignalComponent,
   DisclosureSignalComponent,
+  ListItem,
+  ListRow,
   ListSignalComponent,
   PopoverSignalComponent,
   SearchFilterSignalComponent,
@@ -199,6 +201,95 @@ Deno.test("a library list of Rows is the body of the page's table", async () => 
   assertStringIncludes(button, 'aria-label="Add a cost"');
   assertStringIncludes(button, ">+</button>");
   assertEquals(linkOf(table), linkOf(button));
+});
+
+const entryTemplates = new Templates(import.meta.url, {
+  entry: () => (
+    <fieldset data-entry="">
+      <select name="kind">
+        <option>One</option>
+      </select>
+    </fieldset>
+  ),
+});
+
+Deno.test("a library list holds a template's clones as they are", async () => {
+  const { component } = await imports(ListSignalComponent);
+  const { template } = await imports(entryTemplates);
+  const entries = component.instance();
+  const list = await render(
+    <entries.List class="stack" template={template.entry}>
+      {template.entry()}
+      {template.entry()}
+    </entries.List>,
+  );
+  const button = await render(
+    <entries.AddButton class="add" data-kind="entry">Add</entries.AddButton>,
+  );
+  // The rows written inside, and each added item is a clone of the template.
+  assertMatch(list, /^<div class="stack"/);
+  assertEquals(list.match(/<fieldset data-entry="">/g)?.length, 2);
+  assertStringIncludes(list, `data-new-item="${template.entry.reference}"`);
+  // A template of anything but items: a plain `<div>` holding each clone,
+  // with no item around it, no list styling, nothing to reorder or dismiss.
+  assertEquals(/<(li|ol)/.test(list), false);
+  assertEquals(list.includes("draggable"), false);
+  assertEquals(list.includes("tt-handler-click"), false);
+  // The list hears `add` as well as the add parts.
+  assertMatch(list, /tt-handler-connect="[^"]*subscribe\([^)]*,[^)]*\)/);
+  // Other attributes reach the button.
+  assertStringIncludes(button, 'class="add"');
+  assertStringIncludes(button, 'data-kind="entry"');
+  assertStringIncludes(button, ">Add</button>");
+  assertEquals(linkOf(list), linkOf(button));
+  // `add` is exposed, so a button of the page's own joins the same list.
+  const own = await render(<span>{entries.signal.add}</span>);
+  assertEquals(linkOf(own), linkOf(list));
+});
+
+const rowTemplates = new Templates(import.meta.url, {
+  cost: () => (
+    <ListRow dismissable label="$[label]">
+      <td>
+        <input name="cost" />
+      </td>
+    </ListRow>
+  ),
+  task: () => <ListItem label="$[label]">$[label]</ListItem>,
+});
+
+Deno.test("a library list of a template's ListRows is a table body", async () => {
+  const { component } = await imports(ListSignalComponent);
+  const { template } = await imports(rowTemplates);
+  const costs = component.instance();
+  const body = await render(
+    <costs.List reorderable={false} template={template.cost}>
+      {template.cost({ label: "First" })}
+      {template.cost({ label: "Second" })}
+    </costs.List>,
+  );
+  // The rows decide the element: a body the page's table styles reach.
+  assertMatch(body, /^<tbody /);
+  assertEquals(/<tbody class=/.test(body), false);
+  assertEquals(body.match(/<tr data-list-item=""/g)?.length, 2);
+  // Each holds its own × in a cell, as the template wrote it.
+  assertEquals(body.match(/<td><button type="button"/g)?.length, 2);
+  assertEquals(body.includes("draggable"), false);
+  // A list of a template's ListItems is a styled, reorderable `<ol>`.
+  const tasks = component.instance();
+  const list = await render(
+    <tasks.List as="ul" template={template.task}>
+      <ListItem>Written</ListItem>
+    </tasks.List>,
+  );
+  assertMatch(list, /^<ul class="list_/);
+  assertStringIncludes(list, 'data-reorderable=""');
+  assertStringIncludes(list, '<li class="listItem_');
+  // `ListItem` outside a list renders the same item, not draggable.
+  const alone = await render(<ListItem dismissable>Alone</ListItem>);
+  assertMatch(alone, /^<li class="listItem_/);
+  assertStringIncludes(alone, 'aria-label="Dismiss Alone"');
+  assertEquals(alone.includes("draggable"), false);
 });
 
 Deno.test("the library search filter's parts share one query", async () => {

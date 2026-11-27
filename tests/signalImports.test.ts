@@ -1043,6 +1043,14 @@ Deno.test("seed() of a withInputs() collection seeds a root from its seed", asyn
   );
   // Without a seed, a root starts fresh.
   assertEquals(picker.withInputs().seed(), picker.seed({}));
+  // `withSeed(seed)` is `withInputs(undefined, seed)`, and seeds nothing
+  // without one.
+  assertEquals(picker.withSeed(seedValues).seed(), picker.seed(seedValues));
+  assertEquals(picker.withSeed().seed(), picker.seed({}));
+  assertEquals(picker.withSeed({}).seed(), picker.seed({}));
+  // Its imported signals start from the seed on the server.
+  const { signal: started } = await imports(picker.withSeed(seedValues));
+  assertEquals(started.query.initial, "smi");
   // @ts-expect-error The collection itself has no seed to fall back on.
   picker.seed();
 

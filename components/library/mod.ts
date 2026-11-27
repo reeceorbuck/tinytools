@@ -20,7 +20,12 @@ export { CounterSignalComponent } from "./Counter.tsx";
 export { DatePickerSignalComponent } from "./DatePicker.tsx";
 export { DialogSignalComponent } from "./Dialog.tsx";
 export { DisclosureSignalComponent } from "./Disclosure.tsx";
-export { ListSignalComponent } from "./List.tsx";
+export {
+  ListItem,
+  type ListItemProps,
+  ListRow,
+  ListSignalComponent,
+} from "./List.tsx";
 export { PopoverSignalComponent } from "./Popover.tsx";
 export { SearchFilterSignalComponent } from "./SearchFilter.tsx";
 export { SelectionSignalComponent } from "./Selection.tsx";
