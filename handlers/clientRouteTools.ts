@@ -81,6 +81,38 @@ export const clientRouteTools = new sourced.Handlers(async () => {
         fragment.appendChild(once ? child : child.cloneNode(true));
       }
       if (once) route.remove();
+      // Each clone is a new copy of the signal component instances in the
+      // route, as a template clone is: the link ids `component.instance()`
+      // minted are swapped for fresh ones, the same one throughout the clone.
+      // Ids named with `instance(id)` are kept. A `once` route moves the
+      // copies it holds, such as cached content, so it keeps them all.
+      if (!once) {
+        const links = new Map<string, string>();
+        const relinkContent = (content: DocumentFragment | Element) => {
+          for (
+            const element of content.querySelectorAll("[tt-link], template")
+          ) {
+            if (element instanceof HTMLTemplateElement) {
+              relinkContent(element.content);
+              continue;
+            }
+            const link = element.getAttribute("tt-link")!;
+            const relinked = link.replace(/=link-[0-9a-f]{16}/g, (id) => {
+              let fresh = links.get(id);
+              if (!fresh) {
+                fresh = "=link-" + Array.from(
+                  crypto.getRandomValues(new Uint8Array(8)),
+                  (byte) => byte.toString(16).padStart(2, "0"),
+                ).join("");
+                links.set(id, fresh);
+              }
+              return fresh;
+            });
+            if (relinked !== link) element.setAttribute("tt-link", relinked);
+          }
+        };
+        relinkContent(fragment);
+      }
       const interpolateContent = (content: DocumentFragment) => {
         const walker = document.createTreeWalker(
           content,

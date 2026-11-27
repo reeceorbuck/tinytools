@@ -691,6 +691,35 @@ Deno.test("ClientRoutes cooperate with core navigation", async (test) => {
       );
     });
 
+    await test.step("each clone is a new copy of the component instances in the route", async () => {
+      const state = setup();
+      const route = createRoute("/add", "", true);
+      const minted = "box_1=link-0123456789abcdef.0";
+      route.innerHTML = `<template><b tt-link="${minted}"></b>` +
+        `<i tt-link="${minted} named=row-1.0"></i></template>`;
+      state.addRoutes(route);
+      const links = async () => {
+        await state.navigate(new NavigationEvent("/add"));
+        const content = document.body.lastElementChild as HTMLTemplateElement;
+        return [...content.content.children].map((element) =>
+          element.getAttribute("tt-link")!
+        );
+      };
+      const [firstBox, firstRow] = await links();
+      const [secondBox] = await links();
+      assertEquals(/^box_1=link-[0-9a-f]{16}\.0$/.test(firstBox), true);
+      assertEquals(firstBox === minted, false);
+      // One copy throughout a clone, and a named id joins the page's copy.
+      assertEquals(firstRow, `${firstBox} named=row-1.0`);
+      assertEquals(secondBox === firstBox, false);
+      // The route keeps its own ids for the next clone.
+      assertEquals(
+        route.querySelector("template")!.content.firstElementChild!
+          .getAttribute("tt-link"),
+        minted,
+      );
+    });
+
     await test.step("invalid routes do not prevent valid siblings from matching", async () => {
       const state = setup();
       state.addRoutes(

@@ -275,7 +275,13 @@ Deno.test("template bundles define the lifecycle tags their markup upgrades", as
   // A page without the runtime gets it before the tag is defined.
   assertStringIncludes(code, `"${lifecycleRuntimePath}"`);
   assertMatch(code, /await import\(\w+\)/);
-  assertEquals(code.includes("import {"), false);
+  // The runtime is imported dynamically; the one static import is the
+  // partial handlers a clone places itself with.
+  assertEquals(
+    [...code.matchAll(/^import \{[^}]*\} from "\.\/(\w+)\.js";$/gm)]
+      .map(([, file]) => file.replace(/_\w+$/, "")),
+    ["partialInsertHandlers"],
+  );
 
   // Rendering the template on the server declares the tag for the page.
   const app = new tiny.Hono({ tools: "core" });

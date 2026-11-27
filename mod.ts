@@ -69,6 +69,8 @@ export {
   Styles,
   type TemplateClones,
   type TemplateFragment,
+  type TemplateMerge,
+  type TemplateMergeExisting,
   type TemplateParams,
   Templates,
 } from "./clientTools.ts";

@@ -3359,11 +3359,58 @@ export type TemplateParams = Readonly<Record<string, string | undefined>>;
  */
 export type TemplateFragment = DocumentFragment & HtmlEscapedString;
 
+/** What to do with a clone child matching one already in the target. */
+export type TemplateMergeExisting =
+  | "substitute"
+  | "match"
+  | "substitute(append)"
+  | "match(append)"
+  | "substitute(prepend)"
+  | "match(prepend)";
+
+/** How `merge` places a clone's children in `#id` (see `partialMergeContent`). */
+export type TemplateMerge = {
+  /** The element the children go into. */
+  readonly id: string;
+  /** For a child whose `id` (or `match-id`) is in the target; `substitute` by default. */
+  readonly existing?: TemplateMergeExisting;
+  /** For a child with no match; `append` by default. */
+  readonly new?: "append" | "prepend" | "ignore";
+  /** For a child matching only by `groupName`. */
+  readonly group?: TemplateMergeExisting;
+  /** Marks the children as a group, matched to the target's children of it. */
+  readonly groupName?: string;
+  /** Space-separated ids of the children to place them before, nearest first. */
+  readonly insertBefore?: string;
+};
+
 /** One clone function per template, under the entry's name. */
 export type TemplateClones<Definitions> = {
   readonly [Name in keyof Definitions]:
     & ((params?: TemplateParams) => TemplateFragment)
     & {
+      /**
+       * Adds a clone to the end of the element `#id`, as `<PartialAppend>`
+       * would: a child whose `id` is already there replaces it in place.
+       * `template.row.append("rows", { index })`. Browser only, as are the
+       * other ways of placing a clone.
+       */
+      append(id: string, params?: TemplateParams): void;
+      /** Adds a clone to the start of `#id`, as `append` adds to its end. */
+      prepend(id: string, params?: TemplateParams): void;
+      /** Replaces the children of `#id` with a clone, as `<PartialReplace>`. */
+      replace(id: string, params?: TemplateParams): void;
+      /**
+       * Merges a clone's children into `#id` as `partialMergeContent` does,
+       * matching each by `id` (or `match-id`) and then by group: `{ id,
+       * existing: "match", new: "prepend", groupName: "searched" }`.
+       */
+      merge(details: TemplateMerge, params?: TemplateParams): void;
+      /**
+       * Puts a clone whose markup is a partial (`<PartialReplace>`,
+       * `<PartialDelete id="$[id]">`) in the page, where the partial applies.
+       */
+      insert(params?: TemplateParams): void;
       /**
        * `<bundle>.<name>`: names the clone for the browser, as
        * `BuildFromTemplate`'s `template` prop or a `data-template`
@@ -3477,6 +3524,83 @@ function templateCloneSource(markup: string): string {
 }
 
 /**
+ * Module-level code declaring a template bundle's clone functions, as the
+ * properties of `members`, which the bundle exports. Each places its clone
+ * itself, with the partial insert handler (`partialReplace` or
+ * `partialMergeContent`, named in `placers`) a partial of the same kind
+ * would run: `template.row.append("rows", { index })` adds a row to
+ * `#rows` as `<PartialAppend id="rows">` would, and `insert` puts a clone
+ * whose markup is itself a partial in the page, where that partial applies.
+ */
+/**
+ * The partial handlers a template bundle imports to place its clones, by the
+ * names it binds them to.
+ */
+const templatePlacers = {
+  partialReplace: "__tinyPartialReplace",
+  partialMergeContent: "__tinyPartialMergeContent",
+} as const;
+
+function templateClonesPrelude(
+  markups: ReadonlyMap<string, string>,
+): { code: string; members: string } {
+  // Module-level names in the bundle must not collide with its exports or
+  // the partial handlers it imports.
+  const taken = new Set([
+    ...markups.keys(),
+    "templateStyles",
+    ...Object.values(templatePlacers),
+  ]);
+  const free = (base: string) => {
+    let name = base;
+    for (let index = 2; taken.has(name); index++) name = `${base}${index}`;
+    taken.add(name);
+    return name;
+  };
+  const members = free("templates");
+  const placeable = free("placeable");
+  const entries = [...markups].map(([name, markup]) =>
+    `${JSON.stringify(name)}: ${placeable}(${templateCloneSource(markup)})`
+  );
+  return {
+    members,
+    code: `function ${placeable}(clone) {
+  // A partial's template holding the clone, applied by the handler a
+  // partial runs on load. Imported, so it applies at once.
+  const place = (insert, id, attributes, params) => {
+    const partial = document.createElement("template");
+    partial.setAttribute("for-partial-id", id);
+    for (const [name, value] of Object.entries(attributes)) {
+      if (value != null) partial.setAttribute(name, value);
+    }
+    partial.content.append(clone(params));
+    insert.call(partial);
+  };
+  const merge = (details, params) =>
+    place(${templatePlacers.partialMergeContent}, details.id, {
+      existing: details.existing ?? "substitute",
+      new: details.new ?? "append",
+      group: details.group,
+      "group-name": details.groupName,
+      "insert-before": details.insertBefore,
+    }, params);
+  clone.insert = (params) => {
+    document.body.append(clone(params));
+  };
+  clone.append = (id, params) => merge({ id, new: "append" }, params);
+  clone.prepend = (id, params) => merge({ id, new: "prepend" }, params);
+  clone.replace = (id, params) =>
+    place(${templatePlacers.partialReplace}, id, {}, params);
+  clone.merge = merge;
+  return clone;
+}
+const ${members} = {
+${entries.join(",\n")}
+};`,
+  };
+}
+
+/**
  * Module-level code adding the stylesheets the templates need to the head,
  * for a template bundle that reaches a page the server did not prepare for
  * it. Links the server already emitted are left alone.
@@ -3515,6 +3639,8 @@ class TemplatesClass extends ClientToolsClass<Empty, Empty, Empty> {
   #styleFiles = new Set<string>();
   /** The per-root runtime, when the markup holds a root (see `instanceRuntime`). */
   #runtimeFiles: string[] = [];
+  /** The prelude's object of clone functions, which the bundle exports. */
+  #members = "templates";
 
   /** `(templates)` or `(import.meta.url, templates)`. */
   constructor(...args: unknown[]) {
@@ -3570,14 +3696,34 @@ class TemplatesClass extends ClientToolsClass<Empty, Empty, Empty> {
       }
       // A clone holding a root is resolved by the handler that inserts it,
       // so the copies it gets need the per-root runtime already loaded.
+      // A clone places itself with the handlers a partial would run. The
+      // bundle imports them, so placing is synchronous on any page.
+      // Imported here, as that module imports this one.
+      const { partialInsertHandlers } = await inModuleLoadContext(() =>
+        import("./handlers/partialInsertHandlers.ts")
+      );
+      await partialInsertHandlers.ensureDefined();
+      for (const [name, binding] of Object.entries(templatePlacers)) {
+        dependencies.set(
+          binding,
+          partialInsertHandlers._handlerDefinitions.get(name)!,
+        );
+      }
       const holdsRoot = [...this.#rendered.values()].some(({ markup }) =>
         /\stt-(instance|link)=/.test(markup)
       );
       this.#runtimeFiles = holdsRoot ? [instanceRuntime.file] : [];
+      const clones = templateClonesPrelude(
+        new Map(
+          [...this.#rendered].map(([name, { markup }]) => [name, markup]),
+        ),
+      );
+      this.#members = clones.members;
       this.#prelude = [
         holdsRoot ? instanceRuntime.code : "",
         templateStylesPrelude(this.#styleFiles),
         lifecycleDefinitionsPrelude(lifecycleTags),
+        clones.code,
       ].filter(Boolean).join("\n");
       this._processFunctions(functions, dependencies);
     });
@@ -3593,6 +3739,10 @@ class TemplatesClass extends ClientToolsClass<Empty, Empty, Empty> {
 
   protected override get bundleRuntimeFiles(): Iterable<string> {
     return this.#runtimeFiles;
+  }
+
+  protected override get bundleMembers(): string {
+    return this.#members;
   }
 
   /** The rendered template of `name`, once defined. */
@@ -4006,7 +4156,8 @@ type ExtractComponents<T> = T extends SignalComponent<infer TComponents> ?
  * server-wide count would show how much the server has rendered.
  */
 function newLinkId(): string {
-  // A template clone swaps these for fresh ones (see `templateCloneSource`).
+  // A template clone swaps these for fresh ones (see `templateCloneSource`),
+  // as does a client route's (`cloneClientRoute`).
   const bytes = crypto.getRandomValues(new Uint8Array(8));
   return `link-${
     Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")
@@ -4468,13 +4619,25 @@ async function importsAt(
           );
         if (isTemplate) {
           // On the server a clone is the markup; `raw` keeps it unescaped.
-          templateReferences[name] = Object.defineProperty(
+          templateReferences[name] = Object.defineProperties(
             function (params?: TemplateParams) {
               if (definition.active) throw unavailable();
               return raw(instance.fn(params));
             },
-            "reference",
-            { get: () => instance.reference },
+            {
+              reference: { get: () => instance.reference },
+              ...Object.fromEntries(
+                ["append", "prepend", "replace", "merge", "insert"].map(
+                  (method) => [method, {
+                    value: () => {
+                      throw new Error(
+                        `template.${name}.${method}() places the clone in the page, so it runs in the browser only.`,
+                      );
+                    },
+                  }],
+                ),
+              ),
+            },
           );
           continue;
         }

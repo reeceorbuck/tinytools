@@ -20,6 +20,7 @@ import {
 } from "../clientTools.ts";
 import { tiny } from "../honoFactory.tsx";
 import { buildScriptFiles } from "../build.ts";
+import { partialInsertHandlers } from "../handlers/partialInsertHandlers.ts";
 import {
   handlerBundles,
   handlers,
@@ -125,7 +126,8 @@ Deno.test({
       const templateCode = await Deno.readTextFile(
         `${directory}/handlers/${templateFile}.js`,
       );
-      assertStringIncludes(templateCode, "export function row(params)");
+      // The clones are members of one object, each with `insert`.
+      assertStringIncludes(templateCode, "export const { row } = templates;");
       assertStringIncludes(
         templateCode,
         `const templateStyles = ["/styles/${styleFile}"]`,
@@ -164,6 +166,32 @@ Deno.test({
       holder.append(row({ index: hostile }));
       assertEquals(holder.querySelector("img"), null);
       assertStringIncludes(holder.textContent!, hostile);
+      // `insert` puts the clone in the page, where its partials place it.
+      row.insert({ index: "9" });
+      assertStringIncludes(document.body.lastElementChild!.outerHTML, "Row 9");
+      assertEquals(document.body.lastElementChild!.tagName, "LI");
+      // A clone places itself as a partial would, by the target's id, with
+      // the partial handlers its bundle imports: at once, with no runtime.
+      const partialFile = partialInsertHandlers._handlerFilenames.get(
+        "partialMergeContent",
+      );
+      assertStringIncludes(
+        templateCode,
+        `from "./${partialFile}.js"`,
+      );
+      const target = document.createElement("ul");
+      target.id = "rows";
+      target.innerHTML = '<li id="first">First</li>';
+      document.body.append(target);
+      row.append("rows", { index: "3" });
+      row.prepend("rows", { index: "1" });
+      assertEquals(
+        [...target.children].map((child) => child.textContent!.trim()),
+        ["Row 1", "First", "Row 3"],
+      );
+      row.replace("rows", { index: "only" });
+      assertEquals(target.textContent!.trim(), "Row only");
+      assertEquals(document.querySelectorAll("template").length, 0);
       const link = document.head.querySelector('link[rel="stylesheet"]');
       assertEquals(link?.getAttribute("href"), `/styles/${styleFile}`);
     } finally {
